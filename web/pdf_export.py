@@ -17,7 +17,7 @@ from typing import Any
 # `fpdf.enums`) fails right here at import time, which used to take down the whole
 # Streamlit app on startup (issue #72). Guard the import so a bad fpdf install only
 # disables PDF export — Markdown export keeps working — and the user gets an exact
-# fix command when they click the PDF button.
+# fix command when they request the PDF.
 try:
     import fpdf as _fpdf_mod
     from fpdf import FPDF

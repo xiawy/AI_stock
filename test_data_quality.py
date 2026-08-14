@@ -14,7 +14,7 @@ TRADE_DATE = "2026-05-12"
 START_DATE = "2026-04-01"
 END_DATE = "2026-05-12"
 
-from tradingagents.dataflows.a_stock import (
+from ai_stock.dataflows.a_stock import (
     get_stock_data,
     get_indicators,
     get_fundamentals,

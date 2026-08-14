@@ -9,7 +9,7 @@ import pytest
 # (pytest.importorskip does not catch the actionable ImportError that
 # google_client raises, so branch on it explicitly.)
 try:
-    from tradingagents.llm_clients.google_client import GoogleClient
+    from ai_stock.llm_clients.google_client import GoogleClient
 except ImportError as exc:
     pytest.skip(
         f"langchain-google-genai not installed (see #87): {exc}",
@@ -21,7 +21,7 @@ except ImportError as exc:
 class TestGoogleApiKeyStandardization(unittest.TestCase):
     """Verify GoogleClient accepts unified api_key parameter."""
 
-    @patch("tradingagents.llm_clients.google_client.NormalizedChatGoogleGenerativeAI")
+    @patch("ai_stock.llm_clients.google_client.NormalizedChatGoogleGenerativeAI")
     def test_api_key_handling(self, mock_chat):
         test_cases = [
             ("unified api_key is mapped", {"api_key": "test-key-123"}, "test-key-123"),

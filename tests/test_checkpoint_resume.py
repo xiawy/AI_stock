@@ -10,8 +10,8 @@ from unittest.mock import MagicMock
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
 
-from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.graph.checkpointer import (
+from ai_stock.graph.trading_graph import TradingAgentsGraph
+from ai_stock.graph.checkpointer import (
     checkpoint_step,
     clear_checkpoint,
     get_checkpointer,

@@ -4,7 +4,7 @@ from typing import List, Optional, Tuple, Dict
 from rich.console import Console
 
 from cli.models import AnalystType
-from tradingagents.llm_clients.model_catalog import get_model_options
+from ai_stock.llm_clients.model_catalog import get_model_options
 
 console = Console()
 
@@ -48,7 +48,7 @@ def normalize_ticker_symbol(ticker: str) -> str:
     ``~`` etc. and auto-resolves Chinese names to A-stock codes; it raises
     ``ValueError`` on anything unsafe.
     """
-    from tradingagents.dataflows.utils import safe_ticker_component
+    from ai_stock.dataflows.utils import safe_ticker_component
 
     return safe_ticker_component(ticker.strip().upper())
 

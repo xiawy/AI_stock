@@ -10,7 +10,7 @@ import unittest
 
 import pytest
 
-from tradingagents.dataflows.a_stock import _get_prefix
+from ai_stock.dataflows.a_stock import _get_prefix
 
 
 @pytest.mark.unit

@@ -4,15 +4,15 @@ import pytest
 import pandas as pd
 from unittest.mock import MagicMock, patch
 
-from tradingagents.agents.utils.memory import TradingMemoryLog
-from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
-from tradingagents.graph.reflection import Reflector
-from tradingagents.graph.trading_graph import (
+from ai_stock.agents.utils.memory import TradingMemoryLog
+from ai_stock.agents.schemas import PortfolioDecision, PortfolioRating
+from ai_stock.graph.reflection import Reflector
+from ai_stock.graph.trading_graph import (
     TradingAgentsGraph,
     _normalize_yfinance_ticker,
 )
-from tradingagents.graph.propagation import Propagator
-from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
+from ai_stock.graph.propagation import Propagator
+from ai_stock.agents.managers.portfolio_manager import create_portfolio_manager
 
 _SEP = TradingMemoryLog._SEPARATOR
 
@@ -740,12 +740,12 @@ class TestLegacyRemoval:
 
     def test_financial_situation_memory_removed(self):
         """FinancialSituationMemory must not be importable from the memory module."""
-        import tradingagents.agents.utils.memory as m
+        import ai_stock.agents.utils.memory as m
         assert not hasattr(m, "FinancialSituationMemory")
 
     def test_bm25_not_imported(self):
         """rank_bm25 must not be present in the memory module namespace."""
-        import tradingagents.agents.utils.memory as m
+        import ai_stock.agents.utils.memory as m
         assert not hasattr(m, "BM25Okapi")
 
     def test_reflect_and_remember_removed(self):

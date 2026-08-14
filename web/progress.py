@@ -1,4 +1,4 @@
-"""Thread-safe progress tracker shared between the background runner and Streamlit UI."""
+"""Thread-safe progress tracker shared between the background runner and API consumers."""
 
 from __future__ import annotations
 

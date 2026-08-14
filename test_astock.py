@@ -1,7 +1,7 @@
 """End-to-end test: run TradingAgents pipeline on A-stock 688017 via Kimi 2.6."""
 
-from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.default_config import DEFAULT_CONFIG
+from ai_stock.graph.trading_graph import TradingAgentsGraph
+from ai_stock.default_config import DEFAULT_CONFIG
 
 from dotenv import load_dotenv
 

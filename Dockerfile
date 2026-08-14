@@ -40,4 +40,4 @@ RUN mkdir -p /home/appuser/.tradingagents/cache \
 
 COPY --from=builder --chown=appuser:appuser /build .
 
-ENTRYPOINT ["tradingagents"]
+ENTRYPOINT ["ai-stock"]

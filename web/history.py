@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from tradingagents.default_config import DEFAULT_CONFIG
+from ai_stock.default_config import DEFAULT_CONFIG
 
 
 logger = logging.getLogger(__name__)
@@ -135,7 +135,7 @@ def _save_incomplete_index(entries: list[dict[str, Any]]) -> None:
 
 def _checkpoint_step(ticker: str, trade_date: str) -> int | None:
     try:
-        from tradingagents.graph.checkpointer import checkpoint_step
+        from ai_stock.graph.checkpointer import checkpoint_step
 
         return checkpoint_step(DEFAULT_CONFIG["data_cache_dir"], ticker, trade_date)
     except Exception:
@@ -232,7 +232,7 @@ def extract_signal(state: dict[str, Any]) -> str:
     """
     import re
 
-    from tradingagents.agents.utils.rating import parse_rating
+    from ai_stock.agents.utils.rating import parse_rating
 
     _UNKNOWN = ""
     for field in (

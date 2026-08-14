@@ -1,0 +1,98 @@
+/* Global theme — dark + orange accent, matching the original Streamlit look */
+
+:root {
+  --brand: #ff5a1f;
+  --brand-soft: #ff8c42;
+  --bg: #0a0a0a;
+  --bg-panel: #101010;
+  --bg-card: #141414;
+  --border: #232323;
+  --text: #f5f1eb;
+  --text-dim: #909090;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+/* Element Plus dark-mode brand overrides */
+html.dark {
+  --el-color-primary: var(--brand);
+  --el-color-primary-light-3: #ff7a45;
+  --el-color-primary-light-5: #ff9c6e;
+  --el-color-primary-light-7: #ffbe97;
+  --el-color-primary-light-8: #ffcfae;
+  --el-color-primary-light-9: #ffe0c5;
+  --el-color-primary-dark-2: #d9491a;
+  --el-bg-color: var(--bg-panel);
+  --el-bg-color-overlay: var(--bg-card);
+  --el-border-color: var(--border);
+  --el-border-color-light: var(--border);
+  --el-border-color-lighter: #1c1c1c;
+  --el-fill-color-blank: #141414;
+  --el-text-color-primary: var(--text);
+  --el-text-color-regular: #cfcfcf;
+  --el-text-color-secondary: var(--text-dim);
+  --el-font-family: 'Inter', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px 24px 48px;
+}
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+
+.brand-title {
+  font-weight: 900;
+  letter-spacing: 0.5px;
+}
+.brand-title .accent {
+  color: var(--brand);
+}
+
+/* Markdown report body */
+.md-body {
+  line-height: 1.75;
+  font-size: 14px;
+  word-break: break-word;
+}
+.md-body h1,
+.md-body h2,
+.md-body h3 {
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+.md-body table {
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+.md-body th,
+.md-body td {
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+}
+.md-body code {
+  background: #1d1d1d;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.md-body blockquote {
+  border-left: 3px solid var(--brand);
+  margin: 8px 0;
+  padding: 2px 12px;
+  color: var(--text-dim);
+}

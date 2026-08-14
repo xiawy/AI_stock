@@ -1,9 +1,9 @@
-# TradingAgents-Astock
+# AI Stock
 
 ## 项目概述
 基于 [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)（65K Stars）的 A 股深度特化 fork。多 Agent 投研框架，7 个 Analyst 角色通过 Bull/Bear 辩论 + 三方风险辩论生成投资报告。
 
-- **仓库**: https://github.com/simonlin1212/TradingAgents-astock
+- **仓库**: https://github.com/xiawy/AI_stock
 - **协议**: Apache 2.0
 - **Python**: >=3.10
 - **当前版本**: 0.5.14（2026-08-09 发布，经 codex 九轮审计）
@@ -28,11 +28,13 @@
 原版 4 个（市场/情绪/新闻/基本面）+ A 股特化 3 个（政策分析师/游资追踪/解禁监控）
 
 ### 关键路径
-- `tradingagents/dataflows/a_stock.py` — A 股数据 vendor，所有数据获取入口
-- `tradingagents/dataflows/utils.py` — `safe_ticker_component` 路径安全校验 + 中文 ticker 自动解析
-- `tradingagents/agents/` — 7 个 Analyst + Bull/Bear 辩论逻辑
-- `web/` — Streamlit Web UI
-- `cli/` — CLI 入口
+- `ai_stock/dataflows/a_stock.py` — A 股数据 vendor，所有数据获取入口
+- `ai_stock/dataflows/utils.py` — `safe_ticker_component` 路径安全校验 + 中文 ticker 自动解析
+- `ai_stock/agents/` — 7 个 Analyst + Bull/Bear 辩论逻辑
+- `backend/` — FastAPI 后端（JWT 认证 / 分析任务 / 股票 API）
+- `frontend/` — Vue 3 + Vite + Element Plus 前端
+- `web/` — 引擎支撑模块（runner/progress/history/pdf_export，无 UI 依赖，被 backend 复用）
+- `cli/` — CLI 入口（`ai-stock` 命令）
 
 ### 中文股票名解析链路
 用户/LLM 输入 → `safe_ticker_component` 检测中文 → `resolve_ticker()` → `_build_name_code_map()`（mootdx 全市场映射，缓存）→ 返回 6 位代码
@@ -85,7 +87,7 @@ API `status=incomplete` + `incomplete_details.reason=max_output_tokens`**。最�
 单独配置。
 
 ### 决策绩效统计（v0.5.2 新增）
-`tradingagents performance` 读记忆日志里已结算的决策算指标，零 LLM 调用。
+`ai-stock performance` 读记忆日志里已结算的决策算指标，零 LLM 调用。
 **改 `TradingMemoryLog` 的标签格式会直接打断它**（依赖 `[日期 | 代码 | 评级 | raw |
 alpha | holding]` 结构，且 holding 带 `d` 后缀）。
 
@@ -106,7 +108,7 @@ deepseek-v4-flash 等模型在 tool call 时可能返回中文股票名而非 6 
 
 ### CLI 必须保住裸跑（v0.5.9 血的教训）
 `cli/main.py` 里的 `@app.callback(invoke_without_command=True)` **不能删**。Typer 只
-注册一个命令时是"单命令模式"，裸跑 `tradingagents` 等于跑那个命令；一旦注册第二个
+注册一个命令时是"单命令模式"，裸跑 `ai-stock` 等于跑那个命令；一旦注册第二个
 子命令就切换成"命令组模式"，裸跑直接报 `Missing command` 退出——而 README 和所有文档
 写的都是裸跑，等于**每个现有用户升级后第一条命令就失败**。加子命令时务必先跑
 `tests/test_cli_default_command.py`。
@@ -142,8 +144,8 @@ deepseek-v4-flash 等模型在 tool call 时可能返回中文股票名而非 6 
 ## 开发规范
 - 改动前先跑 `python -m pytest tests/ -v` 确保不破坏现有测试
 - `safe_ticker_component` 是安全边界，任何绕过路径校验的改动必须慎重评估
-- 数据层新增接口遵循 `tradingagents/dataflows/interface.py` 的 vendor 路由模式
-- Web UI 改动在 `web/` 目录，用 `streamlit run web/launch.py` 本地测试
+- 数据层新增接口遵循 `ai_stock/dataflows/interface.py` 的 vendor 路由模式
+- 后端改动在 `backend/`（uvicorn 冒烟）、前端改动在 `frontend/`（npm run dev），`web/` 支撑模块改动需同时验证 backend 与 CLI
 
 ## 相关项目
 - [a-stock-data](https://github.com/simonlin1212/a-stock-data) — A 股 MCP 数据服务（Claude Code 用的 skill）

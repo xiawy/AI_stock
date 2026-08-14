@@ -11,8 +11,8 @@ import datetime
 
 import pytest
 
-from tradingagents.dataflows.config import get_config, set_config
-from tradingagents.default_config import DEFAULT_CONFIG
+from ai_stock.dataflows.config import get_config, set_config
+from ai_stock.default_config import DEFAULT_CONFIG
 
 
 @pytest.mark.unit

@@ -1,0 +1,17 @@
+# Backend runtime dependencies (installed into backend/.venv)
+fastapi>=0.115
+uvicorn[standard]>=0.30
+SQLAlchemy>=2.0
+alembic>=1.13
+PyJWT>=2.8          # JWT — PyJWT is actively maintained (python-jose is stale)
+bcrypt>=4.1
+python-multipart>=0.0.9
+pydantic>=2.7
+pydantic-settings>=2.2
+email-validator>=2.1
+python-dotenv>=1.0
+
+# The original project is reused as the analysis engine library
+# (ai_stock/, web/, cli/ packages). Installed from the repo root:
+#   pip install -e ..
+# or add its requirements here if you prefer a pinned copy.

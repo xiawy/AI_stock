@@ -11,7 +11,7 @@
 
 import pytest
 
-from tradingagents.dataflows import a_stock
+from ai_stock.dataflows import a_stock
 
 
 class FakeQuotesClient:

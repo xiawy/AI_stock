@@ -9,7 +9,7 @@
 
 import pytest
 
-from tradingagents.graph.setup import DEEP_ROLES, ROLE_KEYS, GraphSetup
+from ai_stock.graph.setup import DEEP_ROLES, ROLE_KEYS, GraphSetup
 
 
 class FakeLLM:
@@ -105,7 +105,7 @@ def test_role_keys_cover_bull_and_bear():
 
 def build(config, monkeypatch, subscription_on=False):
     """只跑 _build_role_llms，不做整图初始化（那要真 API key）。"""
-    from tradingagents.graph import trading_graph as tg
+    from ai_stock.graph import trading_graph as tg
 
     created = []
 
@@ -238,7 +238,7 @@ def test_warns_when_bypassing_subscription(monkeypatch, caplog):
 
 def test_provider_specific_kwargs_not_leaked_to_other_vendors(monkeypatch):
     """openai 的 reasoning_effort 不能带给 qwen —— 别家可能直接拒收这个参数。"""
-    from tradingagents.graph import trading_graph as tg
+    from ai_stock.graph import trading_graph as tg
 
     created = []
 
@@ -273,7 +273,7 @@ def test_unselected_analyst_roles_are_not_instantiated(monkeypatch):
     否则一个**永远不执行**的节点会因为缺 API key 或缺可选依赖，把一次本来完全
     正常的分析在启动时就打断（codex 终轮指出）。
     """
-    from tradingagents.graph import trading_graph as tg
+    from ai_stock.graph import trading_graph as tg
 
     created = []
 
@@ -302,7 +302,7 @@ def test_unselected_analyst_roles_are_not_instantiated(monkeypatch):
 
 def test_non_analyst_roles_are_always_built(monkeypatch):
     """多空/风险/Manager 这些角色不受 selected_analysts 控制，必须照常建。"""
-    from tradingagents.graph import trading_graph as tg
+    from ai_stock.graph import trading_graph as tg
 
     class FakeClient:
         def __init__(self, **kw): pass

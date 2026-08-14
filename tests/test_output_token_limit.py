@@ -12,12 +12,12 @@ import logging
 
 import pytest
 
-from tradingagents.llm_clients.anthropic_client import (
+from ai_stock.llm_clients.anthropic_client import (
     _THIRD_PARTY_DEFAULT_MAX_TOKENS,
     AnthropicClient,
 )
-from tradingagents.llm_clients.base_client import warn_if_truncated
-from tradingagents.llm_clients.openai_client import OpenAIClient
+from ai_stock.llm_clients.base_client import warn_if_truncated
+from ai_stock.llm_clients.openai_client import OpenAIClient
 
 
 class FakeResponse:

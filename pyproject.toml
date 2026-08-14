@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tradingagents-astock"
+name = "ai-stock"
 version = "0.5.14"
 description = "A股多Agent投研框架 — 基于 TradingAgents 深度特化"
 readme = "README.md"
@@ -33,7 +33,6 @@ dependencies = [
     "tqdm>=4.67.1",
     "typing-extensions>=4.14.0",
     "yfinance>=0.2.63",
-    "streamlit>=1.45.0",
     "fpdf2>=2.8.6",
     "python-dotenv>=1.1.0",
     # 0.11.7 是首个兼容 pandas>=2.3 的版本；放宽到 0.10.x 会让 uv 回溯到
@@ -48,9 +47,9 @@ dependencies = [
 agentsdk = ["claude-agent-sdk>=0.2.82"]
 
 [project.urls]
-Homepage = "https://github.com/simonlin1212/tradingagents-astock"
-Repository = "https://github.com/simonlin1212/tradingagents-astock"
-Issues = "https://github.com/simonlin1212/tradingagents-astock/issues"
+Homepage = "https://github.com/xiawy/AI_stock"
+Repository = "https://github.com/xiawy/AI_stock"
+Issues = "https://github.com/xiawy/AI_stock/issues"
 Upstream = "https://github.com/TauricResearch/TradingAgents"
 
 # NOTE: there is deliberately no `[google]` extra — see #87.
@@ -72,11 +71,10 @@ Upstream = "https://github.com/TauricResearch/TradingAgents"
 # See README「Gemini / langchain-google-genai」for details.
 
 [project.scripts]
-tradingagents = "cli.main:app"
-tradingagents-web = "web.launch:main"
+ai-stock = "cli.main:app"
 
 [tool.setuptools.packages.find]
-include = ["tradingagents*", "cli*", "web*"]
+include = ["ai_stock*", "cli*", "web*"]
 
 [tool.setuptools.package-data]
 cli = ["static/*"]

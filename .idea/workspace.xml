@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/.idea/AI_stock.iml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.streamlit/config.toml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/CLAUDE.md" beforeDir="false" afterPath="$PROJECT_DIR$/CLAUDE.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Dockerfile" beforeDir="false" afterPath="$PROJECT_DIR$/Dockerfile" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README_en.md" beforeDir="false" afterPath="$PROJECT_DIR$/README_en.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/assets/web-ui-welcome.png" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/cli/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/cli/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cli/utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/cli/utils.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docker-compose.yml" beforeDir="false" afterPath="$PROJECT_DIR$/docker-compose.yml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/run_cases.py" beforeDir="false" afterPath="$PROJECT_DIR$/examples/run_cases.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/scripts/smoke_structured_output.py" beforeDir="false" afterPath="$PROJECT_DIR$/scripts/smoke_structured_output.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test.py" beforeDir="false" afterPath="$PROJECT_DIR$/test.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_astock.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_astock.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/test_data_quality.py" beforeDir="false" afterPath="$PROJECT_DIR$/test_data_quality.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/conftest.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/conftest.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_agent_sdk_provider.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_agent_sdk_provider.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_astock_sina_supplement.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_astock_sina_supplement.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_capabilities.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_capabilities.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_checkpoint_resume.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_checkpoint_resume.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_deepseek_reasoning.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_deepseek_reasoning.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_google_api_key.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_google_api_key.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_lookahead_guard.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_lookahead_guard.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_market_guard.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_market_guard.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_market_lookback.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_market_lookback.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_market_prefix_routing.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_market_prefix_routing.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_memory_log.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_memory_log.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_model_validation.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_model_validation.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_mootdx_server_selection.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_mootdx_server_selection.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_news_data_tools.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_news_data_tools.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_openai_compatible_provider.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_openai_compatible_provider.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_output_token_limit.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_output_token_limit.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_performance.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_performance.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_role_llms.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_role_llms.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_safe_ticker_component.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_safe_ticker_component.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_sentiment_data_tools.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_sentiment_data_tools.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_signal_processing.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_signal_processing.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_structured_agents.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_structured_agents.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_ticker_symbol_handling.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_ticker_symbol_handling.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/__init__.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/__init__.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/analysts/fundamentals_analyst.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/analysts/hot_money_tracker.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/analysts/lockup_watcher.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/analysts/market_analyst.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/analysts/news_analyst.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/analysts/policy_analyst.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/analysts/social_media_analyst.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/managers/portfolio_manager.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/managers/research_manager.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/quality_gate.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/researchers/bear_researcher.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/researchers/bull_researcher.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/risk_mgmt/aggressive_debator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/risk_mgmt/conservative_debator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/risk_mgmt/neutral_debator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/schemas.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/trader/trader.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/utils/agent_states.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/utils/agent_utils.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/utils/core_stock_tools.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/utils/fundamental_data_tools.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/utils/memory.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/utils/news_data_tools.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/utils/rating.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/utils/signal_data_tools.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/utils/structured.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/agents/utils/technical_indicators_tools.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/dataflows/__init__.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/dataflows/a_stock.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/dataflows/alpha_vantage.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/dataflows/alpha_vantage_common.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/dataflows/alpha_vantage_fundamentals.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/dataflows/alpha_vantage_indicator.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/dataflows/alpha_vantage_news.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/dataflows/alpha_vantage_stock.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/dataflows/config.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/dataflows/interface.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/dataflows/stockstats_utils.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/dataflows/utils.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/dataflows/y_finance.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/dataflows/yfinance_news.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/default_config.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/graph/__init__.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/graph/checkpointer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/graph/conditional_logic.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/graph/propagation.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/graph/reflection.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/graph/setup.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/graph/signal_processing.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/graph/trading_graph.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/llm_clients/TODO.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/llm_clients/__init__.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/llm_clients/anthropic_client.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/llm_clients/azure_client.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/llm_clients/base_client.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/llm_clients/capabilities.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/llm_clients/claude_agent_sdk_client.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/llm_clients/factory.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/llm_clients/google_client.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/llm_clients/model_catalog.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/llm_clients/openai_client.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/llm_clients/validators.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tradingagents/performance.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/app.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/components/__init__.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/components/progress_panel.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/components/report_viewer.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/components/sidebar.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/history.py" beforeDir="false" afterPath="$PROJECT_DIR$/web/history.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/launch.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/pdf_export.py" beforeDir="false" afterPath="$PROJECT_DIR$/web/pdf_export.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/progress.py" beforeDir="false" afterPath="$PROJECT_DIR$/web/progress.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/runner.py" beforeDir="false" afterPath="$PROJECT_DIR$/web/runner.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/stock_display.py" beforeDir="false" afterPath="$PROJECT_DIR$/web/stock_display.py" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "customColor": "",
+  "associatedIndex": 7
+}]]></component>
+  <component name="ProjectId" id="3HuccVFaxgCdwBjQpNhfwMaezGV" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "git-widget-placeholder": "main",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "ts.external.directory.path": "D:\\soft\\PyCharm 2025.3\\plugins\\javascript-plugin\\jsLanguageServicesImpl\\external",
+    "vue.rearranger.settings.migration": "true"
+  }
+}]]></component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-js-predefined-d6986cc7102b-c7e53b3be11b-JavaScript-PY-253.28294.336" />
+        <option value="bundled-python-sdk-0978a7220b69-9867c7d4c0a4-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.28294.336" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="" />
+      <created>1786721482373</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1786721482373</updated>
+      <workItem from="1786721514711" duration="6023000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+</project>

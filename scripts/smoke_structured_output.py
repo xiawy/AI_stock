@@ -24,11 +24,11 @@ import argparse
 import os
 import sys
 
-from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
-from tradingagents.agents.managers.research_manager import create_research_manager
-from tradingagents.agents.trader.trader import create_trader
-from tradingagents.graph.signal_processing import SignalProcessor
-from tradingagents.llm_clients import create_llm_client
+from ai_stock.agents.managers.portfolio_manager import create_portfolio_manager
+from ai_stock.agents.managers.research_manager import create_research_manager
+from ai_stock.agents.trader.trader import create_trader
+from ai_stock.graph.signal_processing import SignalProcessor
+from ai_stock.llm_clients import create_llm_client
 
 
 PROVIDER_DEFAULTS = {

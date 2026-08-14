@@ -61,7 +61,7 @@ def _resolve_display_code(ticker: str) -> str:
 
     if any("一" <= ch <= "鿿" for ch in code):
         try:
-            from tradingagents.dataflows.a_stock import resolve_ticker
+            from ai_stock.dataflows.a_stock import resolve_ticker
 
             return resolve_ticker(code)
         except Exception:
@@ -78,7 +78,7 @@ def resolve_stock_name(ticker: str) -> str | None:
         return None
 
     try:
-        from tradingagents.dataflows.a_stock import _build_name_code_map
+        from ai_stock.dataflows.a_stock import _build_name_code_map
 
         _, code_to_name = _build_name_code_map()
     except Exception:

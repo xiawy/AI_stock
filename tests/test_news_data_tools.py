@@ -1,6 +1,6 @@
 import pytest
 
-from tradingagents.agents.utils import news_data_tools
+from ai_stock.agents.utils import news_data_tools
 
 
 @pytest.mark.unit

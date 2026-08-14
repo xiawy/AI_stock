@@ -24,8 +24,8 @@ from rich import box
 from rich.align import Align
 from rich.rule import Rule
 
-from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.default_config import DEFAULT_CONFIG
+from ai_stock.graph.trading_graph import TradingAgentsGraph
+from ai_stock.default_config import DEFAULT_CONFIG
 from cli.models import AnalystType
 from cli.utils import *
 from cli.announcements import fetch_announcements, display_announcements
@@ -34,8 +34,8 @@ from cli.stats_handler import StatsCallbackHandler
 console = Console()
 
 app = typer.Typer(
-    name="TradingAgents",
-    help="TradingAgents CLI: Multi-Agents LLM Financial Trading Framework",
+    name="AI Stock",
+    help="AI Stock CLI: A股多 Agent LLM 投研框架（基于 TradingAgents 深度特化）",
     add_completion=True,  # Enable shell completion
 )
 
@@ -257,9 +257,9 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
     # Header with welcome message
     layout["header"].update(
         Panel(
-            "[bold green]Welcome to TradingAgents CLI[/bold green]\n"
+            "[bold green]Welcome to AI Stock CLI[/bold green]\n"
             "[dim]© [Tauric Research](https://github.com/TauricResearch)[/dim]",
-            title="Welcome to TradingAgents",
+            title="Welcome to AI Stock",
             border_style="green",
             padding=(1, 2),
             expand=True,
@@ -468,7 +468,7 @@ def get_user_selections():
 
     # Create welcome box content
     welcome_content = f"{welcome_ascii}\n"
-    welcome_content += "[bold green]TradingAgents: Multi-Agents LLM Financial Trading Framework - CLI[/bold green]\n\n"
+    welcome_content += "[bold green]AI Stock: A股多 Agent LLM 投研框架 - CLI[/bold green]\n\n"
     welcome_content += "[bold]Workflow Steps:[/bold]\n"
     welcome_content += "I. Analyst Team → II. Research Team → III. Trader → IV. Risk Management → V. Portfolio Management\n\n"
     welcome_content += (
@@ -480,8 +480,8 @@ def get_user_selections():
         welcome_content,
         border_style="green",
         padding=(1, 2),
-        title="Welcome to TradingAgents",
-        subtitle="Multi-Agents LLM Financial Trading Framework",
+        title="Welcome to AI Stock",
+        subtitle="A股多 Agent LLM 投研框架",
     )
     console.print(Align.center(welcome_box))
     console.print()
@@ -631,7 +631,7 @@ def get_ticker():
     and the report path, so an input like ``../../tmp/evil`` would otherwise
     write outside the intended directory (#51). Re-prompts on invalid input.
     """
-    from tradingagents.dataflows.utils import safe_ticker_component
+    from ai_stock.dataflows.utils import safe_ticker_component
 
     while True:
         raw = typer.prompt("", default="SPY")
@@ -1274,11 +1274,11 @@ def _default(
         help="Delete all saved checkpoints before running (force fresh start).",
     ),
 ):
-    """裸跑 `tradingagents`（不带子命令）＝ 直接开始分析。
+    """裸跑 `ai-stock`（不带子命令）＝ 直接开始分析。
 
     ⚠️ 这个 callback 是**必须**的：Typer 在只有一个命令时用"单命令模式"，
     裸跑就等于跑那个命令；一旦注册第二个子命令（v0.5.2 加的 `performance`），
-    它会切换成"命令组模式"，裸跑 `tradingagents` 直接报 `Missing command` 退出——
+    它会切换成"命令组模式"，裸跑 `ai-stock` 直接报 `Missing command` 退出——
     而 README 和所有文档写的都是裸跑。加子命令时务必保住这条默认路径。
     """
     if ctx.invoked_subcommand is not None:
@@ -1300,7 +1300,7 @@ def analyze(
     ),
 ):
     if clear_checkpoints:
-        from tradingagents.graph.checkpointer import clear_all_checkpoints
+        from ai_stock.graph.checkpointer import clear_all_checkpoints
         n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
         console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
     run_analysis(checkpoint=checkpoint)
@@ -1319,8 +1319,8 @@ def performance(
     """
     import json as _json
 
-    from tradingagents.agents.utils.memory import TradingMemoryLog
-    from tradingagents.performance import format_report, summarize
+    from ai_stock.agents.utils.memory import TradingMemoryLog
+    from ai_stock.performance import format_report, summarize
 
     summary = summarize(TradingMemoryLog(DEFAULT_CONFIG).load_entries())
     if json_out:

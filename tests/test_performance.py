@@ -10,7 +10,7 @@
 
 import pytest
 
-from tradingagents.performance import (
+from ai_stock.performance import (
     MIN_MEANINGFUL_SAMPLE,
     format_report,
     load_records,

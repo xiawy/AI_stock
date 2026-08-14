@@ -1,9 +1,9 @@
 <p align="center"><b>简体中文</b> | <a href="README_en.md">English</a></p>
 
-<h1 align="center">TradingAgents-Astock</h1>
+<h1 align="center">AI Stock</h1>
 
 <p align="center">
-  基于 <a href="https://github.com/TauricResearch/TradingAgents">TauricResearch/TradingAgents</a>（65K ⭐）的 A 股深度特化 fork<br>
+  基于 <a href="https://github.com/TauricResearch/TradingAgents">TauricResearch/TradingAgents</a>（65K ⭐）的 A 股深度特化 fork · FastAPI + Vue 3 前后端分离<br>
   全 Apache 2.0 开源 · pip install 即跑 · 零外部服务依赖
 </p>
 
@@ -13,8 +13,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/simonlin1212/tradingagents-astock/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/simonlin1212/tradingagents-astock?style=social"/></a>
-  <a href="https://github.com/simonlin1212/tradingagents-astock/network/members"><img alt="Forks" src="https://img.shields.io/github/forks/simonlin1212/tradingagents-astock?style=social"/></a>
+  <a href="https://github.com/xiawy/AI_stock/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/xiawy/AI_stock?style=social"/></a>
+  <a href="https://github.com/xiawy/AI_stock/network/members"><img alt="Forks" src="https://img.shields.io/github/forks/xiawy/AI_stock?style=social"/></a>
   <a href="https://arxiv.org/abs/2412.20138"><img alt="论文" src="https://img.shields.io/badge/论文-arXiv_2412.20138-B31B1B?logo=arxiv"/></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-blue"/></a>
   <a href="./CHANGES_FROM_UPSTREAM.md"><img alt="改动记录" src="https://img.shields.io/badge/改动记录-CHANGES-orange"/></a>
@@ -145,8 +145,8 @@
 
 ```bash
 # Python >= 3.10
-git clone https://github.com/simonlin1212/tradingagents-astock.git
-cd tradingagents-astock
+git clone https://github.com/xiawy/AI_stock.git
+cd AI_stock
 pip install -e .
 
 # 如需使用 Google Gemini 模型（无 [google] extra，需显式装，见下方 FAQ）：
@@ -157,7 +157,7 @@ pip install "google-genai>=1.53.0" "httpx>=0.28.1"
 pip install -e ".[agentsdk]"
 ```
 
-> **装完即可用，无需 Docker。** 安装后直接跑 `streamlit run web/app.py`（Web UI）或 `tradingagents`（CLI）即可，详见下方「Web UI」「CLI 方式」两节。Docker 仅是可选的部署方式，本地开发不需要。
+> **装完即可用，无需 Docker。** 安装后直接跑 `ai-stock`（CLI）或启动前后端 Web（见下方「Web UI」「CLI 方式」两节）。Docker 仅是可选的部署方式，本地开发不需要。
 
 ### 2. 配置 LLM
 
@@ -208,7 +208,7 @@ BACKEND_URL=https://your-relay.example/v1   # 你的网关地址（也可在 Web
 根据你选择的供应商修改 config：
 
 ```python
-from tradingagents.graph.trading_graph import TradingAgentsGraph
+from ai_stock.graph.trading_graph import TradingAgentsGraph
 
 # ── MiniMax 示例（推荐）─────────────────────────────
 config = {
@@ -243,10 +243,10 @@ print(decision)
 ### 4. CLI 方式
 
 ```bash
-tradingagents                 # 交互式 CLI
-tradingagents analyze         # 同上（默认命令）
-tradingagents performance     # 决策绩效统计（见下）
-tradingagents --help          # 查看所有选项
+ai-stock                 # 交互式 CLI
+ai-stock analyze         # 同上（默认命令）
+ai-stock performance     # 决策绩效统计（见下）
+ai-stock --help          # 查看所有选项
 ```
 
 ### 5. 决策绩效统计（v0.5.2 新增）
@@ -254,8 +254,8 @@ tradingagents --help          # 查看所有选项
 想知道**这套流程过往的判断准不准**，跑：
 
 ```bash
-tradingagents performance            # 人读的报告
-tradingagents performance --json     # 机器读的 JSON
+ai-stock performance            # 人读的报告
+ai-stock performance --json     # 机器读的 JSON
 ```
 
 数据来自记忆日志：每次分析会落一条决策，下次分析同一只股票时自动拉真实行情回填收益与 alpha（对沪深 300）。**统计本身零 LLM 调用**，只读已经落盘的结果。
@@ -276,34 +276,38 @@ tradingagents performance --json     # 机器读的 JSON
 
 ## Web UI
 
-内置 Streamlit 可视化界面，支持在侧边栏选择 LLM 供应商和模型，输入股票代码即可一键分析，适合不写代码的用户。
+前后端分离的 Web 应用（原 Streamlit UI 已移除）：**FastAPI + SQLite 后端 + Vue 3 + Element Plus 前端**，支持注册 / 登录（JWT）、多用户任务隔离。
 
 ### 启动
 
 ```bash
-# 方式一：命令行启动（推荐）
-tradingagents-web
+# 后端（端口 8000）
+cd backend
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\pip install -e ..
+.venv\Scripts\python -m uvicorn app.main:app --reload --port 8000
 
-# 方式二：直接运行
-streamlit run web/app.py
+# 前端（端口 5173，开发代理 /api → 8000；另开一个终端）
+cd frontend
+npm install
+npm run dev
 ```
 
-打开浏览器访问 `http://localhost:8501`。
+打开浏览器访问 `http://localhost:5173`，注册 / 登录后即可发起分析。
 
 ### 功能
 
-- **模型自选**：侧边栏支持 10 个 LLM 供应商切换（MiniMax/DeepSeek/Qwen/GLM/OpenAI/Anthropic/Google/xAI/OpenRouter/Ollama），外加 **「OpenAI 兼容（自定义 base_url）」** 一档可接任意 OpenAI 兼容网关（9Router / AI Router / 自建代理）
-- **一键分析**：输入 6 位 A 股代码 + 分析日期 +「数据起始日期」（默认本月第一天，可自定义技术分析回溯区间，支持按月/自定义时段分析），点击「开始分析」
-- **实时进度**：12 阶段 pipeline 实时显示（7 分析师 → 质量门控 → 辩论 → 风控 → 决策），所有已完成阶段的报告均可展开查看
+- **用户系统**：注册 / 登录（JWT 会话），分析任务与自选股按用户隔离（SQLite）
+- **模型自选**：支持 11 个 LLM 供应商切换（MiniMax/DeepSeek/Qwen/GLM/OpenAI/Anthropic/Google/xAI/OpenRouter/Ollama/OpenAI 兼容网关）
+- **一键分析**：输入 6 位 A 股代码或中文名 + 分析日期，点击「开始分析」；支持断点续跑
+- **实时进度**：12 阶段 pipeline 实时显示（7 分析师 → 质量门控 → 辩论 → 风控 → 决策），支持暂停 / 恢复 / 停止
+- **K 线图表**：ECharts 蜡烛图 + 实时行情卡片
 - **完整报告**：信号卡片（Buy/Hold/Sell）、7 份分析师报告、多空辩论、风控评估
 - **报告导出**：一键下载 **Markdown**（零依赖，永远可用）或 **PDF** 完整分析报告（PDF 自动适配 Windows/macOS/Linux 中文字体）
-- **历史记录**：自动保存并展示所有历史分析
+- **历史记录与自选股**：自动保存历史分析，支持自选股管理
 
-### 截图
-
-<p align="center">
-  <img src="assets/web-ui-welcome.png" width="80%" alt="Web UI 欢迎页"/>
-</p>
+架构与 API 文档详见 [backend/README.md](./backend/README.md)，接口交互文档见 `http://localhost:8000/docs`。
 
 ---
 
@@ -411,10 +415,8 @@ ANTHROPIC_BASE_URL=https://api.kimi.com/coding/   # 或在 config 里写 backend
 **Q: 导出 PDF 报 `UnicodeEncodeError: 'latin-1' codec can't encode`？**
 你的环境里装了**旧版 `fpdf`（pyfpdf）**，它和本项目用的 `fpdf2` 都以 `fpdf` 名称导入、互相冲突。执行：`pip uninstall -y fpdf && pip install "fpdf2>=2.8.6"`。实在不行可改用「下载 Markdown」导出（零依赖，永远可用）。
 
-**Q: Docker 里怎么跑 Web UI？容器启动报 `Invalid value: File does not exist: web/app.py`？**
-用 compose 里的 `web` 服务：`docker compose up web`，然后开 http://localhost:8501 。
-
-报这个错通常是因为命令写成了 `streamlit run web/app.py`——这条**依赖当前工作目录**，工作目录不对就找不到文件。正确的入口是 `tradingagents-web`（即 `web.launch:main`），它按 `__file__` 解析 `app.py` 的绝对路径，跟工作目录无关。本地跑同理，装完后直接 `tradingagents-web` 最稳。
+**Q: Docker 里怎么跑 CLI？**
+用 compose 的 `ai-stock` 服务：`docker compose run --rm ai-stock`。Web 前后端暂未提供容器编排（待 Phase 4），本地开发见「Web UI」一节。
 
 **Q: Docker 里导出 PDF 报「未找到中文字体」？**
 v0.2.12 起 Dockerfile 已内置 `fonts-noto-cjk`，重新 `docker build` 即可。旧镜像可临时 `apt install fonts-noto-cjk`，或改用 Markdown 导出。
@@ -449,8 +451,8 @@ pip install "google-genai>=1.53.0" "httpx>=0.28.1"
 ## 项目结构
 
 ```
-TradingAgents-Astock/
-├── tradingagents/
+AI_stock/
+├── ai_stock/
 │   ├── agents/
 │   │   ├── analysts/          # 7 个分析师
 │   │   │   ├── market_analyst.py
@@ -475,17 +477,19 @@ TradingAgents-Astock/
 │       ├── propagation.py     # 状态初始化与传播
 │       ├── reflection.py      # 交易反思（CSI 300 基准）
 │       └── conditional_logic.py
-├── web/
-│   ├── app.py                 # Streamlit 主入口
+├── backend/                    # FastAPI 后端（认证 / 任务 / 股票 API）
+│   ├── app/                   # api / core / models / schemas / services
+│   ├── migrations/            # Alembic
+│   └── tests/                 # pytest
+├── frontend/                   # Vue 3 + Vite + Element Plus 前端
+│   └── src/                   # views / components / stores / api
+├── web/                        # 引擎支撑模块（无 UI 依赖）
 │   ├── runner.py              # 后台线程运行分析
 │   ├── progress.py            # 线程安全进度追踪
 │   ├── history.py             # 历史记录扫描
-│   ├── pdf_export.py          # PDF 报告生成
-│   ├── launch.py              # CLI 启动器
-│   └── components/            # UI 组件
-│       ├── sidebar.py         # 侧边栏（输入 + 历史）
-│       ├── progress_panel.py  # 实时进度面板
-│       └── report_viewer.py   # 报告展示
+│   ├── stock_display.py       # 「代码+名称」归一化
+│   └── pdf_export.py          # PDF / Markdown 报告生成
+├── cli/                        # 交互式 CLI（ai-stock 命令）
 ├── test_astock.py             # E2E 集成测试
 ├── CHANGES_FROM_UPSTREAM.md   # 与上游的完整改动记录
 ├── NOTICE                     # Apache 2.0 归属声明
@@ -564,7 +568,7 @@ unset ANTHROPIC_API_KEY
 
 #### 2. 开启
 
-Web UI 侧栏「个人 Claude 订阅覆盖 (Agent SDK)」三档，或在 config 里设：
+Web 分析页「个人 Claude 订阅覆盖 (Agent SDK)」三档，或在 config 里设：
 
 ```python
 config["deep_think_provider_override"]  = "claude_agent_sdk"   # 仅深度节点

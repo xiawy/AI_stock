@@ -3,8 +3,8 @@
 import pytest
 from pydantic import BaseModel
 
-from tradingagents.llm_clients.capabilities import get_capabilities
-from tradingagents.llm_clients.openai_client import MinimaxChatOpenAI
+from ai_stock.llm_clients.capabilities import get_capabilities
+from ai_stock.llm_clients.openai_client import MinimaxChatOpenAI
 
 
 @pytest.mark.unit
@@ -108,7 +108,7 @@ def test_explicit_tool_choice_is_dropped_for_unsupported_model():
     原实现用 setdefault，调用方显式传入时会被保留，API 调用照样失败。"""
     from unittest.mock import patch
     from langchain_openai import ChatOpenAI
-    from tradingagents.llm_clients.openai_client import DeepSeekChatOpenAI
+    from ai_stock.llm_clients.openai_client import DeepSeekChatOpenAI
 
     client = DeepSeekChatOpenAI(model="deepseek-v4-pro", api_key="x")
 
@@ -132,7 +132,7 @@ def test_optional_tool_call_returning_none_still_falls_back_to_free_text():
     不存在「拿不到结构化就崩」的回归。
     """
     from unittest.mock import MagicMock
-    from tradingagents.agents.utils.structured import invoke_structured_or_freetext
+    from ai_stock.agents.utils.structured import invoke_structured_or_freetext
 
     structured = MagicMock()
     structured.invoke.return_value = None          # 模型没调工具

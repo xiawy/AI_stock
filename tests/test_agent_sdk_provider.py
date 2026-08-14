@@ -16,14 +16,14 @@ import os
 import pytest
 from pydantic import BaseModel
 
-from tradingagents.llm_clients import claude_agent_sdk_client as mod
-from tradingagents.llm_clients.claude_agent_sdk_client import (
+from ai_stock.llm_clients import claude_agent_sdk_client as mod
+from ai_stock.llm_clients.claude_agent_sdk_client import (
     AgentSDKChatModel,
     ClaudeAgentSDKClient,
     _RateLimitHit,
     _split_prompt,
 )
-from tradingagents.llm_clients.factory import create_llm_client
+from ai_stock.llm_clients.factory import create_llm_client
 
 
 class _Plan(BaseModel):
@@ -204,7 +204,7 @@ class _StubLLM:
 
 def _install_stub_fallback(monkeypatch):
     monkeypatch.setattr(
-        "tradingagents.llm_clients.factory.create_llm_client",
+        "ai_stock.llm_clients.factory.create_llm_client",
         lambda **kw: type("C", (), {"get_llm": lambda self: _StubLLM()})(),
     )
 
@@ -284,11 +284,11 @@ def test_api_key_coexistence_warns_but_does_not_abort(monkeypatch, caplog):
     """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-would-bill-api")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-oauth-token")
-    from tradingagents.graph import trading_graph as tg
+    from ai_stock.graph import trading_graph as tg
 
     cfg = dict(tg.DEFAULT_CONFIG) if hasattr(tg, "DEFAULT_CONFIG") else None
     if cfg is None:
-        from tradingagents.default_config import DEFAULT_CONFIG
+        from ai_stock.default_config import DEFAULT_CONFIG
         cfg = dict(DEFAULT_CONFIG)
     cfg["deep_think_provider_override"] = "claude_agent_sdk"
 
@@ -301,7 +301,7 @@ def test_api_key_coexistence_warns_but_does_not_abort(monkeypatch, caplog):
 
 
 def test_default_config_off_by_default():
-    from tradingagents.default_config import DEFAULT_CONFIG
+    from ai_stock.default_config import DEFAULT_CONFIG
 
     assert DEFAULT_CONFIG["deep_think_provider_override"] is None
     assert DEFAULT_CONFIG["quick_think_provider_override"] is None
@@ -409,7 +409,7 @@ def test_query_rejected_triggers_fallback(monkeypatch, oauth_env):
 # --------------------------------------------------------------------------- #
 
 def test_auth_failure_is_detected_from_api_retry_and_assistant_text():
-    from tradingagents.llm_clients.claude_agent_sdk_client import (
+    from ai_stock.llm_clients.claude_agent_sdk_client import (
         _looks_like_auth_failure,
     )
 
@@ -436,14 +436,14 @@ def test_auth_failure_is_detected_from_api_retry_and_assistant_text():
 def test_auth_error_is_not_in_fallback_errors():
     """凭据失效时降级到付费 provider ＝ 悄悄开始计费，正是启用订阅要避免的。
     这条锁住 _AuthError 不被 fallback 吞掉。"""
-    from tradingagents.llm_clients import claude_agent_sdk_client as mod
+    from ai_stock.llm_clients import claude_agent_sdk_client as mod
 
     assert mod._AuthError not in mod._FALLBACK_ERRORS
     assert not issubclass(mod._AuthError, mod._FALLBACK_ERRORS)
 
 
 def test_auth_failure_hint_is_actionable():
-    from tradingagents.llm_clients.claude_agent_sdk_client import _auth_failure_hint
+    from ai_stock.llm_clients.claude_agent_sdk_client import _auth_failure_hint
 
     class _Block:
         text = "401 OAuth access token has expired"
@@ -459,7 +459,7 @@ def test_auth_failure_hint_is_actionable():
 def test_web_all_scope_keeps_separate_quick_model():
     """选「所有节点」时不能把深度节点的模型复制给 quick——
     7 个分析师 + 辩手全跑 opus 会让订阅额度烧得极快，也与文档所述矛盾。"""
-    from tradingagents.default_config import DEFAULT_CONFIG
+    from ai_stock.default_config import DEFAULT_CONFIG
 
     config = dict(DEFAULT_CONFIG)
     session = {"subscription_scope": "all", "agent_sdk_model": "opus"}
@@ -492,7 +492,7 @@ def test_fallback_provider_and_model_must_be_configured_together(
 ):
     """降级路径恰好在撞额度时才被走到，配错要在启动时暴露而不是运行中。"""
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    from tradingagents.default_config import DEFAULT_CONFIG
+    from ai_stock.default_config import DEFAULT_CONFIG
 
     config = dict(DEFAULT_CONFIG)
     config["deep_think_provider_override"] = "claude_agent_sdk"
@@ -510,7 +510,7 @@ def test_fallback_provider_and_model_must_be_configured_together(
 def test_auth_detection_ignores_ordinary_assistant_text():
     """工具分析师会复述桥接工具的失败原文——某个行情源自己的 key 失效时，
     正文里可能出现 'invalid api key'。这不能被误判成订阅凭据失效。"""
-    from tradingagents.llm_clients.claude_agent_sdk_client import _looks_like_auth_failure
+    from ai_stock.llm_clients.claude_agent_sdk_client import _looks_like_auth_failure
 
     class _Block:
         text = "调用行情工具失败：provider returned 'invalid api key' for the quote source."
@@ -534,7 +534,7 @@ def test_sdk_subprocess_env_blanks_anthropic_api_key(monkeypatch):
     """ANTHROPIC_API_KEY 必须在子进程被置空（否则悄悄走 API 计费），
     但父进程要保留它，好让 anthropic 仍能作为降级 provider。"""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
-    from tradingagents.llm_clients.claude_agent_sdk_client import ClaudeAgentSDKClient
+    from ai_stock.llm_clients.claude_agent_sdk_client import ClaudeAgentSDKClient
 
     client = ClaudeAgentSDKClient("opus", None)
     opts = client._build_options(system_prompt=None)
@@ -572,7 +572,7 @@ def test_cross_provider_fallback_drops_primary_backend_url(
 def test_result_message_401_raises_auth_error_not_fallback():
     """401 也可能只出现在 ResultMessage 上。漏判会落进 _SDKResultError
     → _FALLBACK_ERRORS → 静默降级到计费 provider，违背「不产生 API 账单」。"""
-    from tradingagents.llm_clients import claude_agent_sdk_client as mod
+    from ai_stock.llm_clients import claude_agent_sdk_client as mod
 
     class _Result:
         is_error = True
@@ -608,7 +608,7 @@ def test_tuple_messages_are_not_silently_emptied():
     """Reflector.reflect_on_final_decision() 传的是 (role, content) 元组。
     不支持这种形状会让两条消息双双变空串——SDK 收到空 prompt 却照常返回内容，
     是「不报错的错答案」。"""
-    from tradingagents.llm_clients.claude_agent_sdk_client import (
+    from ai_stock.llm_clients.claude_agent_sdk_client import (
         _msg_role_content, _split_prompt,
     )
 

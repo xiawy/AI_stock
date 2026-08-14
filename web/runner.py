@@ -27,7 +27,7 @@ def _discard_stopped_run(
     tracker: ProgressTracker,
 ) -> None:
     """Clear resumable artifacts for a user-stopped run."""
-    from tradingagents.graph.checkpointer import clear_checkpoint
+    from ai_stock.graph.checkpointer import clear_checkpoint
 
     clear_incomplete_task(ticker, trade_date)
     clear_checkpoint(config["data_cache_dir"], ticker, trade_date)
@@ -90,7 +90,7 @@ def _infer_active_stage(tracker: ProgressTracker) -> None:
 def _run(ticker: str, trade_date: str, config: dict, tracker: ProgressTracker) -> None:
     """Execute the full pipeline in the current thread."""
     from cli.stats_handler import StatsCallbackHandler
-    from tradingagents.graph.trading_graph import TradingAgentsGraph
+    from ai_stock.graph.trading_graph import TradingAgentsGraph
 
     stats = StatsCallbackHandler()
 

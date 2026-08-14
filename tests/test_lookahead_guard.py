@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from tradingagents.dataflows import a_stock
+from ai_stock.dataflows import a_stock
 
 
 TODAY = datetime.now().strftime("%Y-%m-%d")
@@ -163,7 +163,7 @@ def test_profit_forecast_tool_exposes_curr_date():
     v0.5.1 给 get_profit_forecast 加了告警，但 @tool 只暴露 ticker，
     curr_date 恒为 None → 告警永远不触发，模型照样把今天的一致预期当历史事实。
     """
-    from tradingagents.agents.utils.agent_utils import get_profit_forecast
+    from ai_stock.agents.utils.agent_utils import get_profit_forecast
 
     assert "curr_date" in get_profit_forecast.args
 
@@ -172,7 +172,7 @@ def test_every_date_aware_tool_forwards_its_date():
     """凡是数据层按 curr_date 做时点处理的工具，@tool 都必须暴露并转发它。"""
     import inspect
 
-    from tradingagents.agents.utils import signal_data_tools
+    from ai_stock.agents.utils import signal_data_tools
 
     src = inspect.getsource(signal_data_tools)
     for name in ("get_profit_forecast", "get_fund_flow"):
@@ -217,7 +217,7 @@ def test_fund_flow_says_when_history_is_unavailable(monkeypatch):
 def test_profit_forecast_curr_date_is_required():
     """给默认值等于没设防：模型按 {"ticker": "600519"} 调用时 curr_date 为空串，
     判定为"非历史"，告警永远不触发（codex 终轮指出）。"""
-    from tradingagents.agents.utils.agent_utils import get_profit_forecast
+    from ai_stock.agents.utils.agent_utils import get_profit_forecast
 
     required = get_profit_forecast.args_schema.model_json_schema().get("required", [])
     assert "curr_date" in required
@@ -227,7 +227,7 @@ def test_fundamentals_prompt_tells_the_model_to_pass_the_date():
     """工具签名要求了还不够——提示词不提，模型也不会主动传。"""
     import inspect
 
-    from tradingagents.agents.analysts import fundamentals_analyst
+    from ai_stock.agents.analysts import fundamentals_analyst
 
     src = inspect.getsource(fundamentals_analyst.create_fundamentals_analyst)
     assert "get_profit_forecast(ticker, curr_date)" in src

@@ -217,3 +217,9 @@ __marimo__/
 
 # Cache
 **/data_cache/
+
+# Frontend (Vue 3 / Vite)
+node_modules/
+
+# Backend local database (SQLite)
+backend/data/

@@ -1,6 +1,6 @@
 <p align="center"><a href="README.md">简体中文</a> | <b>English</b></p>
 
-<h1 align="center">TradingAgents-Astock</h1>
+<h1 align="center">AI Stock</h1>
 
 <p align="center">
   A China A-share deep-specialization fork of <a href="https://github.com/TauricResearch/TradingAgents">TauricResearch/TradingAgents</a> (65K ⭐)<br>
@@ -13,8 +13,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/simonlin1212/tradingagents-astock/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/simonlin1212/tradingagents-astock?style=social"/></a>
-  <a href="https://github.com/simonlin1212/tradingagents-astock/network/members"><img alt="Forks" src="https://img.shields.io/github/forks/simonlin1212/tradingagents-astock?style=social"/></a>
+  <a href="https://github.com/xiawy/AI_stock/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/xiawy/AI_stock?style=social"/></a>
+  <a href="https://github.com/xiawy/AI_stock/network/members"><img alt="Forks" src="https://img.shields.io/github/forks/xiawy/AI_stock?style=social"/></a>
   <a href="https://arxiv.org/abs/2412.20138"><img alt="Paper" src="https://img.shields.io/badge/paper-arXiv_2412.20138-B31B1B?logo=arxiv"/></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-blue"/></a>
   <a href="./CHANGES_FROM_UPSTREAM.md"><img alt="Changes" src="https://img.shields.io/badge/changes-CHANGES-orange"/></a>
@@ -136,8 +136,8 @@ All free, no API key, no point wall:
 
 ```bash
 # Python >= 3.10
-git clone https://github.com/simonlin1212/tradingagents-astock.git
-cd tradingagents-astock
+git clone https://github.com/xiawy/AI_stock.git
+cd AI_stock
 pip install -e .
 
 # (Optional) Google Gemini — there is no [google] extra; install it explicitly (see FAQ):
@@ -145,7 +145,7 @@ pip install --no-deps "langchain-google-genai>=4.0.0"
 pip install "google-genai>=1.53.0" "httpx>=0.28.1"
 ```
 
-> **Ready to use after installation, no Docker required.** After installing, run `streamlit run web/app.py` (Web UI) or `tradingagents` (CLI) directly. See the "Web UI" and "CLI" sections below. Docker is only an optional deployment method and not needed for local development.
+> **Ready to use after installation, no Docker required.** After installing, run `ai-stock` (CLI) or start the FastAPI + Vue 3 web app (see the "Web UI" and "CLI" sections below). Docker is only an optional deployment method and not needed for local development.
 
 ### 2. Configure LLM
 
@@ -195,7 +195,7 @@ BACKEND_URL=https://your-relay.example/v1   # Your gateway URL (can also be set 
 Modify the configuration based on your chosen provider:
 
 ```python
-from tradingagents.graph.trading_graph import TradingAgentsGraph
+from ai_stock.graph.trading_graph import TradingAgentsGraph
 
 # ── MiniMax Example (Recommended) ──────────────────────────────────────────
 config = {
@@ -230,10 +230,10 @@ print(decision)
 ### 4. CLI Mode
 
 ```bash
-tradingagents                 # Interactive CLI
-tradingagents analyze         # Same as above (default command)
-tradingagents performance     # Decision performance report (see below)
-tradingagents --help          # Show all options
+ai-stock                     # Interactive CLI
+ai-stock analyze             # Same as above (default command)
+ai-stock performance         # Decision performance report (see below)
+ai-stock --help              # Show all options
 ```
 
 ### 5. Decision performance report (added in v0.5.2)
@@ -241,8 +241,8 @@ tradingagents --help          # Show all options
 To find out **how well the pipeline's past calls actually held up**:
 
 ```bash
-tradingagents performance            # Human-readable report
-tradingagents performance --json     # Machine-readable JSON
+ai-stock performance            # Human-readable report
+ai-stock performance --json     # Machine-readable JSON
 ```
 
 The data comes from the memory log: every analysis records a decision, and the next analysis of the same ticker resolves it by fetching real prices and filling in the return and the alpha (against CSI 300). **The report itself makes zero LLM calls** — it only reads results already on disk.
@@ -262,34 +262,38 @@ Important caveats:
 ---
 ## Web UI
 
-Built-in Streamlit visualization interface allows selecting LLM providers and models in the sidebar. Enter a stock code to perform one-click analysis, ideal for users who prefer not to write code.
+Decoupled web app (the original Streamlit UI has been removed): **FastAPI + SQLite backend with a Vue 3 + Element Plus frontend**, featuring registration / login (JWT) and per-user task isolation.
 
 ### Startup
 
 ```bash
-# Option 1: Start via command line (recommended)
-tradingagents-web
+# Backend (port 8000)
+cd backend
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\pip install -e ..
+.venv\Scripts\python -m uvicorn app.main:app --reload --port 8000
 
-# Option 2: Run directly
-streamlit run web/app.py
+# Frontend (port 5173, dev proxy /api -> 8000; separate terminal)
+cd frontend
+npm install
+npm run dev
 ```
 
-Open your browser and navigate to `http://localhost:8501`.
+Open your browser and navigate to `http://localhost:5173`, then register / log in and start an analysis.
 
 ### Features
 
-- **Model Selection**: Sidebar supports switching between 10 LLM providers (MiniMax/DeepSeek/Qwen/GLM/OpenAI/Anthropic/Google/xAI/OpenRouter/Ollama), plus **"OpenAI Compatible (custom base_url)"** for connecting to any OpenAI-compatible gateway (9Router / AI Router / self-hosted proxy)
-- **One-Click Analysis**: Enter a 6-digit A-share stock code + analysis date + "Data Start Date" (defaults to the first day of the current month, allows customizing the technical analysis lookback period, supports monthly/custom period analysis), then click "Start Analysis"
-- **Real-Time Progress**: 12-stage pipeline displayed in real-time (7 Analysts → Quality Gate → Debate → Risk Control → Decision), with expandable reports for all completed stages
+- **User accounts**: register / login (JWT sessions); analysis tasks and watchlists are isolated per user (SQLite)
+- **Model Selection**: switch between 11 LLM providers (MiniMax/DeepSeek/Qwen/GLM/OpenAI/Anthropic/Google/xAI/OpenRouter/Ollama/OpenAI-compatible gateway)
+- **One-Click Analysis**: enter a 6-digit A-share code or Chinese name + analysis date, then click "Start Analysis"; checkpoint resume supported
+- **Real-Time Progress**: 12-stage pipeline displayed in real-time (7 Analysts → Quality Gate → Debate → Risk Control → Decision), with pause / resume / stop controls
+- **K-line Charts**: ECharts candlestick chart + realtime quote card
 - **Complete Report**: Signal cards (Buy/Hold/Sell), 7 analyst reports, bull-bear debate, risk control assessment
-- **Report Export**: One-click download of **Markdown** (zero dependencies, always available) or **PDF** full analysis reports (PDF automatically adapts to Chinese fonts on Windows/macOS/Linux)
-- **History**: Automatically saves and displays all historical analyses
+- **Report Export**: one-click download of **Markdown** (zero dependencies, always available) or **PDF** full analysis reports (PDF automatically adapts to Chinese fonts on Windows/macOS/Linux)
+- **History & Watchlist**: historical analyses are saved automatically; watchlist management included
 
-### Screenshot
-
-<p align="center">
-  <img src="assets/web-ui-welcome.png" width="80%" alt="Web UI Welcome Page"/>
-</p>
+Architecture and API docs: [backend/README.md](./backend/README.md); interactive API docs at `http://localhost:8000/docs`.
 
 ---
 ## Configuration
@@ -424,8 +428,8 @@ See `examples/run_cases.py`: It reuses the CLI's `save_report_to_disk()` functio
 ## Project Structure
 
 ```
-TradingAgents-Astock/
-├── tradingagents/
+AI_stock/
+├── ai_stock/
 │   ├── agents/
 │   │   ├── analysts/          # 7 analysts
 │   │   │   ├── market_analyst.py
@@ -450,17 +454,19 @@ TradingAgents-Astock/
 │       ├── propagation.py     # State initialization and propagation
 │       ├── reflection.py      # Trading reflection (CSI 300 benchmark)
 │       └── conditional_logic.py
-├── web/
-│   ├── app.py                 # Streamlit main entry
-│   ├── runner.py              # Backend thread running analysis
+├── backend/                   # FastAPI backend (auth / tasks / stock API)
+│   ├── app/                   # api / core / models / schemas / services
+│   ├── migrations/            # Alembic
+│   └── tests/                 # pytest
+├── frontend/                  # Vue 3 + Vite + Element Plus frontend
+│   └── src/                   # views / components / stores / api
+├── web/                       # Engine support modules (no UI dependencies)
+│   ├── runner.py              # Background thread running analysis
 │   ├── progress.py            # Thread-safe progress tracking
 │   ├── history.py             # History record scanning
-│   ├── pdf_export.py          # PDF report generation
-│   ├── launch.py              # CLI launcher
-│   └── components/            # UI components
-│       ├── sidebar.py         # Sidebar (inputs + history)
-│       ├── progress_panel.py  # Real-time progress panel
-│       └── report_viewer.py   # Report display
+│   ├── stock_display.py       # "code + name" normalization
+│   └── pdf_export.py          # PDF / Markdown report generation
+├── cli/                       # Interactive CLI (the ai-stock command)
 ├── test_astock.py             # E2E integration tests
 ├── CHANGES_FROM_UPSTREAM.md   # Complete change log versus upstream
 ├── NOTICE                     # Apache 2.0 attribution notice

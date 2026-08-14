@@ -13,7 +13,7 @@
 import inspect
 import re
 
-from tradingagents.agents.analysts import social_media_analyst as sma
+from ai_stock.agents.analysts import social_media_analyst as sma
 
 
 def _tool_names_in_source(func) -> set:
@@ -35,7 +35,7 @@ def test_analyst_binds_quantitative_tools():
 
 def test_graph_tool_node_matches_analyst_tools():
     """图里注册的 social 工具必须与分析师绑定的一致，否则运行时才炸。"""
-    import tradingagents.graph.trading_graph as tg
+    import ai_stock.graph.trading_graph as tg
 
     src = inspect.getsource(tg.TradingAgentsGraph._create_tool_nodes)
     social_block = re.search(r'"social": ToolNode\(\s*\[(.*?)\]\s*\)', src, re.S)

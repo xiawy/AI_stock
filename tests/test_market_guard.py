@@ -10,7 +10,7 @@
 
 import pytest
 
-from tradingagents.dataflows.a_stock import _normalize_ticker
+from ai_stock.dataflows.a_stock import _normalize_ticker
 
 
 # ---------------------------------------------------------------------------

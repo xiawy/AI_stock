@@ -7,8 +7,8 @@ model + a generic API key, with no hard-coded vendor defaults.
 
 import pytest
 
-from tradingagents.llm_clients.factory import _OPENAI_COMPATIBLE, create_llm_client
-from tradingagents.llm_clients.openai_client import NormalizedChatOpenAI, OpenAIClient
+from ai_stock.llm_clients.factory import _OPENAI_COMPATIBLE, create_llm_client
+from ai_stock.llm_clients.openai_client import NormalizedChatOpenAI, OpenAIClient
 
 
 @pytest.mark.unit
