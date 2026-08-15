@@ -54,6 +54,23 @@ Breaking changes within the 0.x line are called out explicitly.
   两文件六个端点）+ auth 两处路由返回注解直接用 SQLAlchemy 模型，新版 FastAPI
   导入即报错——**整个后端服务起不来**。改为标准 `Depends(get_current_user)` 写法，
   backend 测试从全部 collection 失败恢复为全绿。
+- 🔴 backend 从不加载**项目根目录** `.env`（只读 `backend/.env`，那里只有服务
+  自身配置）——README 承诺“在根 .env 配 LLM key 即可”，实际 lifespan 里
+  pipeline 服务拿到的 provider 恒为 openai 且无任何 key，启动必报
+  “Missing credentials”，影响力/荐股流水线永久不可用。现在
+  `app/core/config.py` 在任何引擎模块 import 之前装载根 .env
+  （`override=False`：backend/.env 与已有环境变量优先，根 .env 仅补充
+  LLM key/provider）。实测：provider=deepseek、LLM 客户端构造成功、
+  定时调度启动。另：APScheduler 为可选依赖（缺失时定时禁用、手动触发
+  仍可用），需要每日 08:00/20:00 自动跑流水线请
+  `pip install "apscheduler>=3.10"`。
+- **配置合并**：`backend/.env` 并入项目根目录 `.env`，单一事实来源。
+  与代码默认值相同的变量丢弃，真实差异项（SECRET_KEY 等 4 个）迁移；
+  `backend/.env` 降级为可选本地覆盖通道（存在则优先级高于根 .env，
+  `env_file` 列表 + 双 `load_dotenv` 两级语义一致）；模板与文档同步
+  （根 `.env.example` 新增「Backend 服务」一节、backend/.env.example 改
+  说明、backend/README 本地开发段重写）。优先级：进程环境变量 >
+  backend/.env（若存在）> 根 .env > 代码默认值。
 
 ⚠️ 兼容性：旧 checkpoint（串行图结构）不能在新图上续跑；`checkpoint_enabled` 默认
 False，受影响面小。

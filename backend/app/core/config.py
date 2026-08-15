@@ -13,13 +13,30 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 # Project root (ai-stock/), reused as the analysis engine.
 PROJECT_ROOT = BACKEND_DIR.parent
 
+# 引擎（ai_stock）读 LLM key / provider 的约定是「项目根目录 .env」（README
+# 「LLM Key」一节），backend 服务变量（SECRET_KEY 等）也已合并进去——
+# 根 .env 是唯一事实来源。backend/.env 若存在则优先级更高，仅作本地
+# 覆盖通道。在任何引擎模块 import 之前装载两者进 os.environ；
+# override=False：已有环境变量最优先，backend/.env 其次，根 .env 仅补充
+# （与下方 Settings.env_file 列表的优先级语义一致）。
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(BACKEND_DIR / ".env", override=False)
+load_dotenv(PROJECT_ROOT / ".env", override=False)
+
 # Sentinel default — get_settings() warns when this is still in use.
 _DEFAULT_SECRET_KEY = "dev-secret-key-change-me-in-production"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(BACKEND_DIR / ".env"),
+        # Single source of truth: project-root .env. An optional
+        # backend/.env (later in the list) takes precedence for local
+        # overrides; a missing file is ignored silently.
+        env_file=[
+            str(PROJECT_ROOT / ".env"),
+            str(BACKEND_DIR / ".env"),
+        ],
         env_file_encoding="utf-8",
         extra="ignore",
     )

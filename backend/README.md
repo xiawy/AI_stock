@@ -114,11 +114,26 @@ cd backend
 
 ## 本地开发
 
+### 配置（项目根目录 .env，单一事实来源）
+
+服务变量与 LLM key 统一写在**项目根目录** `.env`（v0.5.14 起；模板见
+根目录 `.env.example` 的「Backend 服务」一节）：
+
+```dotenv
+# LLM（引擎与 backend 共用）
+LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=sk-...
+
+# Backend 服务（可选，不写则用代码默认值；生产必改 SECRET_KEY）
+SECRET_KEY=<python -c "import secrets; print(secrets.token_hex(32))">
+```
+
+`backend/.env` 若存在则优先级更高，仅作本地覆盖通道。
+
 ### 后端（端口 8000）
 
 ```powershell
 cd D:\code\AI_stock\backend
-copy .env.example .env          # 首次：改 SECRET_KEY
 .venv\Scripts\python -m uvicorn app.main:app --reload --port 8000
 ```
 
@@ -142,7 +157,8 @@ npm run dev
 
 ### LLM Key
 
-与原版一致：在**项目根目录** `.env` 配置 `MINIMAX_API_KEY` / `DEEPSEEK_API_KEY` 等；也可设 `BACKEND_URL`。
+已合并进项目根目录 `.env`（见上）：`MINIMAX_API_KEY` / `DEEPSEEK_API_KEY`
+等与 backend 服务变量写在同一份里；也可设 `BACKEND_URL`。
 
 ## 测试
 
