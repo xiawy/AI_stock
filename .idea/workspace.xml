@@ -5,27 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="bug修复">
-      <change afterPath="$PROJECT_DIR$/CHANGELOG.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/quality_gate.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/quality_gate.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/utils/agent_states.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/utils/agent_states.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ai_stock/dataflows/a_stock.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/dataflows/a_stock.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/dataflows/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/dataflows/config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/default_config.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/default_config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/graph/propagation.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/graph/propagation.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/graph/setup.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/graph/setup.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/graph/trading_graph.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/graph/trading_graph.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/api/auth.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/api/auth.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/api/impact.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/api/impact.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/core/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/core/config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/services/analysis_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/analysis_service.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cli/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/cli/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cli/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/cli/models.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cli/utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/cli/utils.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/examples/run_cases.py" beforeDir="false" afterPath="$PROJECT_DIR$/examples/run_cases.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/history.py" beforeDir="false" afterPath="$PROJECT_DIR$/web/history.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -78,7 +59,8 @@
       <option name="presentableId" value="Default" />
       <updated>1786721482373</updated>
       <workItem from="1786721514711" duration="12069000" />
-      <workItem from="1786750880866" duration="22831000" />
+      <workItem from="1786750880866" duration="27893000" />
+      <workItem from="1786791279121" duration="958000" />
     </task>
     <task id="LOCAL-00001" summary="迁移项目为web项目">
       <option name="closed" value="true" />
@@ -128,7 +110,15 @@
       <option name="project" value="LOCAL" />
       <updated>1786771386968</updated>
     </task>
-    <option name="localTasksCounter" value="7" />
+    <task id="LOCAL-00007" summary="bug修复">
+      <option name="closed" value="true" />
+      <created>1786783354097</created>
+      <option name="number" value="00007" />
+      <option name="presentableId" value="LOCAL-00007" />
+      <option name="project" value="LOCAL" />
+      <updated>1786783354097</updated>
+    </task>
+    <option name="localTasksCounter" value="8" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">

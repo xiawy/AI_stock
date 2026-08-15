@@ -804,46 +804,50 @@ def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
                 cutoff = pd.to_datetime(curr_date)
                 return data[data["Date"] <= cutoff]
 
-    # Fetch from mootdx — 800 daily bars (~3 years of trading days)
-    try:
-        df = _mootdx_call("bars", symbol=code, category=4, offset=800)
-
-        if df is None or df.empty:
-            raise ValueError(f"No OHLCV data from mootdx for {code}")
-
-        # mootdx returns index named 'datetime' AND a column named 'datetime'
-        # (plus year/month/day/hour/minute/volume). Drop duplicates before reset.
-        df = df.drop(columns=["datetime", "year", "month", "day", "hour", "minute"], errors="ignore")
-        df = df.reset_index()  # moves index 'datetime' → column 'datetime'
-        rename_map = {
-            "datetime": "Date",
-            "open": "Open",
-            "close": "Close",
-            "high": "High",
-            "low": "Low",
-            "volume": "Volume",
-        }
-        df = df.rename(columns=rename_map)
-        df = df[["Date", "Open", "High", "Low", "Close", "Volume"]]
-        df = _normalize_ohlcv_dates(df)
-    except Exception as e:
-        logger.warning("mootdx OHLCV failed for %s: %s, trying sina HTTP fallback", code, e)
-        # Fallback: Sina direct HTTP API
+        # Fetch from mootdx — 800 daily bars (~3 years of trading days).
+        # 拉取与写缓存同样在锁内：否则 miss 时另一线程锁内的 read_csv
+        # 可能读到本线程 to_csv 写到一半的文件。同一标的缓存 miss 后
+        # 串行等待是期望行为（第二次进来直接命中缓存）；锁序恒定
+        # OHLCV → MOOTDX，无死锁。
         try:
-            df = _sina_kline_fallback(code)
-            if df.empty:
-                raise ValueError(f"No OHLCV data from sina for {code}")
-        except Exception:
-            raise ValueError(f"No OHLCV data from mootdx/sina for {code}")
+            df = _mootdx_call("bars", symbol=code, category=4, offset=800)
 
-    df, _ = _supplement_stale_ohlcv_with_sina(code, df, curr_date, start_date=None)
+            if df is None or df.empty:
+                raise ValueError(f"No OHLCV data from mootdx for {code}")
 
-    # Cache to disk
-    df.to_csv(cache_file, index=False, encoding="utf-8")
+            # mootdx returns index named 'datetime' AND a column named 'datetime'
+            # (plus year/month/day/hour/minute/volume). Drop duplicates before reset.
+            df = df.drop(columns=["datetime", "year", "month", "day", "hour", "minute"], errors="ignore")
+            df = df.reset_index()  # moves index 'datetime' → column 'datetime'
+            rename_map = {
+                "datetime": "Date",
+                "open": "Open",
+                "close": "Close",
+                "high": "High",
+                "low": "Low",
+                "volume": "Volume",
+            }
+            df = df.rename(columns=rename_map)
+            df = df[["Date", "Open", "High", "Low", "Close", "Volume"]]
+            df = _normalize_ohlcv_dates(df)
+        except Exception as e:
+            logger.warning("mootdx OHLCV failed for %s: %s, trying sina HTTP fallback", code, e)
+            # Fallback: Sina direct HTTP API
+            try:
+                df = _sina_kline_fallback(code)
+                if df.empty:
+                    raise ValueError(f"No OHLCV data from sina for {code}")
+            except Exception:
+                raise ValueError(f"No OHLCV data from mootdx/sina for {code}")
 
-    # Filter by curr_date to prevent look-ahead bias
-    cutoff = pd.to_datetime(curr_date)
-    return df[df["Date"] <= cutoff]
+        df, _ = _supplement_stale_ohlcv_with_sina(code, df, curr_date, start_date=None)
+
+        # Cache to disk
+        df.to_csv(cache_file, index=False, encoding="utf-8")
+
+        # Filter by curr_date to prevent look-ahead bias
+        cutoff = pd.to_datetime(curr_date)
+        return df[df["Date"] <= cutoff]
 
 
 # ===========================================================================
