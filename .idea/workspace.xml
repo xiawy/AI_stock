@@ -4,15 +4,11 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="新增新闻评估、荐股">
-      <change beforePath="$PROJECT_DIR$/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/.env.example" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/default_config.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/default_config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/api/analysis.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/api/analysis.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/schemas/analysis.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/schemas/analysis.py" afterDir="false" />
+    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="bug修复">
+      <change beforePath="$PROJECT_DIR$/CHANGELOG.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/CHANGES_FROM_UPSTREAM.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/DEV_LOG.md" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/app/services/analysis_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/analysis_service.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cli/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/cli/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/examples/run_cases.py" beforeDir="false" afterPath="$PROJECT_DIR$/examples/run_cases.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/views/Dashboard.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/views/Dashboard.vue" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -65,7 +61,7 @@
       <option name="presentableId" value="Default" />
       <updated>1786721482373</updated>
       <workItem from="1786721514711" duration="12069000" />
-      <workItem from="1786750880866" duration="15463000" />
+      <workItem from="1786750880866" duration="16188000" />
     </task>
     <task id="LOCAL-00001" summary="迁移项目为web项目">
       <option name="closed" value="true" />
@@ -91,7 +87,23 @@
       <option name="project" value="LOCAL" />
       <updated>1786769973783</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="移除llm可选">
+      <option name="closed" value="true" />
+      <created>1786770800446</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1786770800446</updated>
+    </task>
+    <task id="LOCAL-00005" summary="bug修复">
+      <option name="closed" value="true" />
+      <created>1786771052617</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1786771052617</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -101,6 +113,8 @@
     <MESSAGE value="迁移项目为web项目" />
     <MESSAGE value="新增自记忆" />
     <MESSAGE value="新增新闻评估、荐股" />
-    <option name="LAST_COMMIT_MESSAGE" value="新增新闻评估、荐股" />
+    <MESSAGE value="移除llm可选" />
+    <MESSAGE value="bug修复" />
+    <option name="LAST_COMMIT_MESSAGE" value="bug修复" />
   </component>
 </project>

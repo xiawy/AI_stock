@@ -121,6 +121,8 @@ class AnalysisTaskManager:
         LLM settings (provider / model / backend_url) come from DEFAULT_CONFIG
         which reads them from .env — no per-request override.
         """
+        from ai_stock.default_config import DEFAULT_CONFIG
+
         config = DEFAULT_CONFIG.copy()
         config["data_vendors"] = {
             "core_stock_apis": "a_stock",
