@@ -18,17 +18,13 @@
           <span class="card-cta">{{ card.cta }} →</span>
         </router-link>
       </section>
-
-      <!-- Disclaimer -->
-      <footer class="disclaimer">
-        ⚠️ 本项目仅供学习研究与技术演示，不构成任何投资建议。<br />
-        投资决策请咨询持牌专业机构。
-      </footer>
     </div>
   </div>
 </template>
 
 <script setup>
+import AppHeader from '../components/AppHeader.vue'
+
 const cards = [
   {
     icon: '🔍',
@@ -56,8 +52,6 @@ const cards = [
 
 <style scoped>
 .home {
-  display: flex;
-  flex-direction: column;
   min-height: calc(100vh - 57px);
 }
 .hero {
@@ -143,15 +137,5 @@ const cards = [
   color: var(--brand);
   font-size: 0.9rem;
   font-weight: 600;
-}
-
-.disclaimer {
-  margin-top: auto;
-  text-align: center;
-  color: #555;
-  font-size: 0.75rem;
-  line-height: 1.7;
-  border-top: 1px solid #1a1a1a;
-  padding: 14px 16px 0;
 }
 </style>

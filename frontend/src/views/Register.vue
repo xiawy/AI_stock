@@ -110,7 +110,8 @@ async function submit() {
 
 <style scoped>
 .auth-wrap {
-  min-height: 100vh;
+  /* 56px keeps the centered card clear of the fixed bottom disclaimer. */
+  min-height: calc(100vh - 56px);
   display: flex;
   align-items: center;
   justify-content: center;

@@ -39,7 +39,6 @@
         还没有账号？
         <router-link to="/register">立即注册</router-link>
       </div>
-      <div class="disclaimer">⚠️ 仅供学习研究，不构成任何投资建议</div>
     </el-card>
   </div>
 </template>
@@ -78,7 +77,8 @@ async function submit() {
 
 <style scoped>
 .auth-wrap {
-  min-height: 100vh;
+  /* 56px keeps the centered card clear of the fixed bottom disclaimer. */
+  min-height: calc(100vh - 56px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -112,11 +112,5 @@ async function submit() {
 .footer-link a {
   color: var(--brand);
   text-decoration: none;
-}
-.disclaimer {
-  margin-top: 18px;
-  text-align: center;
-  color: #555;
-  font-size: 0.75rem;
 }
 </style>

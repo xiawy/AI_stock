@@ -80,10 +80,6 @@
             </template>
             <div v-else class="welcome">
               <div class="welcome-emoji">📈</div>
-              <div class="welcome-disclaimer">
-                ⚠️ 本项目仅供学习研究与技术演示，不构成任何投资建议。<br />
-                投资决策请咨询持牌专业机构。
-              </div>
             </div>
           </div>
 
@@ -303,12 +299,5 @@ onMounted(loadDashboard)
 .welcome-emoji {
   font-size: 3.5rem;
   margin-bottom: 24px;
-}
-.welcome-disclaimer {
-  color: #555;
-  font-size: 0.75rem;
-  line-height: 1.7;
-  border-top: 1px solid #1a1a1a;
-  padding-top: 12px;
 }
 </style>

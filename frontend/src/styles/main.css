@@ -21,6 +21,11 @@ body,
   font-family: 'Inter', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
+/* Keep scrollable content clear of the fixed bottom disclaimer footer. */
+body {
+  padding-bottom: 56px;
+}
+
 /* Element Plus dark-mode brand overrides */
 html.dark {
   --el-color-primary: var(--brand);
