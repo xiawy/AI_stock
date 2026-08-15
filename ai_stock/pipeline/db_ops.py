@@ -240,6 +240,31 @@ def get_latest_snapshot() -> Optional[dict]:
         session.close()
 
 
+def snapshot_exists_for_date(date_str: str) -> bool:
+    """Return True if a completed snapshot exists for the given date (YYYY-MM-DD)."""
+    from ai_stock.pipeline.db_models import ImpactSnapshot
+
+    session = _get_session()
+    if session is None:
+        return False
+
+    try:
+        day_start = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        row = (
+            session.query(ImpactSnapshot.id)
+            .filter(ImpactSnapshot.status == "completed")
+            .filter(ImpactSnapshot.snapshot_time >= day_start)
+            .filter(ImpactSnapshot.snapshot_time < day_start + timedelta(days=1))
+            .first()
+        )
+        return row is not None
+    except Exception as exc:
+        logger.error("Failed to check snapshot for %s: %s", date_str, exc)
+        return False
+    finally:
+        session.close()
+
+
 def get_snapshot_by_date(date_str: str) -> Optional[dict]:
     """Get snapshots for a specific date (YYYY-MM-DD)."""
     from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem, StockRecommendation

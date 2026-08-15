@@ -1,21 +1,24 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>今日荐股</h2>
-      <div class="header-actions">
-        <el-date-picker
-          v-model="selectedDate"
-          type="date"
-          placeholder="选择日期"
-          format="YYYY-MM-DD"
-          value-format="YYYY-MM-DD"
-          @change="loadData"
-        />
-        <el-button type="primary" :loading="triggering" @click="triggerPipeline">
-          手动运行
-        </el-button>
+  <div>
+    <AppHeader />
+    <div class="page">
+      <div class="page-header">
+        <h2>今日荐股</h2>
+        <div class="header-actions">
+          <el-button :icon="ArrowLeft" @click="router.push('/')">返回首页</el-button>
+          <el-date-picker
+            v-model="selectedDate"
+            type="date"
+            placeholder="选择日期"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            @change="loadData"
+          />
+          <el-button type="primary" :loading="triggering" @click="triggerPipeline">
+            手动运行
+          </el-button>
+        </div>
       </div>
-    </div>
 
     <div v-if="snapshot" class="snapshot-info">
       <el-tag>{{ snapshot.period === 'AM' ? '上午盘' : '下午盘' }}</el-tag>
@@ -35,15 +38,20 @@
     <el-empty v-else-if="!loading" description="暂无荐股数据">
       <el-button type="primary" @click="triggerPipeline">手动运行流水线</el-button>
     </el-empty>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { ArrowLeft } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { recommendationApi } from '../api/recommendation'
+import AppHeader from '../components/AppHeader.vue'
 import StockCard from '../components/StockCard.vue'
 
+const router = useRouter()
 const loading = ref(false)
 const triggering = ref(false)
 const snapshot = ref(null)
@@ -82,8 +90,12 @@ async function triggerPipeline() {
   try {
     await recommendationApi.trigger()
     ElMessage.success('流水线已启动，请稍后刷新查看结果')
-  } catch {
-    ElMessage.error('流水线启动失败')
+  } catch (err) {
+    // The global axios interceptor already toasts backend `detail` messages;
+    // only fall back to a generic one when there is no detail (e.g. network error).
+    if (!err.response?.data?.detail) {
+      ElMessage.error('流水线启动失败')
+    }
   } finally {
     triggering.value = false
   }
@@ -98,11 +110,6 @@ onMounted(loadData)
 </script>
 
 <style scoped>
-.page-container {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 24px;
-}
 .page-header {
   display: flex;
   align-items: center;
@@ -112,6 +119,8 @@ onMounted(loadData)
 .page-header h2 {
   margin: 0;
   font-size: 1.3rem;
+  padding-left: 10px;
+  border-left: 3px solid var(--brand);
 }
 .header-actions {
   display: flex;

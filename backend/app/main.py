@@ -67,6 +67,10 @@ async def lifespan(_: FastAPI):
 
         svc = get_pipeline_service()
         svc.initialize(DEFAULT_CONFIG)
+        # If today's ranking is missing (backend started after the scheduled
+        # slot), kick off an immediate background run. Before the first slot
+        # the previous day's snapshot is served as today's ranking.
+        svc.ensure_today_data()
     except Exception as exc:
         logger.warning(
             "Pipeline service init failed (non-fatal): %s", exc,

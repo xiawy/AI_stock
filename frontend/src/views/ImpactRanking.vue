@@ -1,18 +1,21 @@
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2>今日影响榜</h2>
-      <div class="header-actions">
-        <el-date-picker
-          v-model="selectedDate"
-          type="date"
-          placeholder="选择日期"
-          format="YYYY-MM-DD"
-          value-format="YYYY-MM-DD"
-          @change="loadData"
-        />
+  <div>
+    <AppHeader />
+    <div class="page">
+      <div class="page-header">
+        <h2>今日新闻榜</h2>
+        <div class="header-actions">
+          <el-button :icon="ArrowLeft" @click="router.push('/')">返回首页</el-button>
+          <el-date-picker
+            v-model="selectedDate"
+            type="date"
+            placeholder="选择日期"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            @change="loadData"
+          />
+        </div>
       </div>
-    </div>
 
     <div v-if="snapshot" class="snapshot-info">
       <el-tag>{{ snapshot.period === 'AM' ? '上午盘' : '下午盘' }}</el-tag>
@@ -71,17 +74,22 @@
       </el-table-column>
     </el-table>
 
-    <el-empty v-else-if="!loading" description="暂无影响力评估数据" />
+    <el-empty v-else-if="!loading" description="暂无新闻数据" />
 
     <ImpactDetail v-model="detailVisible" :news="selectedNews" />
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
+import { ArrowLeft } from '@element-plus/icons-vue'
 import { impactApi } from '../api/impact'
+import AppHeader from '../components/AppHeader.vue'
 import ImpactDetail from '../components/ImpactDetail.vue'
 
+const router = useRouter()
 const loading = ref(false)
 const snapshot = ref(null)
 const newsItems = ref([])
@@ -135,11 +143,6 @@ onMounted(loadData)
 </script>
 
 <style scoped>
-.page-container {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 24px;
-}
 .page-header {
   display: flex;
   align-items: center;
@@ -149,6 +152,8 @@ onMounted(loadData)
 .page-header h2 {
   margin: 0;
   font-size: 1.3rem;
+  padding-left: 10px;
+  border-left: 3px solid var(--brand);
 }
 .snapshot-info {
   display: flex;

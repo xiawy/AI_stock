@@ -16,7 +16,12 @@ const routes = [
   },
   {
     path: '/',
-    name: 'dashboard',
+    name: 'home',
+    component: () => import('../views/Home.vue'),
+  },
+  {
+    path: '/diagnosis',
+    name: 'diagnosis',
     component: () => import('../views/Dashboard.vue'),
   },
   {
@@ -30,6 +35,11 @@ const routes = [
     name: 'history-report',
     component: () => import('../views/HistoryReport.vue'),
     props: true,
+  },
+  {
+    path: '/profile',
+    name: 'profile',
+    component: () => import('../views/Profile.vue'),
   },
   {
     path: '/impact',
@@ -60,7 +70,7 @@ router.beforeEach((to) => {
   }
   // Already logged in? Skip the auth pages.
   if (to.meta.public && auth.isLoggedIn && (to.name === 'login' || to.name === 'register')) {
-    return { name: 'dashboard' }
+    return { name: 'home' }
   }
 })
 

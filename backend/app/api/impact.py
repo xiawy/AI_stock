@@ -16,34 +16,39 @@ from app.services.pipeline_service import get_pipeline_service
 router = APIRouter(prefix="/impact", tags=["impact"])
 
 
-@router.get("/latest", summary="最新一期 Top 20 影响力榜")
+@router.get("/latest", summary="最新一期 Top 20 新闻榜")
 def get_latest(
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Return the latest completed pipeline run's Top 20 + recommendations."""
+    """Return the latest completed pipeline run's Top 20 + recommendations.
+
+    Before today's first slot (08:00) this naturally serves yesterday's
+    snapshot, which is by design.
+    """
     svc = get_pipeline_service()
     result = svc.get_latest()
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="暂无影响力评估数据，请先手动触发流水线",
+            detail="暂无榜单数据，系统生成中，请稍后重试",
         )
     return result
 
 
-@router.get("/history", summary="按日期查询影响力榜")
+@router.get("/history", summary="按日期查询新闻榜")
 def get_history(
     date: str,
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Query impact ranking for a specific date (YYYY-MM-DD)."""
+    """Query news ranking for a specific date (YYYY-MM-DD).
+
+    Returns empty data (not 404) when nothing exists for the date — history
+    views should never trigger a pipeline run.
+    """
     svc = get_pipeline_service()
     result = svc.get_by_date(date)
     if result is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"未找到 {date} 的影响力评估数据",
-        )
+        return {"snapshot": None, "news_items": [], "recommendations": []}
     return result
 
 

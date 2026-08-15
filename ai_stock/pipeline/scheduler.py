@@ -8,11 +8,27 @@ installed, and the scheduler lives/dies with the host process.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Optional
 
-from .config import MAX_CONSECUTIVE_FAILURES, PIPELINE_HOURS
+from .config import MAX_CONSECUTIVE_FAILURES, PIPELINE_SCHEDULE
 
 logger = logging.getLogger(__name__)
+
+
+def parse_schedule(entries: list) -> list[tuple[int, int]]:
+    """Parse schedule entries into (hour, minute) pairs.
+
+    Accepts "HH:MM" strings or ints (interpreted as whole hours).
+    """
+    slots: list[tuple[int, int]] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            hh, _, mm = entry.partition(":")
+            slots.append((int(hh), int(mm or 0)))
+        else:
+            slots.append((int(entry), 0))
+    return slots
 
 
 class PipelineScheduler:
@@ -29,6 +45,20 @@ class PipelineScheduler:
         self._llm_deep = llm_deep
         self._scheduler = None
         self._consecutive_failures = 0
+        # Guards against overlapping pipeline runs (manual + scheduled).
+        self._run_lock = threading.Lock()
+
+    @property
+    def schedule_slots(self) -> list[tuple[int, int]]:
+        """Resolved (hour, minute) run slots, e.g. [(8, 0), (14, 30)].
+
+        Honors ``pipeline_schedule`` ("HH:MM" strings) and falls back to the
+        legacy ``pipeline_hours`` ints, then to PIPELINE_SCHEDULE.
+        """
+        entries = self._config.get("pipeline_schedule")
+        if not entries:
+            entries = self._config.get("pipeline_hours", PIPELINE_SCHEDULE)
+        return parse_schedule(entries)
 
     def set_llms(self, llm_quick: Any, llm_deep: Any) -> None:
         """Update the LLM instances (called when the pipeline service starts)."""
@@ -49,20 +79,20 @@ class PipelineScheduler:
 
         self._scheduler = BackgroundScheduler()
 
-        hours = self._config.get("pipeline_hours", PIPELINE_HOURS)
-        for hour in hours:
+        slots = self.schedule_slots
+        for hour, minute in slots:
             self._scheduler.add_job(
                 self._run_pipeline,
-                CronTrigger(hour=hour, minute=0),
-                id=f"pipeline_{hour:02d}00",
-                name=f"Impact pipeline {hour:02d}:00",
+                CronTrigger(hour=hour, minute=minute),
+                id=f"pipeline_{hour:02d}{minute:02d}",
+                name=f"Impact pipeline {hour:02d}:{minute:02d}",
                 replace_existing=True,
             )
 
         self._scheduler.start()
         logger.info(
             "Pipeline scheduler started: runs at %s",
-            ", ".join(f"{h:02d}:00" for h in hours),
+            ", ".join(f"{h:02d}:{m:02d}" for h, m in slots),
         )
 
     def stop(self) -> None:
@@ -83,6 +113,10 @@ class PipelineScheduler:
         if self._llm_quick is None or self._llm_deep is None:
             logger.error("Pipeline LLMs not configured; skipping run")
             return {"status": "failed", "error": "LLMs not configured"}
+
+        if not self._run_lock.acquire(blocking=False):
+            logger.warning("Pipeline already running; skipping duplicate trigger")
+            return {"status": "skipped", "error": "Pipeline already running"}
 
         try:
             result = run_full_pipeline(
@@ -115,9 +149,17 @@ class PipelineScheduler:
                 self._consecutive_failures, exc, exc_info=True,
             )
             return {"status": "failed", "error": str(exc)}
+        finally:
+            self._run_lock.release()
 
     @property
     def is_running(self) -> bool:
+        """True while a pipeline run is executing (not the scheduler state)."""
+        return self._run_lock.locked()
+
+    @property
+    def scheduler_active(self) -> bool:
+        """True if the APScheduler background scheduler itself is started."""
         return self._scheduler is not None and self._scheduler.running
 
     @property

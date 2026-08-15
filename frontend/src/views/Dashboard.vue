@@ -80,14 +80,6 @@
             </template>
             <div v-else class="welcome">
               <div class="welcome-emoji">📈</div>
-              <div class="welcome-title brand-title">
-                <span class="accent">Trading</span>Agents<span class="accent">-Astock</span>
-              </div>
-              <p class="welcome-desc">
-                A股多Agent投研分析系统<br />
-                7位AI分析师 → 质量门控 → 多空辩论 → 风控评估 → 最终决策
-              </p>
-              <div class="welcome-tip">← 在左侧输入股票代码，开始分析</div>
               <div class="welcome-disclaimer">
                 ⚠️ 本项目仅供学习研究与技术演示，不构成任何投资建议。<br />
                 投资决策请咨询持牌专业机构。
@@ -306,32 +298,13 @@ onMounted(loadDashboard)
 }
 .welcome {
   text-align: center;
-  padding: 40px 16px;
+  padding: 48px 16px;
 }
 .welcome-emoji {
   font-size: 3.5rem;
-  margin-bottom: 8px;
-}
-.welcome-title {
-  font-size: 2rem;
-}
-.welcome-desc {
-  color: var(--text-dim);
-  line-height: 1.7;
-  margin: 12px auto 0;
-  max-width: 420px;
-}
-.welcome-tip {
-  margin-top: 22px;
-  padding: 10px 18px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  color: var(--text-dim);
-  display: inline-block;
-  font-size: 0.9rem;
+  margin-bottom: 24px;
 }
 .welcome-disclaimer {
-  margin-top: 22px;
   color: #555;
   font-size: 0.75rem;
   line-height: 1.7;

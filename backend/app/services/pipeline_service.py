@@ -9,6 +9,8 @@ Manages:
 from __future__ import annotations
 
 import logging
+import threading
+from datetime import datetime
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -76,14 +78,66 @@ class PipelineService:
         logger.info("Pipeline service shut down")
 
     def run_pipeline(self) -> dict:
-        """Manually trigger a pipeline run."""
+        """Manually trigger a pipeline run.
+
+        Routes through the scheduler so manual and scheduled runs share the
+        same re-entry lock and failure tracking.
+        """
         if not self._initialized or self._llm_quick is None:
             return {"status": "failed", "error": "Pipeline not initialized"}
 
-        from ai_stock.pipeline.pipeline import run_full_pipeline
-        from ai_stock.default_config import DEFAULT_CONFIG
+        if self._scheduler is None:
+            from ai_stock.pipeline.pipeline import run_full_pipeline
+            from ai_stock.default_config import DEFAULT_CONFIG
+            return run_full_pipeline(DEFAULT_CONFIG, self._llm_quick, self._llm_deep)
 
-        return run_full_pipeline(DEFAULT_CONFIG, self._llm_quick, self._llm_deep)
+        return self._scheduler.trigger_manual()
+
+    def ensure_today_data(self) -> None:
+        """Kick off a pipeline run if today's ranking is missing.
+
+        - Before the first scheduled slot (08:00 local) the previous day's
+          snapshot is served as today's ranking, so no run is started.
+        - From the first slot onwards, a missing snapshot (e.g. the backend
+          started after the scheduled run) triggers an immediate background run.
+        """
+        if not self._initialized or self._llm_quick is None:
+            return
+        if self.is_running:
+            return
+
+        now = datetime.now()
+        slots = self._scheduler.schedule_slots if self._scheduler else []
+        first_slot = min(slots) if slots else (8, 0)
+        if (now.hour, now.minute) < first_slot:
+            logger.info(
+                "Before first pipeline slot %02d:%02d; serving previous day's ranking",
+                first_slot[0], first_slot[1],
+            )
+            return
+
+        today = now.strftime("%Y-%m-%d")
+        try:
+            from ai_stock.pipeline.db_ops import snapshot_exists_for_date
+            if snapshot_exists_for_date(today):
+                return
+        except Exception as exc:
+            logger.warning("Snapshot check failed (%s); triggering run anyway", exc)
+
+        logger.info("No snapshot for today %s; starting bootstrap pipeline run", today)
+        threading.Thread(
+            target=self._run_bootstrap, name="pipeline-bootstrap", daemon=True,
+        ).start()
+
+    def _run_bootstrap(self) -> None:
+        """Run the pipeline in a background thread (startup bootstrap)."""
+        try:
+            result = self.run_pipeline()
+            logger.info(
+                "Bootstrap pipeline run finished: status=%s", result.get("status"),
+            )
+        except Exception as exc:
+            logger.error("Bootstrap pipeline run failed: %s", exc)
 
     def get_latest(self) -> Optional[dict]:
         """Get the latest pipeline results."""
@@ -97,6 +151,7 @@ class PipelineService:
 
     @property
     def is_running(self) -> bool:
+        """True while a pipeline run is executing (shared with the scheduler)."""
         return self._scheduler.is_running if self._scheduler else False
 
 

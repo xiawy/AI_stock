@@ -7,9 +7,10 @@
       </router-link>
 
       <nav class="nav">
-        <router-link to="/">工作台</router-link>
-        <router-link to="/impact">影响榜</router-link>
+        <router-link to="/">首页</router-link>
+        <router-link to="/diagnosis">诊股</router-link>
         <router-link to="/recommendation">荐股</router-link>
+        <router-link to="/impact">新闻榜</router-link>
       </nav>
 
       <el-dropdown v-if="auth.user" @command="onCommand">
@@ -19,6 +20,7 @@
         </span>
         <template #dropdown>
           <el-dropdown-menu>
+            <el-dropdown-item command="profile">个人中心</el-dropdown-item>
             <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
           </el-dropdown-menu>
         </template>
@@ -36,7 +38,9 @@ const auth = useAuthStore()
 const router = useRouter()
 
 async function onCommand(cmd) {
-  if (cmd === 'logout') {
+  if (cmd === 'profile') {
+    router.push('/profile')
+  } else if (cmd === 'logout') {
     await auth.logout()
     router.push('/login')
   }

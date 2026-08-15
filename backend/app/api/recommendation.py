@@ -28,7 +28,7 @@ def get_latest(
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="暂无荐股数据，请先手动触发流水线",
+            detail="暂无荐股数据，系统生成中，请稍后重试",
         )
     # Return only the recommendations portion
     return {
@@ -42,14 +42,15 @@ def get_history(
     date: str,
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Query recommendations for a specific date (YYYY-MM-DD)."""
+    """Query recommendations for a specific date (YYYY-MM-DD).
+
+    Returns empty data (not 404) when nothing exists for the date — history
+    views should never trigger a pipeline run.
+    """
     svc = get_pipeline_service()
     result = svc.get_by_date(date)
     if result is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"未找到 {date} 的荐股数据",
-        )
+        return {"snapshot": None, "recommendations": []}
     return {
         "snapshot": result.get("snapshot"),
         "recommendations": result.get("recommendations", []),
@@ -75,7 +76,7 @@ def trigger_pipeline(
 
     return {
         "detail": "流水线已启动，请在后台等待完成",
-        "scheduler_running": svc.is_running,
+        "pipeline_running": svc.is_running,
     }
 
 

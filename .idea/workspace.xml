@@ -4,13 +4,22 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="bug修复">
-      <change beforePath="$PROJECT_DIR$/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/.env.example" afterDir="false" />
+    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="合并env">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/CHANGELOG.md" beforeDir="false" afterPath="$PROJECT_DIR$/CHANGELOG.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/backend/.env.example" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/backend/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/core/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/core/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/utils/agent_states.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/utils/agent_states.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/db_ops.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/db_ops.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/pipeline.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/pipeline.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/scheduler.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/scheduler.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/api/impact.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/api/impact.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/api/recommendation.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/api/recommendation.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/services/pipeline_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/pipeline_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/components/AppHeader.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/AppHeader.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/router/index.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/router/index.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/views/Dashboard.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/views/Dashboard.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/views/ImpactRanking.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/views/ImpactRanking.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/views/StockRecommendation.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/views/StockRecommendation.vue" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -29,25 +38,25 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "git-widget-placeholder": "main",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "ts.external.directory.path": "D:\\soft\\PyCharm 2025.3\\plugins\\javascript-plugin\\jsLanguageServicesImpl\\external",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;ts.external.directory.path&quot;: &quot;D:\\soft\\PyCharm 2025.3\\plugins\\javascript-plugin\\jsLanguageServicesImpl\\external&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -65,7 +74,8 @@
       <updated>1786721482373</updated>
       <workItem from="1786721514711" duration="12069000" />
       <workItem from="1786750880866" duration="27893000" />
-      <workItem from="1786791279121" duration="5970000" />
+      <workItem from="1786791279121" duration="6212000" />
+      <workItem from="1786805416923" duration="2353000" />
     </task>
     <task id="LOCAL-00001" summary="迁移项目为web项目">
       <option name="closed" value="true" />
@@ -131,7 +141,15 @@
       <option name="project" value="LOCAL" />
       <updated>1786796546830</updated>
     </task>
-    <option name="localTasksCounter" value="9" />
+    <task id="LOCAL-00009" summary="合并env">
+      <option name="closed" value="true" />
+      <created>1786804638386</created>
+      <option name="number" value="00009" />
+      <option name="presentableId" value="LOCAL-00009" />
+      <option name="project" value="LOCAL" />
+      <updated>1786804638386</updated>
+    </task>
+    <option name="localTasksCounter" value="10" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -143,6 +161,7 @@
     <MESSAGE value="新增新闻评估、荐股" />
     <MESSAGE value="移除llm可选" />
     <MESSAGE value="bug修复" />
-    <option name="LAST_COMMIT_MESSAGE" value="bug修复" />
+    <MESSAGE value="合并env" />
+    <option name="LAST_COMMIT_MESSAGE" value="合并env" />
   </component>
 </project>
