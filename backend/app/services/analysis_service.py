@@ -60,10 +60,6 @@ class AnalysisTaskManager:
         trade_date: str,
         *,
         lookback_days: int | None = None,
-        llm_provider: str | None = None,
-        quick_think_llm: str | None = None,
-        deep_think_llm: str | None = None,
-        llm_base_url: str | None = None,
         fresh: bool = True,
     ) -> str:
         eng = _engine()
@@ -84,13 +80,7 @@ class AnalysisTaskManager:
             eng.history.clear_incomplete_task(code, trade_date)
             clear_checkpoint(DEFAULT_CONFIG["data_cache_dir"], code, trade_date)
 
-        config = self.build_config(
-            lookback_days=lookback_days,
-            llm_provider=llm_provider,
-            quick_think_llm=quick_think_llm,
-            deep_think_llm=deep_think_llm,
-            llm_base_url=llm_base_url,
-        )
+        config = self.build_config(lookback_days=lookback_days)
 
         tracker = eng.progress.ProgressTracker(ticker=code, trade_date=trade_date)
         eng.runner.run_analysis_in_thread(
@@ -125,23 +115,13 @@ class AnalysisTaskManager:
     def build_config(
         *,
         lookback_days: int | None = None,
-        llm_provider: str | None = None,
-        quick_think_llm: str | None = None,
-        deep_think_llm: str | None = None,
-        llm_base_url: str | None = None,
     ) -> dict[str, Any]:
-        """Assemble the pipeline config — port of web/app.py ``_build_config``.
+        """Assemble the pipeline config.
 
-        Session State → explicit request parameters.
+        LLM settings (provider / model / backend_url) come from DEFAULT_CONFIG
+        which reads them from .env — no per-request override.
         """
-        import os
-
         config = DEFAULT_CONFIG.copy()
-        config["llm_provider"] = llm_provider or "minimax"
-        config["deep_think_llm"] = deep_think_llm or "MiniMax-M2.7"
-        config["quick_think_llm"] = quick_think_llm or "MiniMax-M2.7-highspeed"
-        backend_url = (llm_base_url or os.getenv("BACKEND_URL") or "").strip()
-        config["backend_url"] = backend_url or None
         config["data_vendors"] = {
             "core_stock_apis": "a_stock",
             "technical_indicators": "a_stock",
@@ -150,7 +130,7 @@ class AnalysisTaskManager:
             "signal_data": "a_stock",
         }
         if lookback_days is None:
-            # Sidebar default: analysis window = first day of trade_date's month.
+            # Default: analysis window = first day of trade_date's month.
             from datetime import date, timedelta
 
             end = date.fromisoformat(_today_iso())

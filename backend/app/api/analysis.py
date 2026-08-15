@@ -36,10 +36,6 @@ def start_analysis(
         ticker=payload.ticker,
         trade_date=payload.trade_date,
         lookback_days=payload.lookback_days,
-        llm_provider=payload.llm_provider,
-        quick_think_llm=payload.quick_think_llm,
-        deep_think_llm=payload.deep_think_llm,
-        llm_base_url=payload.llm_base_url,
         fresh=payload.fresh,
     )
     row = db.get(AnalysisTask, task_id)

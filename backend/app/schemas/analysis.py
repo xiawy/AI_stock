@@ -8,17 +8,17 @@ from pydantic import BaseModel, Field
 
 
 class AnalysisStartRequest(BaseModel):
-    """Body of POST /api/analysis/start — mirrors the dashboard analysis form."""
+    """Body of POST /api/analysis/start — mirrors the dashboard analysis form.
+
+    LLM configuration (provider / model / base_url) is read from .env via
+    DEFAULT_CONFIG — no per-request override needed.
+    """
 
     ticker: str = Field(min_length=1, max_length=32, description="6位代码或中文全称，如 300750 / 宁德时代")
     trade_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$", description="分析日期 YYYY-MM-DD")
     lookback_days: int | None = Field(
         default=None, ge=5, le=750, description="技术分析回溯天数（默认本月第一天）"
     )
-    llm_provider: str | None = Field(default=None, max_length=48)
-    quick_think_llm: str | None = Field(default=None, max_length=96)
-    deep_think_llm: str | None = Field(default=None, max_length=96)
-    llm_base_url: str | None = Field(default=None, max_length=255)
     # fresh=True → 清除断点从头分析；False → 从上次断点续跑
     fresh: bool = True
 

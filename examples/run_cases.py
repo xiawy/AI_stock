@@ -4,6 +4,13 @@
 风险 / 组合五个分区），并额外落一份 summary.json 便于程序化读取。
 
 Usage:
+    # 1. 在 .env 中配置 LLM（只需一个模型，deep/quick 共用）
+    #    LLM_PROVIDER=deepseek
+    #    LLM_MODEL=deepseek-chat
+    #    DEEPSEEK_API_KEY=sk-xxx
+    #    BACKEND_URL=https://...   (可选，中转地址)
+    #
+    # 2. 运行
     uv run python examples/run_cases.py          # run all cases
     uv run python examples/run_cases.py 688017   # run a single ticker
 
@@ -13,14 +20,12 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-load_dotenv()
 
 from ai_stock.graph.trading_graph import TradingAgentsGraph
 from ai_stock.default_config import DEFAULT_CONFIG
@@ -53,12 +58,25 @@ TICKERS = {
 def build_config() -> dict:
     """Build the TradingAgents config for case runs.
 
-    默认用 MiniMax；换成你自己的 provider/model 时改 llm_provider 与两个 *_llm 即可。
+    所有 LLM 相关配置均从 .env / 环境变量读取，只需配一个模型：
+
+        LLM_PROVIDER=deepseek        # openai / deepseek / qwen / glm / minimax / ...
+        LLM_MODEL=deepseek-chat      # 模型名（deep/quick 共用）
+        BACKEND_URL=https://...      # 可选，中转地址
+        DEEPSEEK_API_KEY=sk-xxx      # 对应 provider 的 API Key
+
+    见 .env.example 中所有支持的 key。
     """
+    provider = os.getenv("LLM_PROVIDER", "openai")
+    model = os.getenv("LLM_MODEL", "gpt-5.4-mini")
+    backend_url = os.getenv("BACKEND_URL") or None
+
     config = DEFAULT_CONFIG.copy()
-    config["llm_provider"] = "minimax"
-    config["deep_think_llm"] = "MiniMax-M2.7"
-    config["quick_think_llm"] = "MiniMax-M2.7-highspeed"
+    config["llm_provider"] = provider
+    config["deep_think_llm"] = model
+    config["quick_think_llm"] = model
+    if backend_url:
+        config["backend_url"] = backend_url
     config["data_vendors"] = {
         "core_stock_apis": "a_stock",
         "technical_indicators": "a_stock",
@@ -69,6 +87,8 @@ def build_config() -> dict:
     config["max_debate_rounds"] = 1
     config["max_risk_discuss_rounds"] = 1
     config["output_language"] = "Chinese"
+
+    print(f"LLM: provider={provider}, model={model}, backend_url={backend_url}")
     return config
 
 

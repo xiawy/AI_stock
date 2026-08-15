@@ -32,33 +32,6 @@
                 </div>
               </el-form-item>
 
-              <el-collapse class="llm-config">
-                <el-collapse-item title="⚙️ 模型配置">
-                  <el-form-item label="LLM 供应商">
-                    <el-select v-model="form.llmProvider" style="width: 100%">
-                      <el-option
-                        v-for="p in providers"
-                        :key="p.value"
-                        :label="p.label"
-                        :value="p.value"
-                      />
-                    </el-select>
-                  </el-form-item>
-                  <el-form-item label="快速思考模型">
-                    <el-input v-model="form.quickModel" placeholder="MiniMax-M2.7-highspeed" />
-                  </el-form-item>
-                  <el-form-item label="深度思考模型">
-                    <el-input v-model="form.deepModel" placeholder="MiniMax-M2.7" />
-                  </el-form-item>
-                  <el-form-item label="API Base URL（可选，第三方/代理）">
-                    <el-input v-model="form.baseUrl" placeholder="https://your-relay.example/v1" />
-                  </el-form-item>
-                  <div class="field-hint">
-                    API Key 从项目根目录 .env 读取（MINIMAX_API_KEY / DEEPSEEK_API_KEY 等）。
-                  </div>
-                </el-collapse-item>
-              </el-collapse>
-
               <el-button
                 type="primary"
                 size="large"
@@ -175,20 +148,6 @@ import { historyApi, watchlistApi } from '../api/stocks'
 
 const router = useRouter()
 
-const providers = [
-  { label: 'MiniMax（推荐·国内直连）', value: 'minimax' },
-  { label: 'DeepSeek', value: 'deepseek' },
-  { label: '通义千问 Qwen', value: 'qwen' },
-  { label: '智谱 GLM', value: 'glm' },
-  { label: 'OpenAI', value: 'openai' },
-  { label: 'Anthropic', value: 'anthropic' },
-  { label: 'Google Gemini', value: 'google' },
-  { label: 'xAI Grok', value: 'xai' },
-  { label: 'OpenRouter（聚合）', value: 'openrouter' },
-  { label: 'OpenAI 兼容（自定义 base_url）', value: 'openai_compatible' },
-  { label: 'Ollama（本地）', value: 'ollama' },
-]
-
 function defaultDates() {
   const now = new Date()
   const iso = (d) => d.toISOString().slice(0, 10)
@@ -201,10 +160,6 @@ function defaultDates() {
 const form = reactive({
   ticker: '',
   ...defaultDates(),
-  llmProvider: 'minimax',
-  quickModel: '',
-  deepModel: '',
-  baseUrl: '',
 })
 
 const resolvedLabel = ref('')
@@ -233,10 +188,6 @@ async function startAnalysis() {
       ticker: form.ticker,
       trade_date: form.tradeDate,
       lookback_days: lookbackDays.value,
-      llm_provider: form.llmProvider || undefined,
-      quick_think_llm: form.quickModel || undefined,
-      deep_think_llm: form.deepModel || undefined,
-      llm_base_url: form.baseUrl || undefined,
       fresh: true,
     })
     router.push({ name: 'analysis', params: { taskId: data.task_id } })
@@ -320,9 +271,6 @@ onMounted(loadDashboard)
   font-size: 0.78rem;
   margin-top: 4px;
   line-height: 1.5;
-}
-.llm-config {
-  margin-bottom: 14px;
 }
 .start-btn {
   width: 100%;
