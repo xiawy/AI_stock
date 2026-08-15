@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import analysis, auth, history, stocks, watchlist
+from app.api import analysis, auth, history, impact, recommendation, stocks, watchlist
 from app.core.config import get_settings
 from app.core.database import init_db
 
@@ -19,7 +19,28 @@ from app.core.database import init_db
 async def lifespan(_: FastAPI):
     # Create SQLite tables on first start; Alembic owns later migrations.
     init_db()
+
+    # Initialize the impact pipeline service (scheduler + LLM clients).
+    try:
+        from ai_stock.default_config import DEFAULT_CONFIG
+        from app.services.pipeline_service import get_pipeline_service
+
+        svc = get_pipeline_service()
+        svc.initialize(DEFAULT_CONFIG)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Pipeline service init failed (non-fatal): %s", exc,
+        )
+
     yield
+
+    # Shutdown pipeline scheduler
+    try:
+        from app.services.pipeline_service import get_pipeline_service
+        get_pipeline_service().shutdown()
+    except Exception:
+        pass
 
 
 settings = get_settings()
@@ -50,3 +71,5 @@ app.include_router(analysis.router, prefix="/api")
 app.include_router(stocks.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(watchlist.router, prefix="/api")
+app.include_router(impact.router, prefix="/api")
+app.include_router(recommendation.router, prefix="/api")

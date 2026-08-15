@@ -161,3 +161,60 @@ def get_industry_comparison(
         str: Industry performance ranking with key metrics
     """
     return route_to_vendor("get_industry_comparison", ticker, curr_date)
+
+
+@tool
+def get_impact_news(
+    curr_date: Annotated[str, "Date in YYYY-MM-DD format"],
+    hours: Annotated[int, "Hours of news to collect (default 12)"] = 12,
+) -> str:
+    """
+    Collect impactful news from the past N hours for news impact assessment.
+    Returns structured news items with auto-classification (policy vs news).
+    Used by the impact assessment pipeline, not by individual stock analysis.
+    Args:
+        curr_date (str): Date in YYYY-MM-DD format
+        hours (int): How many hours back to collect (default 12)
+    Returns:
+        str: Formatted news list with titles, sources, and categories
+    """
+    result = route_to_vendor("get_impact_news", curr_date, hours)
+    if isinstance(result, list):
+        if not result:
+            return f"No impactful news found for {curr_date} (past {hours}h)"
+        lines = [f"# Impact News ({curr_date}, past {hours}h) — {len(result)} items", ""]
+        for i, item in enumerate(result, 1):
+            tag = "[政策]" if item.get("category") == "policy" else "[资讯]"
+            lines.append(f"{i}. {tag} {item['title']} ({item.get('source', '?')}) {item.get('time', '')}")
+        return "\n".join(lines)
+    return str(result)
+
+
+@tool
+def get_limit_up_stocks(
+    curr_date: Annotated[str, "Date in YYYY-MM-DD format"],
+    days: Annotated[int, "Number of trading days to look back (default 7)"] = 7,
+) -> str:
+    """
+    Get stocks that hit limit-up (涨停) in the past N trading days.
+    Includes human-curated reason tags explaining WHY they surged.
+    Used by the stock recommendation pipeline for candidate pool generation.
+    Args:
+        curr_date (str): Date in YYYY-MM-DD format
+        days (int): Number of trading days to look back (default 7)
+    Returns:
+        str: Formatted list of limit-up stocks with reason tags
+    """
+    result = route_to_vendor("get_limit_up_stocks", curr_date, days)
+    if isinstance(result, list):
+        if not result:
+            return f"No limit-up stocks found for {curr_date} (past {days} trading days)"
+        lines = [f"# Limit-Up Stocks ({curr_date}, past {days} trading days) — {len(result)} entries", ""]
+        for entry in result:
+            tags = "+".join(entry.get("reason_tags", [])) or "N/A"
+            lines.append(
+                f"{entry['date']} | {entry['code']} {entry['name']} "
+                f"+{entry.get('zhangfu', '?')}% | {tags}"
+            )
+        return "\n".join(lines)
+    return str(result)

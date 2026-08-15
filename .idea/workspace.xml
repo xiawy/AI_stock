@@ -4,44 +4,13 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="迁移项目为web项目">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/CLAUDE.md" beforeDir="false" afterPath="$PROJECT_DIR$/CLAUDE.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README_en.md" beforeDir="false" afterPath="$PROJECT_DIR$/README_en.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/fundamentals_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/fundamentals_analyst.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/hot_money_tracker.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/hot_money_tracker.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/lockup_watcher.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/market_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/market_analyst.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/news_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/news_analyst.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/policy_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/policy_analyst.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/social_media_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/social_media_analyst.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/managers/portfolio_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/managers/portfolio_manager.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/managers/research_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/managers/research_manager.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/quality_gate.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/quality_gate.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/researchers/bear_researcher.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/researchers/bear_researcher.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/researchers/bull_researcher.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/researchers/bull_researcher.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/aggressive_debator.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/aggressive_debator.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/conservative_debator.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/conservative_debator.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/neutral_debator.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/neutral_debator.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/trader/trader.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/trader/trader.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/utils/agent_states.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/utils/agent_states.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/utils/agent_utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/utils/agent_utils.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/default_config.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/default_config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/graph/conditional_logic.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/graph/conditional_logic.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/graph/propagation.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/graph/propagation.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/graph/setup.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/graph/setup.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/graph/trading_graph.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/graph/trading_graph.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cli/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/cli/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/examples/run_cases.py" beforeDir="false" afterPath="$PROJECT_DIR$/examples/run_cases.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/components/ReportViewer.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/ReportViewer.vue" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_cli_default_command.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_cli_default_command.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/pdf_export.py" beforeDir="false" afterPath="$PROJECT_DIR$/web/pdf_export.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/progress.py" beforeDir="false" afterPath="$PROJECT_DIR$/web/progress.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/runner.py" beforeDir="false" afterPath="$PROJECT_DIR$/web/runner.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/stock_display.py" beforeDir="false" afterPath="$PROJECT_DIR$/web/stock_display.py" afterDir="false" />
+    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="新增自记忆">
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/utils/signal_data_tools.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/utils/signal_data_tools.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/dataflows/interface.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/dataflows/interface.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/models/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/models/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/components/AppHeader.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/AppHeader.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/router/index.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/router/index.js" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -94,7 +63,7 @@
       <option name="presentableId" value="Default" />
       <updated>1786721482373</updated>
       <workItem from="1786721514711" duration="12069000" />
-      <workItem from="1786750880866" duration="10678000" />
+      <workItem from="1786750880866" duration="14566000" />
     </task>
     <task id="LOCAL-00001" summary="迁移项目为web项目">
       <option name="closed" value="true" />
@@ -104,7 +73,15 @@
       <option name="project" value="LOCAL" />
       <updated>1786727803745</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="新增自记忆">
+      <option name="closed" value="true" />
+      <created>1786763401639</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1786763401639</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -112,6 +89,7 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="迁移项目为web项目" />
-    <option name="LAST_COMMIT_MESSAGE" value="迁移项目为web项目" />
+    <MESSAGE value="新增自记忆" />
+    <option name="LAST_COMMIT_MESSAGE" value="新增自记忆" />
   </component>
 </project>

@@ -8,6 +8,8 @@
 
       <nav class="nav">
         <router-link to="/">工作台</router-link>
+        <router-link to="/impact">影响榜</router-link>
+        <router-link to="/recommendation">荐股</router-link>
       </nav>
 
       <el-dropdown v-if="auth.user" @command="onCommand">

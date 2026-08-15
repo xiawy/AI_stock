@@ -4,4 +4,18 @@ from app.models.analysis_task import AnalysisTask
 from app.models.user import User
 from app.models.watchlist import WatchlistItem
 
-__all__ = ["User", "AnalysisTask", "WatchlistItem"]
+# Pipeline models (impact assessment & stock recommendation)
+from ai_stock.pipeline.db_models import (  # noqa: F401
+    ImpactSnapshot,
+    NewsItem,
+    StockRecommendation,
+)
+
+__all__ = [
+    "User",
+    "AnalysisTask",
+    "WatchlistItem",
+    "ImpactSnapshot",
+    "NewsItem",
+    "StockRecommendation",
+]

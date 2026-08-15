@@ -32,6 +32,16 @@ const routes = [
     props: true,
   },
   {
+    path: '/impact',
+    name: 'impact',
+    component: () => import('../views/ImpactRanking.vue'),
+  },
+  {
+    path: '/recommendation',
+    name: 'recommendation',
+    component: () => import('../views/StockRecommendation.vue'),
+  },
+  {
     path: '/:pathMatch(.*)*',
     redirect: '/',
   },

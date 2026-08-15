@@ -43,6 +43,10 @@ from .a_stock import (
     get_lockup_expiry as get_astock_lockup_expiry,
     get_industry_comparison as get_astock_industry_comparison,
 )
+from .pipeline_data import (
+    get_impact_news as get_astock_impact_news,
+    get_limit_up_stocks as get_astock_limit_up_stocks,
+)
 
 # Configuration and routing logic
 from .config import get_config
@@ -89,6 +93,8 @@ TOOLS_CATEGORIES = {
             "get_dragon_tiger_board",
             "get_lockup_expiry",
             "get_industry_comparison",
+            "get_impact_news",
+            "get_limit_up_stocks",
         ]
     }
 }
@@ -174,6 +180,12 @@ VENDOR_METHODS = {
     },
     "get_industry_comparison": {
         "a_stock": get_astock_industry_comparison,
+    },
+    "get_impact_news": {
+        "a_stock": get_astock_impact_news,
+    },
+    "get_limit_up_stocks": {
+        "a_stock": get_astock_limit_up_stocks,
     },
 }
 

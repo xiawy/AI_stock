@@ -1,0 +1,145 @@
+"""APScheduler-based scheduler for the impact pipeline.
+
+Runs the full pipeline at 08:00 and 20:00 daily.  Follows the same pattern
+as the evolution scheduler: graceful degradation if APScheduler is not
+installed, and the scheduler lives/dies with the host process.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Optional
+
+from .config import MAX_CONSECUTIVE_FAILURES, PIPELINE_HOURS
+
+logger = logging.getLogger(__name__)
+
+
+class PipelineScheduler:
+    """APScheduler wrapper for the impact assessment pipeline."""
+
+    def __init__(
+        self,
+        config: dict,
+        llm_quick: Optional[Any] = None,
+        llm_deep: Optional[Any] = None,
+    ) -> None:
+        self._config = config
+        self._llm_quick = llm_quick
+        self._llm_deep = llm_deep
+        self._scheduler = None
+        self._consecutive_failures = 0
+
+    def set_llms(self, llm_quick: Any, llm_deep: Any) -> None:
+        """Update the LLM instances (called when the pipeline service starts)."""
+        self._llm_quick = llm_quick
+        self._llm_deep = llm_deep
+
+    def start(self) -> None:
+        """Start the scheduler."""
+        try:
+            from apscheduler.schedulers.background import BackgroundScheduler
+            from apscheduler.triggers.cron import CronTrigger
+        except ImportError:
+            logger.warning(
+                "APScheduler not installed. Pipeline scheduler disabled. "
+                "Install with: pip install 'apscheduler>=3.10'"
+            )
+            return
+
+        self._scheduler = BackgroundScheduler()
+
+        hours = self._config.get("pipeline_hours", PIPELINE_HOURS)
+        for hour in hours:
+            self._scheduler.add_job(
+                self._run_pipeline,
+                CronTrigger(hour=hour, minute=0),
+                id=f"pipeline_{hour:02d}00",
+                name=f"Impact pipeline {hour:02d}:00",
+                replace_existing=True,
+            )
+
+        self._scheduler.start()
+        logger.info(
+            "Pipeline scheduler started: runs at %s",
+            ", ".join(f"{h:02d}:00" for h in hours),
+        )
+
+    def stop(self) -> None:
+        """Stop the scheduler."""
+        if self._scheduler:
+            self._scheduler.shutdown(wait=False)
+            self._scheduler = None
+            logger.info("Pipeline scheduler stopped")
+
+    def trigger_manual(self) -> dict:
+        """Manually trigger a pipeline run (for API endpoint)."""
+        return self._run_pipeline()
+
+    def _run_pipeline(self) -> dict:
+        """Execute the full pipeline with failure tracking."""
+        from .pipeline import run_full_pipeline
+
+        if self._llm_quick is None or self._llm_deep is None:
+            logger.error("Pipeline LLMs not configured; skipping run")
+            return {"status": "failed", "error": "LLMs not configured"}
+
+        try:
+            result = run_full_pipeline(
+                self._config, self._llm_quick, self._llm_deep,
+            )
+
+            if result.get("status") == "completed":
+                self._consecutive_failures = 0
+                logger.info("Pipeline run succeeded")
+            else:
+                self._consecutive_failures += 1
+                logger.warning(
+                    "Pipeline run failed (%d consecutive failures)",
+                    self._consecutive_failures,
+                )
+
+            if self._consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                logger.error(
+                    "ALERT: %d consecutive pipeline failures! "
+                    "Check LLM connectivity and data source availability.",
+                    self._consecutive_failures,
+                )
+
+            return result
+
+        except Exception as exc:
+            self._consecutive_failures += 1
+            logger.error(
+                "Pipeline exception (%d consecutive failures): %s",
+                self._consecutive_failures, exc, exc_info=True,
+            )
+            return {"status": "failed", "error": str(exc)}
+
+    @property
+    def is_running(self) -> bool:
+        return self._scheduler is not None and self._scheduler.running
+
+    @property
+    def consecutive_failures(self) -> int:
+        return self._consecutive_failures
+
+
+# Module-level singleton
+_scheduler: Optional[PipelineScheduler] = None
+
+
+def get_scheduler() -> Optional[PipelineScheduler]:
+    """Return the module-level scheduler singleton."""
+    return _scheduler
+
+
+def create_scheduler(
+    config: dict,
+    llm_quick: Any = None,
+    llm_deep: Any = None,
+) -> PipelineScheduler:
+    """Create and return the scheduler singleton."""
+    global _scheduler
+    _scheduler = PipelineScheduler(config, llm_quick, llm_deep)
+    return _scheduler
