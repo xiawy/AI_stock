@@ -1,3 +1,4 @@
+
 from typing import Optional
 import datetime
 import typer
@@ -1304,6 +1305,94 @@ def analyze(
         n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
         console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
     run_analysis(checkpoint=checkpoint)
+
+
+@app.command()
+def evolve(
+    agent: str = typer.Option(
+        "all",
+        help="Agent name to review (e.g. market, fundamentals, trader), or 'all'.",
+    ),
+    dry_run: bool = typer.Option(
+        True,
+        help="Dry-run mode: show what would be reviewed without writing changes.",
+    ),
+):
+    """手动触发 Agent 自进化复盘。
+
+    读取指定 Agent 的情节记忆，生成复盘总结和改进建议草稿。
+    所有策略修改都进入审核队列，不会自动应用。
+
+    需要安装可选依赖: pip install -e '.[evolution]'
+    """
+    try:
+        import chromadb  # noqa: F401
+    except ImportError:
+        console.print(
+            "[red]自进化层需要 chromadb。请运行:[/red]\n"
+            "  [cyan]pip install -e '.[evolution]'[/cyan]"
+        )
+        raise typer.Exit(1)
+
+    agents_to_review = []
+    all_agents = [
+        "market", "fundamentals", "hot_money", "policy", "social", "news",
+        "bull", "bear", "trader", "risk", "quality_gate", "portfolio",
+    ]
+    if agent == "all":
+        agents_to_review = all_agents
+    elif agent in all_agents:
+        agents_to_review = [agent]
+    else:
+        console.print(f"[red]Unknown agent: {agent}. Available: {', '.join(all_agents)}[/red]")
+        raise typer.Exit(1)
+
+    from ai_stock.evolution.memory_system import AgentMemorySystem
+
+    base_dir = Path(DEFAULT_CONFIG["evolution_base_dir"])
+    strategies_dir = Path(DEFAULT_CONFIG["custom_strategies_dir"])
+    learnings_dir = Path(DEFAULT_CONFIG["learnings_dir"])
+
+    console.print(Panel(
+        f"[bold]Agent 自进化复盘[/bold]\n"
+        f"Agents: {', '.join(agents_to_review)}\n"
+        f"Mode: {'dry-run' if dry_run else 'LIVE'}",
+        border_style="cyan",
+    ))
+
+    for agent_name in agents_to_review:
+        console.print(f"\n[bold cyan]Reviewing: {agent_name}[/bold cyan]")
+        try:
+            memory = AgentMemorySystem(
+                agent_name,
+                base_dir=base_dir,
+                strategies_dir=strategies_dir,
+                top_k=DEFAULT_CONFIG.get("evolution_top_k_episodes", 3),
+            )
+            # Count episodes
+            all_episodes = memory.episodic.load_all()
+            if not all_episodes:
+                console.print(f"  [dim]No episodes found for {agent_name}, skipping.[/dim]")
+                continue
+
+            console.print(f"  Found {len(all_episodes)} episode(s)")
+
+            if dry_run:
+                console.print(f"  [yellow]Dry-run mode — no review generated.[/yellow]")
+                # Show recent episodes
+                for ep in all_episodes[-3:]:
+                    ep_id = ep.get("id", "?")
+                    outcome = ep.get("outcome", "unknown")
+                    console.print(f"    - {ep_id}: {outcome}")
+            else:
+                console.print(f"  [green]Review would be written to:[/green] {learnings_dir / agent_name}")
+                # TODO: Wire up LLM and run ReviewEngine when needed
+                console.print(f"  [dim]LLM review not yet wired in CLI — use backend for full review.[/dim]")
+
+        except Exception as e:
+            console.print(f"  [red]Error: {e}[/red]")
+
+    console.print("\n[green]Evolve complete.[/green]")
 
 
 @app.command()

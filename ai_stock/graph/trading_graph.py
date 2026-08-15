@@ -43,7 +43,6 @@ from ai_stock.agents.utils.agent_utils import (
     get_concept_blocks,
     get_fund_flow,
     get_dragon_tiger_board,
-    get_lockup_expiry,
     get_industry_comparison,
 )
 
@@ -54,9 +53,9 @@ from .propagation import Propagator
 from .reflection import Reflector
 from .signal_processing import SignalProcessor
 
-# 七个分析师角色——它们受 `selected_analysts` 控制，没选中就不会进图。
+# 六个分析师角色——它们受 `selected_analysts` 控制，没选中就不会进图。
 _ANALYST_ROLES = frozenset({
-    "market", "social", "news", "fundamentals", "policy", "hot_money", "lockup",
+    "market", "social", "news", "fundamentals", "policy", "hot_money",
 })
 
 # 各家 provider 私有的参数：换了 provider 就不能带过去（别家可能直接拒收）。
@@ -144,7 +143,7 @@ class TradingAgentsGraph:
 
     def __init__(
         self,
-        selected_analysts=["market", "social", "news", "fundamentals", "policy", "hot_money", "lockup"],
+        selected_analysts=["market", "social", "news", "fundamentals", "policy", "hot_money"],
         debug=False,
         config: Dict[str, Any] = None,
         callbacks: Optional[List] = None,
@@ -178,7 +177,7 @@ class TradingAgentsGraph:
         # Optional: route nodes through a personal Claude Pro/Max subscription
         # via the Claude Agent SDK. `deep_think_provider_override` covers the
         # deep nodes (Research / Portfolio Manager); `quick_think_provider_override`
-        # covers the quick nodes (7 tool-using analysts + Bull/Bear / trader /
+        # covers the quick nodes (6 tool-using analysts + Bull/Bear / trader /
         # risk debaters). Both on ⇒ every node runs on the subscription. Off by
         # default — behaviour is unchanged when both are None.
         deep_on = self.config.get("deep_think_provider_override") == "claude_agent_sdk"
@@ -279,6 +278,7 @@ class TradingAgentsGraph:
             self.tool_nodes,
             self.conditional_logic,
             resolve_llm=self.role_llms.get,
+            config=self.config,
         )
 
         self.propagator = Propagator()
@@ -472,14 +472,6 @@ class TradingAgentsGraph:
                     get_fund_flow,
                     get_dragon_tiger_board,
                     get_industry_comparison,
-                ]
-            ),
-            "lockup": ToolNode(
-                [
-                    get_insider_transactions,
-                    get_news,
-                    get_fundamentals,
-                    get_lockup_expiry,
                 ]
             ),
         }
@@ -699,7 +691,6 @@ class TradingAgentsGraph:
             "fundamentals_report": final_state["fundamentals_report"],
             "policy_report": final_state.get("policy_report", ""),
             "hot_money_report": final_state.get("hot_money_report", ""),
-            "lockup_report": final_state.get("lockup_report", ""),
             "investment_debate_state": {
                 "bull_history": final_state["investment_debate_state"]["bull_history"],
                 "bear_history": final_state["investment_debate_state"]["bear_history"],

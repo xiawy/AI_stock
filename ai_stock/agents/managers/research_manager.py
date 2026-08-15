@@ -23,7 +23,7 @@ def create_research_manager(llm):
 
 {instrument_context}
 
-Note: This is an A-share (China mainland) stock. Factor in regulatory policy impact, hot money / capital flow dynamics, and lockup expiry / insider reduction risks when synthesising the debate.
+Note: This is an A-share (China mainland) stock. Factor in regulatory policy impact and hot money / capital flow dynamics when synthesising the debate.
 
 ---
 
@@ -40,6 +40,11 @@ Commit to a clear stance whenever the debate's strongest arguments warrant one; 
 
 **Debate History:**
 {history}""" + get_language_instruction()
+
+        # Inject evolution context if available
+        evo_ctx = state.get("evolution_context")
+        if evo_ctx:
+            prompt += f"\n\n---\n## 自进化上下文\n{evo_ctx}\n---"
 
         investment_plan = invoke_structured_or_freetext(
             structured_llm,

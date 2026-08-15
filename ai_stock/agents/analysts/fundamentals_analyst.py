@@ -54,6 +54,11 @@ def create_fundamentals_analyst(llm):
             + get_language_instruction()
         )
 
+        # Inject evolution context if available
+        evo_ctx = state.get("evolution_context")
+        if evo_ctx:
+            system_message += f"\n\n---\n## 自进化上下文\n{evo_ctx}\n---"
+
         prompt = ChatPromptTemplate.from_messages(
             [
                 (

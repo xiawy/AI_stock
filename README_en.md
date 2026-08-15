@@ -340,7 +340,7 @@ Valid role names (anything you omit keeps the quick/deep default):
 
 | Group | Roles |
 |-------|-------|
-| 7 analysts | `market` `social` `news` `fundamentals` `policy` `hot_money` `lockup` |
+| 6 analysts | `market` `social` `news` `fundamentals` `policy` `hot_money` |
 | Debate & decision | `bull` `bear` `research_manager` `trader` |
 | Risk trio | `risk_aggressive` `risk_neutral` `risk_conservative` |
 | Other | `quality_gate` `portfolio_manager` |
@@ -348,7 +348,7 @@ Valid role names (anything you omit keeps the quick/deep default):
 Notes:
 
 - **A misspelled role name raises immediately** rather than being ignored — otherwise you would believe the config took effect when it did not.
-- **Identical provider + model share one instance**, so listing seven roles does not open seven connections.
+- **Identical provider + model share one instance**, so listing six roles does not open six connections.
 - Each provider uses **its own** API key variable (`DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` / `ZHIPU_API_KEY` …); a missing one is reported by name.
 - `backend_url` is **not** carried across vendors (it belongs to the main provider); set `backend_url` inside the role entry if you need one.
 - With the `claude_agent_sdk` subscription override on, roles listed in `role_llms` **bypass the subscription and bill per token**; the affected roles are named in a startup warning.
@@ -404,7 +404,7 @@ Starting from v0.2.12, the Dockerfile includes `fonts-noto-cjk` built-in. Simply
 **Q: Docker startup fails with `[Errno 13] Permission denied: /home/appuser/.tradingagents/cache`?**
 Older images did not pre-create the data directory. When the `docker-compose` named volume is mounted, Docker creates it as `root`-owned, but the process inside the container runs as `appuser` and cannot write to it. Starting from v0.2.14, the Dockerfile pre-creates `/home/appuser/.tradingagents` (cache/logs/memory) and sets ownership to `appuser`, so named volumes inherit this ownership. **To upgrade**: after `git pull`, rebuild the image with `docker compose build --no-cache`. If you want to keep the old data volume, first run `docker run --rm -v tradingagents_data:/d alpine chown -R 1000:1000 /d` to fix the ownership; otherwise, simply remove the volume with `docker volume rm tradingagents_data` and rebuild.
 
-**Q: Some analyst reports (Sentiment/News/Fundamentals/Policy/Hot Money/Lock-up Expiry) are blank and not displayed?**
+**Q: Some analyst reports (Sentiment/News/Fundamentals/Policy/Hot Money) are blank and not displayed?**
 These reports are generated after the corresponding Analyst calls data tools. **Empty reports are automatically skipped and not displayed.** The data sources themselves are healthy (Tencent/mootdx/Tonghuashun/Dongcai have been tested and return data). Reports are usually empty because **the selected model has weak tool-call capabilities** (e.g., some lightweight deepseek/minimax models are unstable when calling tools). It is recommended to switch to a model with more stable tool-calls (deepseek-chat / Tongyi / GLM-4 / Claude / GPT, etc.), or retry.
 
 **Q: Why is there no `[google]` extra any more? How do I install Gemini?**
@@ -431,14 +431,13 @@ See `examples/run_cases.py`: It reuses the CLI's `save_report_to_disk()` functio
 AI_stock/
 ├── ai_stock/
 │   ├── agents/
-│   │   ├── analysts/          # 7 analysts
+│   │   ├── analysts/          # 6 analysts
 │   │   │   ├── market_analyst.py
 │   │   │   ├── social_media_analyst.py
 │   │   │   ├── news_analyst.py
 │   │   │   ├── fundamentals_analyst.py
 │   │   │   ├── policy_analyst.py        # A-share specialized
-│   │   │   ├── hot_money_tracker.py     # A-share specialized
-│   │   │   └── lockup_watcher.py        # A-share specialized
+│   │   │   └── hot_money_tracker.py     # A-share specialized
 │   │   ├── researchers/       # Bull / Bear researchers
 │   │   ├── risk_mgmt/         # Aggressive / Conservative / Neutral debaters
 │   │   ├── managers/          # Research Manager + Portfolio Manager

@@ -91,6 +91,11 @@ def create_portfolio_manager(llm):
 
 Be decisive and ground every conclusion in specific evidence from the analysts.{_NO_LEVELS_RULE}{get_language_instruction()}"""
 
+        # Inject evolution context if available
+        evo_ctx = state.get("evolution_context")
+        if evo_ctx:
+            prompt += f"\n\n---\n## 自进化上下文\n{evo_ctx}\n---"
+
         final_trade_decision = invoke_structured_or_freetext(
             structured_llm,
             llm,

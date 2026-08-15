@@ -40,6 +40,7 @@ def test_subcommands_are_still_registered():
     names = {c.name or c.callback.__name__ for c in app.registered_commands}
     assert "analyze" in names
     assert "performance" in names
+    assert "evolve" in names
 
 
 def test_callback_explains_why_it_exists():

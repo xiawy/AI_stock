@@ -25,7 +25,6 @@ from ai_stock.agents.utils.signal_data_tools import (
     get_concept_blocks,
     get_fund_flow,
     get_dragon_tiger_board,
-    get_lockup_expiry,
     get_industry_comparison,
 )
 

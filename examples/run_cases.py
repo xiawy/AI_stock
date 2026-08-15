@@ -135,7 +135,6 @@ def _save_json_summary(
         "fundamentals_report",
         "policy_report",
         "hot_money_report",
-        "lockup_report",
         "investment_plan",
         "trader_investment_plan",
         "final_trade_decision",

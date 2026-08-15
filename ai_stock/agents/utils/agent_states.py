@@ -58,7 +58,6 @@ class AgentState(MessagesState):
     fundamentals_report: Annotated[str, "Report from the Fundamentals Researcher"]
     policy_report: Annotated[str, "Report from the Policy Analyst (A-stock specific)"]
     hot_money_report: Annotated[str, "Report from the Hot Money Tracker (A-stock specific)"]
-    lockup_report: Annotated[str, "Report from the Lockup/Reduction Watcher (A-stock specific)"]
 
     # data quality gate
     data_quality_summary: Annotated[str, "Quality gate assessment of all analyst reports (hard checks + LLM review)"]
@@ -77,3 +76,4 @@ class AgentState(MessagesState):
     ]
     final_trade_decision: Annotated[str, "Final decision made by the Risk Analysts"]
     past_context: Annotated[str, "Memory log context injected at run start (same-ticker decisions + cross-ticker lessons)"]
+    evolution_context: Annotated[str, "Evolution layer context (strategies + episodic memories)"]

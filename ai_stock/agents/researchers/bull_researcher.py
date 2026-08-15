@@ -13,7 +13,6 @@ def create_bull_researcher(llm):
         fundamentals_report = state["fundamentals_report"]
         policy_report = state.get("policy_report", "")
         hot_money_report = state.get("hot_money_report", "")
-        lockup_report = state.get("lockup_report", "")
         data_quality_summary = state.get("data_quality_summary", "")
 
         prompt = f"""You are a Bull Analyst advocating for investing in this A-share (China mainland) stock. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
@@ -23,7 +22,6 @@ A-Share Bull Framework — prioritize these China-specific bullish catalysts:
 - Northbound Capital (北向资金): Sustained net inflow from Hong Kong Stock Connect indicates foreign institutional conviction
 - Hot Money Momentum (游资接力): Consecutive limit-ups with volume confirmation, strong theme attribution (reason tags), sector rotation just beginning
 - Valuation Growth Story: Use forward PE, PEG, and PE digestion timeframe (30x anchor for A-stock growth stocks) to argue the current premium is justified by earnings trajectory
-- Lockup Expiry Cleared: If major lockup periods have passed or insiders are NOT reducing, this removes a key overhang
 
 General bull points:
 - Growth Potential: Market opportunities, revenue projections, and scalability
@@ -39,7 +37,6 @@ Latest news report: {news_report}
 Company fundamentals report: {fundamentals_report}
 Policy analysis report: {policy_report}
 Hot money / capital flow report: {hot_money_report}
-Lockup expiry / insider reduction report: {lockup_report}
 Data quality assessment: {data_quality_summary}
 Conversation history of the debate: {history}
 Last bear argument: {current_response}
@@ -48,6 +45,11 @@ Last bear argument: {current_response}
 
 Deliver a compelling bull argument that integrates A-share market dynamics. Refute the bear's concerns and demonstrate why the bull position holds stronger merit in the Chinese market context.
 """
+
+        # Inject evolution context if available
+        evo_ctx = state.get("evolution_context")
+        if evo_ctx:
+            prompt += f"\n\n---\n## 自进化上下文\n{evo_ctx}\n---"
 
         response = llm.invoke(prompt)
 

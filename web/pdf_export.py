@@ -336,7 +336,6 @@ _REPORT_SECTIONS = [
     ("fundamentals_report", "基本面报告"),
     ("policy_report", "政策分析报告"),
     ("hot_money_report", "游资追踪报告"),
-    ("lockup_report", "解禁/减持报告"),
 ]
 
 

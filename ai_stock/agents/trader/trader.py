@@ -32,7 +32,6 @@ def create_trader(llm):
         # Collect A-stock specific analyst reports
         policy_report = state.get("policy_report", "")
         hot_money_report = state.get("hot_money_report", "")
-        lockup_report = state.get("lockup_report", "")
 
         # Build optional A-stock context block
         astock_context_parts = []
@@ -40,9 +39,10 @@ def create_trader(llm):
             astock_context_parts.append(f"Policy Analysis Report:\n{policy_report}")
         if hot_money_report:
             astock_context_parts.append(f"Hot Money / Capital Flow Report:\n{hot_money_report}")
-        if lockup_report:
-            astock_context_parts.append(f"Lockup Expiry / Insider Reduction Report:\n{lockup_report}")
         astock_context = "\n\n".join(astock_context_parts)
+
+        # Inject evolution context into system message if available
+        evo_ctx = state.get("evolution_context", "")
 
         messages = [
             {
@@ -72,7 +72,7 @@ def create_trader(llm):
                 "role": "user",
                 "content": (
                     f"Based on a comprehensive analysis by a team of analysts (including market, "
-                    f"sentiment, news, fundamentals, policy, capital flow, and lockup/reduction "
+                    f"sentiment, news, fundamentals, policy, and capital flow "
                     f"specialists), here is an investment plan for {company_name}.\n\n"
                     f"{instrument_context}\n\n"
                     f"Proposed Investment Plan:\n{investment_plan}\n\n"
@@ -82,6 +82,9 @@ def create_trader(llm):
                 ),
             },
         ]
+
+        if evo_ctx:
+            messages[0]["content"] += f"\n\n---\n## 自进化上下文\n{evo_ctx}\n---"
 
         trader_plan = invoke_structured_or_freetext(
             structured_llm,

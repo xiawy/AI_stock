@@ -222,7 +222,6 @@ _REPORT_TEXT_KEYS = (
     "fundamentals_report",
     "policy_report",
     "hot_money_report",
-    "lockup_report",
     "data_quality_summary",
     "trader_investment_plan",
     "trader_investment_decision",

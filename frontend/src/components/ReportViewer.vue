@@ -128,7 +128,6 @@ const analystSections = [
   { key: 'fundamentals_report', title: '📋 基本面' },
   { key: 'policy_report', title: '🏛️ 政策分析' },
   { key: 'hot_money_report', title: '🔥 游资追踪' },
-  { key: 'lockup_report', title: '🔒 解禁/减持' },
 ].filter((s) => state.value[s.key])
 
 const elapsedText = computed(() => {

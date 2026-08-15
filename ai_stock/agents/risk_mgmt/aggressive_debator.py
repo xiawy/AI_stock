@@ -15,7 +15,6 @@ def create_aggressive_debator(llm):
         fundamentals_report = state["fundamentals_report"]
         policy_report = state.get("policy_report", "")
         hot_money_report = state.get("hot_money_report", "")
-        lockup_report = state.get("lockup_report", "")
 
         trader_decision = state["trader_investment_plan"]
 
@@ -41,10 +40,14 @@ Latest News Report: {news_report}
 Company Fundamentals Report: {fundamentals_report}
 Policy Analysis Report: {policy_report}
 Hot Money / Capital Flow Report: {hot_money_report}
-Lockup Expiry / Insider Reduction Report: {lockup_report}
 Conversation history: {history} Last conservative argument: {current_conservative_response} Last neutral argument: {current_neutral_response}. If no responses yet, present your own argument.
 
 Engage actively, debate persuasively, and assert why aggressive positioning is optimal for this A-share opportunity. Output conversationally without special formatting."""
+
+        # Inject evolution context if available
+        evo_ctx = state.get("evolution_context")
+        if evo_ctx:
+            prompt += f"\n\n---\n## 自进化上下文\n{evo_ctx}\n---"
 
         response = llm.invoke(prompt)
 

@@ -357,7 +357,7 @@ config = {
 
 | 分组 | 角色名 |
 |------|--------|
-| 7 个分析师 | `market` `social` `news` `fundamentals` `policy` `hot_money` `lockup` |
+| 6 个分析师 | `market` `social` `news` `fundamentals` `policy` `hot_money` |
 | 辩论与决策 | `bull` `bear` `research_manager` `trader` |
 | 风险三方 | `risk_aggressive` `risk_neutral` `risk_conservative` |
 | 其他 | `quality_gate` `portfolio_manager` |
@@ -365,7 +365,7 @@ config = {
 几点说明：
 
 - **角色名写错会直接报错**，不会静默忽略——否则你会以为配置生效了，实际没有。
-- **相同的 provider + model 只建一个实例**，写 7 个角色不会开 7 条连接。
+- **相同的 provider + model 只建一个实例**，写 6 个角色不会开 6 条连接。
 - 每家 provider 用**自己的** API Key 环境变量（`DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` / `ZHIPU_API_KEY` …），缺哪个会指名报出来。
 - 换了 provider 时**不会**把 `backend_url` 带过去（那是给主 provider 配的端点），需要的话在该角色里单独写 `backend_url`。
 - 同时开着 `claude_agent_sdk` 订阅覆盖时，`role_llms` 里配的角色会**绕开订阅按 token 计费**，启动时会点名警告是哪几个。
@@ -424,7 +424,7 @@ v0.2.12 起 Dockerfile 已内置 `fonts-noto-cjk`，重新 `docker build` 即可
 **Q: Docker 启动报 `[Errno 13] Permission denied: /home/appuser/.tradingagents/cache`？**
 旧版镜像里没预建数据目录，`docker-compose` 的命名卷挂上来时被 Docker 建成 `root` 属主，而容器内进程以 `appuser` 运行、写不进去。v0.2.14 起 Dockerfile 已预建 `/home/appuser/.tradingagents`（cache/logs/memory）并归属 appuser，命名卷会继承该属主。**升级方式**：`git pull` 后 `docker compose build --no-cache` 重建镜像；若想保留旧数据卷可先 `docker run --rm -v tradingagents_data:/d alpine chown -R 1000:1000 /d` 修正属主，否则 `docker volume rm tradingagents_data` 后重建即可。
 
-**Q: 部分分析师报告（情绪/新闻/基本面/政策/游资/解禁）空白不显示？**
+**Q: 部分分析师报告（情绪/新闻/基本面/政策/游资）空白不显示？**
 这些报告由对应 Analyst 调用数据工具后生成，**空报告会被自动跳过不显示**。数据源本身是健康的（腾讯/mootdx/同花顺/东财实测出数）；报告为空通常是**所选模型 tool-call 能力弱**（如部分 deepseek/minimax 轻量模型不稳定地调用工具）。建议换用 tool-call 更稳的模型（deepseek-chat / 通义 / GLM-4 / Claude / GPT 等），或重试。
 
 **Q: 为什么没有 `[google]` extra 了？装 Gemini 报 httpx 冲突怎么办？**
@@ -454,14 +454,13 @@ pip install "google-genai>=1.53.0" "httpx>=0.28.1"
 AI_stock/
 ├── ai_stock/
 │   ├── agents/
-│   │   ├── analysts/          # 7 个分析师
+│   │   ├── analysts/          # 6 个分析师
 │   │   │   ├── market_analyst.py
 │   │   │   ├── social_media_analyst.py
 │   │   │   ├── news_analyst.py
 │   │   │   ├── fundamentals_analyst.py
 │   │   │   ├── policy_analyst.py        # A 股特化
-│   │   │   ├── hot_money_tracker.py     # A 股特化
-│   │   │   └── lockup_watcher.py        # A 股特化
+│   │   │   └── hot_money_tracker.py     # A 股特化
 │   │   ├── researchers/       # Bull / Bear 研究员
 │   │   ├── risk_mgmt/         # 激进 / 保守 / 中立 辩手
 │   │   ├── managers/          # Research Manager + Portfolio Manager

@@ -1,7 +1,7 @@
 # AI Stock
 
 ## 项目概述
-基于 [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)（65K Stars）的 A 股深度特化 fork。多 Agent 投研框架，7 个 Analyst 角色通过 Bull/Bear 辩论 + 三方风险辩论生成投资报告。
+基于 [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)（65K Stars）的 A 股深度特化 fork。多 Agent 投研框架，6 个 Analyst 角色通过 Bull/Bear 辩论 + 三方风险辩论生成投资报告。
 
 - **仓库**: https://github.com/xiawy/AI_stock
 - **协议**: Apache 2.0
@@ -24,13 +24,25 @@
 | 财联社 cls.cn | HTTP | 全球财经快讯 |
 | 百度股市通 | HTTP (gushitong.baidu) | 概念板块归属（资金流已迁移至东财push2） |
 
-### Agent 角色（7 个）
-原版 4 个（市场/情绪/新闻/基本面）+ A 股特化 3 个（政策分析师/游资追踪/解禁监控）
+### Agent 角色（6 个）
+原版 4 个（市场/情绪/新闻/基本面）+ A 股特化 2 个（政策分析师/游资追踪）
+
+### 自进化层（v0.5.15 新增）
+每个 Agent 节点透明包裹 EvolutionWrapper，分析前注入策略+情节记忆到 prompt，分析后写入 episode。
+
+- **三层记忆**：语义记忆（custom_strategies/*.md）、情节记忆（Chroma 向量存储 + JSON）、工作记忆（会话临时）
+- **复盘引擎**：定期读取 episodes，LLM 生成改进建议，写入 learnings/
+- **本地进化器**：生成策略修改草稿，进入审核队列，**不自动应用**
+- **全局协同层**：MarketRegimeDetector（CSI 300 市场状态分类）→ WeightAllocator（按状态调整 Agent 权重）→ GlobalCoordinator（跨 Agent 冲突检测 + 全局报告）
+- **可选依赖**：`pip install -e '.[evolution]'`（chromadb）。不装则 `evolution_enabled=False` 自动降级
+- **CLI**：`ai-stock evolve [--agent market] [--dry-run/--no-dry-run]`
 
 ### 关键路径
 - `ai_stock/dataflows/a_stock.py` — A 股数据 vendor，所有数据获取入口
 - `ai_stock/dataflows/utils.py` — `safe_ticker_component` 路径安全校验 + 中文 ticker 自动解析
-- `ai_stock/agents/` — 7 个 Analyst + Bull/Bear 辩论逻辑
+- `ai_stock/agents/` — 6 个 Analyst + Bull/Bear 辩论逻辑
+- `ai_stock/evolution/` — 自进化层（三层记忆 + EvolutionWrapper + 复盘引擎 + 全局协同）
+- `custom_strategies/` — 每个 Agent 的策略文件目录（.md）
 - `backend/` — FastAPI 后端（JWT 认证 / 分析任务 / 股票 API）
 - `frontend/` — Vue 3 + Vite + Element Plus 前端
 - `web/` — 引擎支撑模块（runner/progress/history/pdf_export，无 UI 依赖，被 backend 复用）
@@ -101,7 +113,7 @@ deepseek-v4-flash 等模型在 tool call 时可能返回中文股票名而非 6 
 
 ### 测试
 **干净 clone（`pip install -e .` 不带 `[agentsdk]`）跑 `pytest tests/` 应当是
-361 passed / 13 skipped / **0 failed**。出现 failed 就是真回归。**
+368 passed / 14 skipped / **0 failed**。出现 failed 就是真回归。**
 需要可选依赖的用例用 `requires_sdk` 标记跳过——⚠️ **占位类型绝不要用 `Exception`
 基类**：`ClaudeSDKError` 曾被占位成 `Exception`，进 `_FALLBACK_ERRORS` 后让"订阅凭据
 失效不得降级到计费 provider"这条护栏彻底失效（v0.5.4 修）。

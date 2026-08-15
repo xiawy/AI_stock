@@ -7,7 +7,6 @@ REPORT_FIELDS = {
     "fundamentals": "fundamentals_report",
     "policy": "policy_report",
     "hot_money": "hot_money_report",
-    "lockup": "lockup_report",
 }
 
 ANALYST_NAMES = {
@@ -17,7 +16,6 @@ ANALYST_NAMES = {
     "fundamentals": "基本面分析师",
     "policy": "政策分析师",
     "hot_money": "游资追踪师",
-    "lockup": "解禁监控师",
 }
 
 MIN_REPORT_LENGTH = 200
@@ -65,7 +63,7 @@ def _hard_check_report(analyst_type: str, report: str) -> tuple:
 
 
 def _build_review_prompt(
-    reports: dict, trade_date: str, ticker: str
+    reports: dict, trade_date: str, ticker: str, evolution_context: str = ""
 ) -> str:
     """Build the LLM review prompt."""
     report_sections = []
@@ -80,7 +78,7 @@ def _build_review_prompt(
 
     all_reports = "\n\n".join(report_sections)
 
-    return f"""你是数据质量审核员。以下是 7 位分析师对 {ticker} 在 {trade_date} 的研究报告。请逐一审核。
+    result = f"""你是数据质量审核员。以下是 6 位分析师对 {ticker} 在 {trade_date} 的研究报告。请逐一审核。
 
 {all_reports}
 
@@ -100,7 +98,6 @@ def _build_review_prompt(
 | 基本面分析师 | ... | ... | ... | ... |
 | 政策分析师 | ... | ... | ... | ... |
 | 游资追踪师 | ... | ... | ... | ... |
-| 解禁监控师 | ... | ... | ... | ... |
 
 **整体评级**: A/B/C/D/F
 **数据可信度**: 高/中/低
@@ -113,6 +110,9 @@ def _build_review_prompt(
 - D: 大量缺失或主要为失败信息，可信度低
 - F: 报告为空或完全无效
 """
+    if evolution_context:
+        result += f"\n\n---\n## 自进化上下文\n{evolution_context}\n---"
+    return result
 
 
 def create_quality_gate(llm):
@@ -149,7 +149,10 @@ def create_quality_gate(llm):
         llm_review = ""
         if fail_count < 4:
             try:
-                review_prompt = _build_review_prompt(reports, trade_date, ticker)
+                review_prompt = _build_review_prompt(
+                    reports, trade_date, ticker,
+                    evolution_context=state.get("evolution_context", ""),
+                )
                 response = llm.invoke(review_prompt)
                 llm_review = response.content
             except Exception as e:

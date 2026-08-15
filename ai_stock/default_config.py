@@ -91,6 +91,19 @@ DEFAULT_CONFIG = {
         "news_data": "a_stock",              # Options: a_stock, alpha_vantage, yfinance
         "signal_data": "a_stock",            # A-stock only: topic attribution, capital flow, consensus
     },
+    # ── Evolution system（自进化层）──
+    "evolution_enabled": True,
+    "evolution_base_dir": os.getenv(
+        "TRADINGAGENTS_EVOLUTION_DIR",
+        os.path.join(_TRADINGAGENTS_HOME, "evolution_data"),
+    ),
+    "custom_strategies_dir": os.path.join(
+        os.path.dirname(__file__), "..", "custom_strategies"
+    ),
+    "learnings_dir": os.path.join(_TRADINGAGENTS_HOME, "learnings"),
+    "evolution_top_k_episodes": 3,  # Chroma retrieval count per agent
+    "review_schedule": ["Tue", "Thu", "Sun"],  # 3x/week post-market
+    "review_volatility_trigger": True,  # Auto-trigger on volatility spike
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {
         # Example: "get_stock_data": "alpha_vantage",  # Override category default

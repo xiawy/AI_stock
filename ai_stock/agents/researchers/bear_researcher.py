@@ -13,14 +13,12 @@ def create_bear_researcher(llm):
         fundamentals_report = state["fundamentals_report"]
         policy_report = state.get("policy_report", "")
         hot_money_report = state.get("hot_money_report", "")
-        lockup_report = state.get("lockup_report", "")
         data_quality_summary = state.get("data_quality_summary", "")
 
         prompt = f"""You are a Bear Analyst making the case against investing in this A-share (China mainland) stock. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators unique to the Chinese market. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
 
 A-Share Bear Framework — prioritize these China-specific risk factors:
 - Policy Headwinds: Sudden regulatory crackdowns (e.g. industry rectification, antitrust), CSRC window guidance (窗口指导), sector-wide trading restrictions, or political risk signals
-- Lockup & Insider Selling: Upcoming lockup expiry dates with large overhang, controlling shareholders in pre-disclosure reduction windows, equity pledge liquidation risk
 - Hot Money Withdrawal (游资撤退): Volume divergence after limit-ups (放量滞涨), declining limit-up board count (连板断裂), sector rotation moving away from this theme
 - Valuation Bubble: PE far above 30x A-stock growth anchor with EPS unable to digest within 3 years, PEG > 2 indicating overpriced growth, retail-driven speculative premium
 - T+1 Trap: After a sharp rally, buyers today cannot exit until tomorrow — if sentiment reverses overnight or a gap-down opens, losses are locked in
@@ -40,7 +38,6 @@ Latest news report: {news_report}
 Company fundamentals report: {fundamentals_report}
 Policy analysis report: {policy_report}
 Hot money / capital flow report: {hot_money_report}
-Lockup expiry / insider reduction report: {lockup_report}
 Data quality assessment: {data_quality_summary}
 Conversation history of the debate: {history}
 Last bull argument: {current_response}
@@ -49,6 +46,11 @@ Last bull argument: {current_response}
 
 Deliver a compelling bear argument grounded in A-share market realities. Refute the bull's claims and demonstrate the risks of investing in this stock within the Chinese regulatory and market structure.
 """
+
+        # Inject evolution context if available
+        evo_ctx = state.get("evolution_context")
+        if evo_ctx:
+            prompt += f"\n\n---\n## 自进化上下文\n{evo_ctx}\n---"
 
         response = llm.invoke(prompt)
 

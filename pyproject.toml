@@ -45,6 +45,8 @@ dependencies = [
 # 依赖链为 claude-agent-sdk → mcp → httpx2，**不碰 httpx**，故与 mootdx 的
 # httpx<0.26 无冲突（已 uv lock 实测）——与 #87 移除的 [google] 情况不同。
 agentsdk = ["claude-agent-sdk>=0.2.82"]
+# 自进化层：Chroma 向量数据库 + 嵌入模型。不装则 evolution_enabled 自动降级为 False。
+evolution = ["chromadb>=1.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/xiawy/AI_stock"
