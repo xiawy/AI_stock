@@ -73,6 +73,14 @@ DEFAULT_CONFIG = {
     # Checkpoint/resume: when True, LangGraph saves state after each node
     # so a crashed run can resume from the last successful step.
     "checkpoint_enabled": False,
+    # O1: run the analyst layer in parallel (fan-out from START, fan-in at
+    # the Quality Gate). Each analyst gets a private message channel, so
+    # concurrent tool loops can't pollute each other. Domestic data sources
+    # are serialized by locks/throttles in dataflows/a_stock.py (eastmoney
+    # global min-interval + mootdx TCP lock + OHLCV cache lock), so parallel
+    # tool calls stay inside vendor rate limits. Set False to restore the
+    # sequential analyst chain.
+    "parallel_analysts": True,
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
     "output_language": "Chinese",

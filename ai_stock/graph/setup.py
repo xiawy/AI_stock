@@ -1,15 +1,18 @@
 # TradingAgents/graph/setup.py
 
+import logging
 from typing import Any, Dict, Optional
 from pathlib import Path
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
 from ai_stock.agents import *
-from ai_stock.agents.utils.agent_states import AgentState
+from ai_stock.agents.utils.agent_states import AgentState, ANALYST_CHANNEL_KEYS
 from ai_stock.default_config import DEFAULT_CONFIG
 
 from .conditional_logic import ConditionalLogic
+
+logger = logging.getLogger(__name__)
 
 # Lazy imports for evolution system (only loaded when enabled)
 _evolution_imported = False
@@ -49,6 +52,63 @@ ROLE_KEYS = (
     "quality_gate", "bull", "bear", "research_manager", "trader",
     "risk_aggressive", "risk_neutral", "risk_conservative", "portfolio_manager",
 )
+
+
+# ---------------------------------------------------------------------------
+# O1 并行化辅助：让分析师/工具节点读写各自的私有消息通道
+# ---------------------------------------------------------------------------
+
+def _channel_adapter(channel_key: str, node_fn):
+    """Wrap an analyst node so it reads/writes its private message channel.
+
+    入口：把私有通道内容映射到 ``messages`` 键喂给节点（analyst 与 evolution
+    wrapper 只认 messages）；出口：节点产出的 messages 写回私有通道；若是
+    最终报告（无 tool_calls），再同步一条到主通道，供进度展示/日志/下游
+    调试使用。主通道的同步消息不会被其它分析师读到（它们只读各自通道），
+    所以不会产生串行模式下的上下文串扰。
+    """
+
+    def wrapped(state):
+        local = dict(state)
+        local["messages"] = list(state.get(channel_key) or [])
+        update = node_fn(local) or {}
+        out = dict(update)
+        msgs = out.pop("messages", None)
+        if msgs is not None:
+            out[channel_key] = msgs
+            if msgs and not getattr(msgs[-1], "tool_calls", None):
+                out["messages"] = [msgs[-1]]
+        return out
+
+    return wrapped
+
+
+def _tool_channel_adapter(channel_key: str, tool_node):
+    """Wrap a ToolNode so tool results land in the analyst's private channel."""
+
+    def wrapped(state):
+        local = dict(state)
+        local["messages"] = list(state.get(channel_key) or [])
+        update = tool_node.invoke(local) or {}
+        out = dict(update)
+        msgs = out.pop("messages", None)
+        if msgs is not None:
+            out[channel_key] = msgs
+        return out
+
+    return wrapped
+
+
+def _channel_route(channel_key: str, tools_name: str, sink: str):
+    """Route on the private channel's last message instead of ``messages``."""
+
+    def route(state):
+        msgs = state.get(channel_key) or []
+        if msgs and getattr(msgs[-1], "tool_calls", None):
+            return tools_name
+        return sink
+
+    return route
 
 
 class GraphSetup:
@@ -102,8 +162,15 @@ class GraphSetup:
                 chroma_client=client,
             )
             return EvolutionWrapper(role, node_fn, memory)
-        except Exception:
+        except Exception as e:
             # If evolution setup fails (e.g. chromadb not installed), fall back
+            # to the bare node — but say so: silently losing the evolution layer
+            # is indistinguishable from "it worked" in the logs (B11).
+            logger.warning(
+                "evolution wrapper unavailable for role %r, running bare node: %s",
+                role,
+                e,
+            )
             return node_fn
 
     def setup_graph(
@@ -158,8 +225,11 @@ class GraphSetup:
             delete_nodes["hot_money"] = create_msg_delete()
             tool_nodes["hot_money"] = self.tool_nodes["hot_money"]
 
-        # Create quality gate node
-        quality_gate_node = self._wrap_evolution("quality_gate", create_quality_gate(self.llm_for("quality_gate")))
+        # Create quality gate node（B1：感知本次选中的分析师，动态阈值/提示词）
+        quality_gate_node = self._wrap_evolution(
+            "quality_gate",
+            create_quality_gate(self.llm_for("quality_gate"), selected_analysts),
+        )
 
         # Create researcher and manager nodes
         bull_researcher_node = self._wrap_evolution("bull", create_bull_researcher(self.llm_for("bull")))
@@ -176,13 +246,31 @@ class GraphSetup:
         # Create workflow
         workflow = StateGraph(AgentState)
 
+        # O1: analysts run in parallel by default. Each analyst gets a
+        # private message channel ({role}_messages) so concurrent tool loops
+        # can't pollute each other; the Quality Gate acts as the fan-in
+        # barrier and only fires after every analyst chain finishes.
+        parallel = bool(self._config.get("parallel_analysts", True))
+
         # Add analyst nodes to the graph
-        for analyst_type, node in analyst_nodes.items():
-            workflow.add_node(f"{analyst_type.capitalize()} Analyst", node)
-            workflow.add_node(
-                f"Msg Clear {analyst_type.capitalize()}", delete_nodes[analyst_type]
-            )
-            workflow.add_node(f"tools_{analyst_type}", tool_nodes[analyst_type])
+        if parallel:
+            for analyst_type, node in analyst_nodes.items():
+                channel = ANALYST_CHANNEL_KEYS[analyst_type]
+                workflow.add_node(
+                    f"{analyst_type.capitalize()} Analyst",
+                    _channel_adapter(channel, node),
+                )
+                workflow.add_node(
+                    f"tools_{analyst_type}",
+                    _tool_channel_adapter(channel, tool_nodes[analyst_type]),
+                )
+        else:
+            for analyst_type, node in analyst_nodes.items():
+                workflow.add_node(f"{analyst_type.capitalize()} Analyst", node)
+                workflow.add_node(
+                    f"Msg Clear {analyst_type.capitalize()}", delete_nodes[analyst_type]
+                )
+                workflow.add_node(f"tools_{analyst_type}", tool_nodes[analyst_type])
 
         # Add quality gate + other nodes
         workflow.add_node("Quality Gate", quality_gate_node)
@@ -196,30 +284,49 @@ class GraphSetup:
         workflow.add_node("Portfolio Manager", portfolio_manager_node)
 
         # Define edges
-        # Start with the first analyst
-        first_analyst = selected_analysts[0]
-        workflow.add_edge(START, f"{first_analyst.capitalize()} Analyst")
+        if parallel:
+            # START fans out to every selected analyst; each analyst loops
+            # through its own tools until it emits a final tool-call-free
+            # message, then hands off to the Quality Gate. LangGraph's barrier
+            # semantics hold the gate until every chain has arrived.
+            for analyst_type in selected_analysts:
+                analyst_name = f"{analyst_type.capitalize()} Analyst"
+                tools_name = f"tools_{analyst_type}"
+                workflow.add_edge(START, analyst_name)
+                workflow.add_conditional_edges(
+                    analyst_name,
+                    _channel_route(
+                        ANALYST_CHANNEL_KEYS[analyst_type], tools_name, "Quality Gate"
+                    ),
+                    [tools_name, "Quality Gate"],
+                )
+                workflow.add_edge(tools_name, analyst_name)
+        else:
+            # Sequential chain (original behaviour, config parallel_analysts=False)
+            # Start with the first analyst
+            first_analyst = selected_analysts[0]
+            workflow.add_edge(START, f"{first_analyst.capitalize()} Analyst")
 
-        # Connect analysts in sequence
-        for i, analyst_type in enumerate(selected_analysts):
-            current_analyst = f"{analyst_type.capitalize()} Analyst"
-            current_tools = f"tools_{analyst_type}"
-            current_clear = f"Msg Clear {analyst_type.capitalize()}"
+            # Connect analysts in sequence
+            for i, analyst_type in enumerate(selected_analysts):
+                current_analyst = f"{analyst_type.capitalize()} Analyst"
+                current_tools = f"tools_{analyst_type}"
+                current_clear = f"Msg Clear {analyst_type.capitalize()}"
 
-            # Add conditional edges for current analyst
-            workflow.add_conditional_edges(
-                current_analyst,
-                getattr(self.conditional_logic, f"should_continue_{analyst_type}"),
-                [current_tools, current_clear],
-            )
-            workflow.add_edge(current_tools, current_analyst)
+                # Add conditional edges for current analyst
+                workflow.add_conditional_edges(
+                    current_analyst,
+                    getattr(self.conditional_logic, f"should_continue_{analyst_type}"),
+                    [current_tools, current_clear],
+                )
+                workflow.add_edge(current_tools, current_analyst)
 
-            # Connect to next analyst or to Bull Researcher if this is the last analyst
-            if i < len(selected_analysts) - 1:
-                next_analyst = f"{selected_analysts[i+1].capitalize()} Analyst"
-                workflow.add_edge(current_clear, next_analyst)
-            else:
-                workflow.add_edge(current_clear, "Quality Gate")
+                # Connect to next analyst or to Bull Researcher if this is the last analyst
+                if i < len(selected_analysts) - 1:
+                    next_analyst = f"{selected_analysts[i+1].capitalize()} Analyst"
+                    workflow.add_edge(current_clear, next_analyst)
+                else:
+                    workflow.add_edge(current_clear, "Quality Gate")
 
         workflow.add_edge("Quality Gate", "Bull Researcher")
 

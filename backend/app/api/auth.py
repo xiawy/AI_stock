@@ -22,7 +22,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
     status_code=status.HTTP_201_CREATED,
     summary="用户注册",
 )
-def register(payload: UserCreate, db: Session = Depends(get_db)) -> User:
+def register(payload: UserCreate, db: Session = Depends(get_db)) -> UserResponse:
     exists = (
         db.query(User)
         .filter(or_(User.username == payload.username, User.email == payload.email))
@@ -81,5 +81,5 @@ def logout(current_user: User = Depends(get_current_user)) -> dict:
 
 
 @router.get("/me", response_model=UserResponse, summary="获取当前用户信息")
-def me(current_user: User = Depends(get_current_user)) -> User:
+def me(current_user: User = Depends(get_current_user)) -> UserResponse:
     return current_user

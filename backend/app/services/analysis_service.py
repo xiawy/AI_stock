@@ -123,7 +123,11 @@ class AnalysisTaskManager:
         """
         from ai_stock.default_config import DEFAULT_CONFIG
 
-        config = DEFAULT_CONFIG.copy()
+        # deepcopy（O4）：浅拷贝下嵌套 dict（role_llms/tool_vendors…）与全局
+        # 共享，多任务并发时一次定制会泄漏进其它任务。
+        import copy
+
+        config = copy.deepcopy(DEFAULT_CONFIG)
         config["data_vendors"] = {
             "core_stock_apis": "a_stock",
             "technical_indicators": "a_stock",

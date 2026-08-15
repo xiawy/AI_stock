@@ -1,5 +1,6 @@
 
 from typing import Optional
+import copy
 import datetime
 import os
 import typer
@@ -58,6 +59,8 @@ class MessageBuffer:
         "social": "Social Analyst",
         "news": "News Analyst",
         "fundamentals": "Fundamentals Analyst",
+        "policy": "Policy Analyst",
+        "hot_money": "Hot Money Analyst",
     }
 
     # Report section mapping: section -> (analyst_key for filtering, finalizing_agent)
@@ -68,6 +71,8 @@ class MessageBuffer:
         "sentiment_report": ("social", "Social Analyst"),
         "news_report": ("news", "News Analyst"),
         "fundamentals_report": ("fundamentals", "Fundamentals Analyst"),
+        "policy_report": ("policy", "Policy Analyst"),
+        "hot_money_report": ("hot_money", "Hot Money Analyst"),
         "investment_plan": (None, "Research Manager"),
         "trader_investment_plan": (None, "Trader"),
         "final_trade_decision": (None, "Portfolio Manager"),
@@ -176,6 +181,8 @@ class MessageBuffer:
                 "sentiment_report": "Social Sentiment",
                 "news_report": "News Analysis",
                 "fundamentals_report": "Fundamentals Analysis",
+                "policy_report": "Policy Analysis",
+                "hot_money_report": "Hot Money / Capital Flow",
                 "investment_plan": "Research Team Decision",
                 "trader_investment_plan": "Trading Team Plan",
                 "final_trade_decision": "Portfolio Management Decision",
@@ -191,7 +198,14 @@ class MessageBuffer:
         report_parts = []
 
         # Analyst Team Reports - use .get() to handle missing sections
-        analyst_sections = ["market_report", "sentiment_report", "news_report", "fundamentals_report"]
+        analyst_sections = [
+            "market_report",
+            "sentiment_report",
+            "news_report",
+            "fundamentals_report",
+            "policy_report",
+            "hot_money_report",
+        ]
         if any(self.report_sections.get(section) for section in analyst_sections):
             report_parts.append("## Analyst Team Reports")
             if self.report_sections.get("market_report"):
@@ -209,6 +223,14 @@ class MessageBuffer:
             if self.report_sections.get("fundamentals_report"):
                 report_parts.append(
                     f"### Fundamentals Analysis\n{self.report_sections['fundamentals_report']}"
+                )
+            if self.report_sections.get("policy_report"):
+                report_parts.append(
+                    f"### Policy Analysis\n{self.report_sections['policy_report']}"
+                )
+            if self.report_sections.get("hot_money_report"):
+                report_parts.append(
+                    f"### Hot Money / Capital Flow\n{self.report_sections['hot_money_report']}"
                 )
 
         # Research Team Reports
@@ -289,6 +311,8 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
             "Social Analyst",
             "News Analyst",
             "Fundamentals Analyst",
+            "Policy Analyst",
+            "Hot Money Analyst",
         ],
         "Research Team": ["Bull Researcher", "Bear Researcher", "Research Manager"],
         "Trading Team": ["Trader"],
@@ -799,18 +823,22 @@ def update_research_team_status(status):
 
 
 # Ordered list of analysts for status transitions
-ANALYST_ORDER = ["market", "social", "news", "fundamentals"]
+ANALYST_ORDER = ["market", "social", "news", "fundamentals", "policy", "hot_money"]
 ANALYST_AGENT_NAMES = {
     "market": "Market Analyst",
     "social": "Social Analyst",
     "news": "News Analyst",
     "fundamentals": "Fundamentals Analyst",
+    "policy": "Policy Analyst",
+    "hot_money": "Hot Money Analyst",
 }
 ANALYST_REPORT_MAP = {
     "market": "market_report",
     "social": "sentiment_report",
     "news": "news_report",
     "fundamentals": "fundamentals_report",
+    "policy": "policy_report",
+    "hot_money": "hot_money_report",
 }
 
 
@@ -937,7 +965,9 @@ def run_analysis(checkpoint: bool = False):
     # Create config with selected research depth
     # LLM settings (provider / model / backend_url) come from DEFAULT_CONFIG
     # which reads them from .env — no per-run override needed.
-    config = DEFAULT_CONFIG.copy()
+    # deepcopy：浅拷贝下嵌套 dict（role_llms/tool_vendors…）与全局共享，
+    # 一次定制会泄漏进同进程后续所有 run（O4）。
+    config = copy.deepcopy(DEFAULT_CONFIG)
     config["max_debate_rounds"] = selections["research_depth"]
     config["max_risk_discuss_rounds"] = selections["research_depth"]
     config["market_lookback_days"] = selections.get("market_lookback_days")

@@ -14,6 +14,8 @@ ANALYST_ORDER = [
     ("Social Media Analyst", AnalystType.SOCIAL),
     ("News Analyst", AnalystType.NEWS),
     ("Fundamentals Analyst", AnalystType.FUNDAMENTALS),
+    ("Policy Analyst (A股政策)", AnalystType.POLICY),
+    ("Hot Money Tracker (游资/资金流)", AnalystType.HOT_MONEY),
 ]
 
 

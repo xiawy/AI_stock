@@ -63,11 +63,20 @@ def _hard_check_report(analyst_type: str, report: str) -> tuple:
 
 
 def _build_review_prompt(
-    reports: dict, trade_date: str, ticker: str, evolution_context: str = ""
+    reports: dict,
+    trade_date: str,
+    ticker: str,
+    evolution_context: str = "",
+    active_analysts: "set | None" = None,
 ) -> str:
-    """Build the LLM review prompt."""
+    """Build the LLM review prompt (only covering the selected analysts)."""
+    active = {
+        analyst_type: field
+        for analyst_type, field in REPORT_FIELDS.items()
+        if active_analysts is None or analyst_type in active_analysts
+    }
     report_sections = []
-    for analyst_type, field in REPORT_FIELDS.items():
+    for analyst_type, field in active.items():
         name = ANALYST_NAMES[analyst_type]
         content = reports.get(field, "（未运行）")
         if not content:
@@ -77,8 +86,12 @@ def _build_review_prompt(
         report_sections.append(f"### {name} ({analyst_type})\n{content}")
 
     all_reports = "\n\n".join(report_sections)
+    table_rows = "\n".join(
+        f"| {ANALYST_NAMES[a]} | A/B/C/D/F | 是否匹配交易日 | 列出缺失的必采项 | 简要说明 |"
+        for a in active
+    )
 
-    result = f"""你是数据质量审核员。以下是 6 位分析师对 {ticker} 在 {trade_date} 的研究报告。请逐一审核。
+    result = f"""你是数据质量审核员。以下是 {len(active)} 位分析师对 {ticker} 在 {trade_date} 的研究报告。请逐一审核。
 
 {all_reports}
 
@@ -92,12 +105,7 @@ def _build_review_prompt(
 
 | 分析师 | 评级 | 数据时效 | 缺失项 | 备注 |
 |--------|------|----------|--------|------|
-| 技术分析师 | A/B/C/D/F | 是否匹配交易日 | 列出缺失的必采项 | 简要说明 |
-| 情绪分析师 | ... | ... | ... | ... |
-| 新闻分析师 | ... | ... | ... | ... |
-| 基本面分析师 | ... | ... | ... | ... |
-| 政策分析师 | ... | ... | ... | ... |
-| 游资追踪师 | ... | ... | ... | ... |
+{table_rows}
 
 **整体评级**: A/B/C/D/F
 **数据可信度**: 高/中/低
@@ -115,24 +123,37 @@ def _build_review_prompt(
     return result
 
 
-def create_quality_gate(llm):
+def create_quality_gate(llm, active_analysts=None):
     """Factory for the data quality gate node.
 
-    Sits between the last analyst Msg Clear and Bull Researcher.
-    Layer 1: hard checks (code). Layer 2: LLM review (one call).
-    Writes data_quality_summary to state for downstream consumers.
+    Sits between the last analyst (parallel fan-in or last Msg Clear) and
+    Bull Researcher. Layer 1: hard checks (code). Layer 2: LLM review
+    (one call). Writes data_quality_summary to state for downstream
+    consumers.
+
+    B1: ``active_analysts`` 是本次运行选中的分析师列表（None = 全部 6 个，
+    向后兼容）。只审选中者；否则少选分析师时，“未运行”的报告会把
+    fail_count 顶过阈值，LLM 复审被永久跳过。
     """
+    active = (
+        set(active_analysts) if active_analysts is not None else set(REPORT_FIELDS)
+    )
+    active_fields = {
+        analyst_type: field
+        for analyst_type, field in REPORT_FIELDS.items()
+        if analyst_type in active
+    }
 
     def quality_gate_node(state) -> dict:
         trade_date = state["trade_date"]
         ticker = state["company_of_interest"]
 
         reports = {}
-        for analyst_type, field in REPORT_FIELDS.items():
+        for analyst_type, field in active_fields.items():
             reports[field] = state.get(field, "")
 
         hard_results = {}
-        for analyst_type, field in REPORT_FIELDS.items():
+        for analyst_type, field in active_fields.items():
             grade, detail = _hard_check_report(analyst_type, reports[field])
             hard_results[analyst_type] = (grade, detail)
 
@@ -146,12 +167,19 @@ def create_quality_gate(llm):
             1 for _, (g, _) in hard_results.items() if g in ("F", "D")
         )
 
+        # 阈值随选中人数缩放（B1）：全选 6 人时 max(2, 4)=4 → <4，与原行为
+        # 一致；选 1~3 人时恒为 2 → 任一失败仍会触发 LLM 复审。
+        review_threshold = max(2, len(active_fields) // 2 + 1)
+
         llm_review = ""
-        if fail_count < 4:
+        if fail_count < review_threshold:
             try:
                 review_prompt = _build_review_prompt(
-                    reports, trade_date, ticker,
+                    reports,
+                    trade_date,
+                    ticker,
                     evolution_context=state.get("evolution_context", ""),
+                    active_analysts=active,
                 )
                 response = llm.invoke(review_prompt)
                 llm_review = response.content

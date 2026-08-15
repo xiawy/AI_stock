@@ -7,8 +7,6 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, Tuple, List, Optional
 
-import yfinance as yf
-
 logger = logging.getLogger(__name__)
 
 from langgraph.prebuilt import ToolNode
@@ -484,8 +482,37 @@ class TradingAgentsGraph:
         Returns (raw_return, alpha_return, actual_holding_days) or
         (None, None, None) if price data is unavailable (too recent, delisted,
         or network error).
+
+        O2: domestic sources first (mootdx + sina CSI300 — the same vendors
+        the analyst layer already uses). Benefits: works on CN networks where
+        Yahoo is unreachable, resolves Beijing-exchange tickers (yfinance has
+        no BSE coverage), and no yfinance rate limits. yfinance stays as the
+        fallback for non-A-share tickers.
         """
+        # --- Domestic sources (A-share default) ---
         try:
+            from ai_stock.dataflows.a_stock import fetch_settlement_prices
+
+            data = fetch_settlement_prices(ticker, trade_date, holding_days)
+            if data is not None:
+                stock = data["stock"]
+                bench = data["benchmark"]
+                actual_days = min(holding_days, len(stock) - 1, len(bench) - 1)
+                raw = (stock[actual_days][1] - stock[0][1]) / stock[0][1]
+                bench_ret = (bench[actual_days][1] - bench[0][1]) / bench[0][1]
+                return float(raw), float(raw - bench_ret), actual_days
+        except Exception as e:
+            logger.debug(
+                "domestic settlement prices failed for %s, falling back to "
+                "yfinance: %s",
+                ticker,
+                e,
+            )
+
+        # --- Fallback: yfinance (non-A-share tickers / domestic outage) ---
+        try:
+            import yfinance as yf
+
             start = datetime.strptime(trade_date, "%Y-%m-%d")
             end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
             end_str = end.strftime("%Y-%m-%d")
@@ -494,9 +521,9 @@ class TradingAgentsGraph:
             if _is_unsupported_by_yfinance(yf_symbol):
                 # Say why instead of leaving a silent forever-pending entry.
                 logger.warning(
-                    "Cannot resolve outcome for %s: Yahoo Finance has no Beijing "
-                    "Stock Exchange coverage under any suffix, so this entry stays "
-                    "pending. Use a non-BSE ticker if you need memory reflection.",
+                    "Cannot resolve outcome for %s: domestic sources failed and "
+                    "Yahoo Finance has no Beijing Stock Exchange coverage under "
+                    "any suffix, so this entry stays pending.",
                     ticker,
                 )
                 return None, None, None

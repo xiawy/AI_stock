@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 
 from app.dependencies import get_current_user
 from app.models import User
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/recommendation", tags=["recommendation"])
 
 @router.get("/latest", summary="最新一期 Top 10 + 3 备选荐股")
 def get_latest(
-    current_user: User = ...,
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Return the latest stock recommendations."""
     svc = get_pipeline_service()
@@ -40,7 +40,7 @@ def get_latest(
 @router.get("/history", summary="按日期查询荐股结果")
 def get_history(
     date: str,
-    current_user: User = ...,
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Query recommendations for a specific date (YYYY-MM-DD)."""
     svc = get_pipeline_service()
@@ -59,7 +59,7 @@ def get_history(
 @router.post("/trigger", summary="手动触发一次流水线", status_code=status.HTTP_202_ACCEPTED)
 def trigger_pipeline(
     background_tasks: BackgroundTasks,
-    current_user: User = ...,
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Trigger a manual pipeline run in the background."""
     svc = get_pipeline_service()

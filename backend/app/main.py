@@ -1,3 +1,5 @@
+
+
 """AI Stock — FastAPI application entry point.
 
 Run (dev):  cd backend && .venv/Scripts/python -m uvicorn app.main:app --reload --port 8000
@@ -5,6 +7,7 @@ Run (dev):  cd backend && .venv/Scripts/python -m uvicorn app.main:app --reload 
 
 from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -14,11 +17,48 @@ from app.api import analysis, auth, history, impact, recommendation, stocks, wat
 from app.core.config import get_settings
 from app.core.database import init_db
 
+logger = logging.getLogger(__name__)
+
+
+def _reap_orphaned_tasks() -> None:
+    """Freeze tasks left running/paused by a previous process.
+
+    Trackers live in process memory; after a restart no tracker exists for
+    those rows, so ``sync_task_row`` would never refresh them and the UI
+    would show them as alive forever. Single-worker deployments only
+    (the in-memory registry is not shared across workers anyway).
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy import update
+
+    from app.core.database import SessionLocal
+    from app.models.analysis_task import AnalysisTask
+
+    with SessionLocal() as session:
+        result = session.execute(
+            update(AnalysisTask)
+            .where(AnalysisTask.status.in_(["running", "paused"]))
+            .values(
+                status="stopped",
+                error="服务重启，任务已中断；可从历史记录重新发起分析",
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
+        if result.rowcount:
+            logger.warning(
+                "Reaped %d orphaned analysis task(s) left running/paused by a previous process",
+                result.rowcount,
+            )
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # Create SQLite tables on first start; Alembic owns later migrations.
     init_db()
+
+    _reap_orphaned_tasks()
 
     # Initialize the impact pipeline service (scheduler + LLM clients).
     try:
@@ -28,8 +68,7 @@ async def lifespan(_: FastAPI):
         svc = get_pipeline_service()
         svc.initialize(DEFAULT_CONFIG)
     except Exception as exc:
-        import logging
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "Pipeline service init failed (non-fatal): %s", exc,
         )
 

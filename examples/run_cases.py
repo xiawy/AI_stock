@@ -19,6 +19,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sys
@@ -71,7 +72,8 @@ def build_config() -> dict:
     model = os.getenv("LLM_MODEL", "gpt-5.4-mini")
     backend_url = os.getenv("BACKEND_URL") or None
 
-    config = DEFAULT_CONFIG.copy()
+    # deepcopy（O4）：浅拷贝下嵌套 dict 与全局共享，多标的连续 run 会串配置
+    config = copy.deepcopy(DEFAULT_CONFIG)
     config["llm_provider"] = provider
     config["deep_think_llm"] = model
     config["quick_think_llm"] = model

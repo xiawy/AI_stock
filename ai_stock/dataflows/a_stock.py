@@ -25,6 +25,7 @@ import math
 import random
 import re as _re
 import socket
+import threading
 import time
 import uuid
 import urllib.request
@@ -465,19 +466,27 @@ def _get_mootdx_client():
     )
 
 
+# mootdx client 是进程级单例 TCP 长连接，底层 pytdx 对同一 socket 的读写不是
+# 线程安全的——分析师并行化后两个线程同时调用会在同一连接上交错收发，轻则解析
+# 出错重置连接，重则拿到错乱的数据帧。整段持锁串行化：TDX 协议本来就是一问一答，
+# 串行不增加单个请求延迟，也让服务器侧看到的负载与单线程完全一致。
+_MOOTDX_LOCK = threading.Lock()
+
+
 def _mootdx_call(method: str, **kwargs):
-    """调用 mootdx 的某个方法，失败就弃用当前服务器。
+    """调用 mootdx 的某个方法，失败就弃用当前服务器（线程安全）。
 
     选中的服务器随时可能挂掉；不弃用的话单例会一直指着它，之后每次取数都失败降级
     且永不重选（#90 的「反复降级」）。取 client 本身失败时不清缓存——那条路径已经
     在 `_get_mootdx_client` 里做了负缓存，清掉等于取消快速失败。
     """
-    client = _get_mootdx_client()
-    try:
-        return getattr(client, method)(**kwargs)
-    except Exception:
-        reset_mootdx_client()
-        raise
+    with _MOOTDX_LOCK:
+        client = _get_mootdx_client()
+        try:
+            return getattr(client, method)(**kwargs)
+        except Exception:
+            reset_mootdx_client()
+            raise
 
 
 # ---------------------------------------------------------------------------
@@ -547,24 +556,30 @@ _EM_SESSION.headers.update({"User-Agent": _UA})
 # 两次东财请求最小间隔(秒)；批量多 Agent 场景可设环境变量 EM_MIN_INTERVAL=1.5~2 降速。
 _EM_MIN_INTERVAL = float(os.environ.get("EM_MIN_INTERVAL", "1.0"))
 _em_last_call = [0.0]  # 模块级上次东财请求时间戳
+# 分析师并行化后多个线程同时请求东财：无锁的 check-then-sleep 存在竞态，
+# 两个线程会同时通过间隔检查、把实际请求间隔压到阈值以下——正是触发东财
+# 风控的模式。整个「等待 + 请求 + 更新时间戳」持锁串行，保证无论多少线程
+# 并发，对东财的请求间隔都 ≥ EM_MIN_INTERVAL（等价于单线程串行请求）。
+_EM_LOCK = threading.Lock()
 
 
 def _em_get(url, params=None, headers=None, timeout=15, **kwargs):
-    """东财统一请求入口：自动节流 + 复用 session + 默认 UA。
+    """东财统一请求入口：自动节流 + 复用 session + 默认 UA（线程安全）。
 
     所有 eastmoney.com 接口都应通过它请求，避免多 Agent 高频拉数据被封 IP。
     串行限流：与上次东财请求间隔 < EM_MIN_INTERVAL 时 sleep 补足 + 0.1~0.5s 随机抖动。
     传入的 headers 会覆盖 session 默认 UA（用于保留各端点自己的 Referer/Origin）。
     """
-    wait = _EM_MIN_INTERVAL - (time.time() - _em_last_call[0])
-    if wait > 0:
-        time.sleep(wait + random.uniform(0.1, 0.5))
-    try:
-        return _EM_SESSION.get(
-            url, params=params, headers=headers, timeout=timeout, **kwargs
-        )
-    finally:
-        _em_last_call[0] = time.time()
+    with _EM_LOCK:
+        wait = _EM_MIN_INTERVAL - (time.time() - _em_last_call[0])
+        if wait > 0:
+            time.sleep(wait + random.uniform(0.1, 0.5))
+        try:
+            return _EM_SESSION.get(
+                url, params=params, headers=headers, timeout=timeout, **kwargs
+            )
+        finally:
+            _em_last_call[0] = time.time()
 
 
 def _eastmoney_datacenter(
@@ -626,12 +641,21 @@ def _ths_eps_forecast(code: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def _sina_kline_fallback(code: str, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+def _sina_kline_fallback(
+    code: str,
+    start_date: str = None,
+    end_date: str = None,
+    prefix: str = None,
+) -> pd.DataFrame:
     """Fetch daily K-line from Sina HTTP API as mootdx fallback.
 
     Returns DataFrame with columns: Date, Open, High, Low, Close, Volume.
+    ``prefix`` 显式指定市场前缀（默认按代码推断）；指数（如 sh000300）必须
+    显式传入——按 6 位代码推断会把 000300 判到深市。
     """
-    prefix = "sh" if code.startswith("6") else "sz"
+    # 北交所（8/4/92 开头）此前被硬编码判成 sz，新浪对错误前缀返回空数据。
+    # 统一走 _get_prefix，与腾讯/新闻接口的市场判定保持一致。
+    prefix = prefix or _get_prefix(code)
     url = (
         "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
         "CN_MarketData.getKLineData"
@@ -737,8 +761,15 @@ def _supplement_stale_ohlcv_with_sina(
 # OHLCV loading with cache (mootdx -> CSV)
 # ---------------------------------------------------------------------------
 
+# 并行分析师常同时拉同一标的的日线（market 与 hot_money 都有 get_stock_data）：
+# 并发首拉会重复走网络，且两个 to_csv 同时写同一缓存文件会把 CSV 写成交错损坏。
+# 整个「读缓存 → 拉数 → 写缓存」持锁串行；锁内会进一步获取 _MOOTDX_LOCK，
+# 锁序恒定（OHLCV → MOOTDX），不存在反向持有路径，无死锁风险。
+_OHLCV_CACHE_LOCK = threading.Lock()
+
+
 def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
-    """Fetch OHLCV via mootdx, cache to CSV, filter by curr_date.
+    """Fetch OHLCV via mootdx, cache to CSV, filter by curr_date（线程安全）。
 
     Mirrors stockstats_utils.load_ohlcv but uses mootdx instead of yfinance.
     Returns DataFrame with columns: Date, Open, High, Low, Close, Volume
@@ -754,18 +785,24 @@ def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
 
     cache_file = os.path.join(cache_dir, f"{code}-astock-daily.csv")
 
-    if os.path.exists(cache_file):
-        mtime = datetime.fromtimestamp(os.path.getmtime(cache_file))
-        if mtime.date() == datetime.now().date():
-            data = pd.read_csv(cache_file, on_bad_lines="skip", encoding="utf-8")
-            data = _normalize_ohlcv_dates(data)
-            data, supplemented = _supplement_stale_ohlcv_with_sina(
-                code, data, curr_date, start_date=None
+    with _OHLCV_CACHE_LOCK:
+        if os.path.exists(cache_file):
+            # 判「今天」按市场时区（与 _market_today 同理）：主机在 UTC+9 以东时
+            # 本地已过零点而上海还在前一天，本地时区会把当天缓存误判过期、
+            # 每次都穿透重拉 mootdx；西半球则反向缓存到陈旧数据。
+            mtime = datetime.fromtimestamp(
+                os.path.getmtime(cache_file), tz=_MARKET_TZ
             )
-            if supplemented:
-                data.to_csv(cache_file, index=False, encoding="utf-8")
-            cutoff = pd.to_datetime(curr_date)
-            return data[data["Date"] <= cutoff]
+            if mtime.date() == _market_today():
+                data = pd.read_csv(cache_file, on_bad_lines="skip", encoding="utf-8")
+                data = _normalize_ohlcv_dates(data)
+                data, supplemented = _supplement_stale_ohlcv_with_sina(
+                    code, data, curr_date, start_date=None
+                )
+                if supplemented:
+                    data.to_csv(cache_file, index=False, encoding="utf-8")
+                cutoff = pd.to_datetime(curr_date)
+                return data[data["Date"] <= cutoff]
 
     # Fetch from mootdx — 800 daily bars (~3 years of trading days)
     try:
@@ -950,17 +987,19 @@ def get_indicators(
             v = row[indicator]
             ind_dict[d] = "N/A" if pd.isna(v) else str(round(float(v), 4))
 
-        # Generate output for look_back window
+        # Generate output for look_back window. Only emit rows for trading
+        # days that actually exist in the OHLCV data — the old calendar-day
+        # loop emitted "N/A: Not a trading day" noise for ~2/7 of all rows,
+        # diluting the signal and inflating tokens.
         curr_dt = datetime.strptime(curr_date, "%Y-%m-%d")
         before = curr_dt - relativedelta(days=look_back_days)
+        before_str = before.strftime("%Y-%m-%d")
 
-        lines = []
-        dt = curr_dt
-        while dt >= before:
-            ds = dt.strftime("%Y-%m-%d")
-            val = ind_dict.get(ds, "N/A: Not a trading day (weekend or holiday)")
-            lines.append(f"{ds}: {val}")
-            dt -= relativedelta(days=1)
+        lines = [
+            f"{ds}: {val}"
+            for ds, val in sorted(ind_dict.items(), reverse=True)
+            if before_str <= ds <= curr_date
+        ]
 
         result = (
             f"## {indicator} values for {code} "
@@ -1176,7 +1215,9 @@ def _get_financial_report_sina(
     }
     source_type = _report_type_map.get(report_type, "lrb")
 
-    prefix = "sh" if code.startswith("6") else "sz"
+    # 与 _sina_kline_fallback 同理：北交所代码此前被硬编码判成 sz，
+    # 财报接口因此对北交所标的静默返回空。统一走 _get_prefix。
+    prefix = _get_prefix(code)
     paper_code = f"{prefix}{code}"
     url = "https://quotes.sina.cn/cn/api/openapi.php/CompanyFinanceService.getFinanceReport2022"
     params = {
@@ -1910,7 +1951,9 @@ def get_northbound_flow(
             lines.append("No realtime data (non-trading hours or holiday)")
 
         if got_realtime:
-            today_str = datetime.now().strftime("%Y-%m-%d")
+            # 快照按市场日归档：主机在 UTC+9 以东时本地已跨零点而沪市还在
+            # 前一交易日，用本地日期归档会把当天流量存进"明天"的格子里。
+            today_str = _market_today().strftime("%Y-%m-%d")
             _save_northbound_snapshot(today_str, hgt_close, sgt_close)
 
         if include_history:
@@ -2208,6 +2251,9 @@ def get_dragon_tiger_board(
     start_dt = end_dt - pd.Timedelta(days=look_back_days)
     start_date_str = start_dt.strftime("%Y-%m-%d")
     lines = [f"# 龙虎榜数据 | {code} | {trade_date} (近{look_back_days}日)"]
+    # 预定义：第 1 段（上榜记录）抛异常时 data 未赋值，第 2 段的 `if data:`
+    # 和第 3 段的席位聚合会直接 NameError，把整段龙虎榜输出成异常文本。
+    data = buy_data = sell_data = None
 
     # 1. 上榜记录 — eastmoney datacenter direct HTTP
     try:
@@ -2284,8 +2330,8 @@ def get_dragon_tiger_board(
                         f"  {row.get('OPERATEDEPT_NAME', '')} "
                         f"| {buy_amt:.0f} | {sell_amt:.0f} | {net:.0f}"
                     )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("LHB seat details failed for %s: %s", code, e)
 
     # 3. 机构动向 — 从买卖席位明细筛选机构专用席位 (OPERATEDEPT_CODE="0")
     try:
@@ -2305,8 +2351,8 @@ def get_dragon_tiger_board(
                 f"| 卖出 {inst_sell/1e4:.0f} 万 "
                 f"| 净额 {(inst_buy - inst_sell)/1e4:.0f} 万"
             )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("LHB institutional aggregation failed for %s: %s", code, e)
 
     return "\n".join(lines)
 
@@ -2439,25 +2485,97 @@ def get_industry_comparison(
             lines.append(
                 "排名 | 行业 | 涨跌幅 | 上涨 | 下跌 | 领涨股"
             )
-            for i, item in enumerate(items):
-                name = item.get("f14", "")
-                change_pct = item.get("f3", 0)
-                up_count = item.get("f104", 0)
-                down_count = item.get("f105", 0)
-                leader = item.get("f140", "")
-                lines.append(
-                    f"  {i+1}. {name} "
-                    f"| {change_pct}% "
-                    f"| {up_count} "
-                    f"| {down_count} "
-                    f"| {leader}"
+
+            def _fmt_industry_row(rank: int, item: dict) -> str:
+                return (
+                    f"  {rank}. {item.get('f14', '')} "
+                    f"| {item.get('f3', 0)}% "
+                    f"| {item.get('f104', 0)} "
+                    f"| {item.get('f105', 0)} "
+                    f"| {item.get('f140', '')}"
                 )
-                if i >= top_n * 2 - 1:
-                    lines.append(f"  ... (showing top/bottom {top_n})")
-                    break
+
+            # 列表按涨跌幅降序。旧代码在第 2*top_n 项处 break：意图是展示
+            # "头部 + 垫底"，实际只输出了头部两倍长度，垫底行业永远缺失。
+            for i in range(min(top_n, len(items))):
+                lines.append(_fmt_industry_row(i + 1, items[i]))
+            if len(items) > top_n * 2:
+                lines.append(f"  ... (中间 {len(items) - top_n * 2} 个行业省略)")
+                for i in range(len(items) - top_n, len(items)):
+                    lines.append(_fmt_industry_row(i + 1, items[i]))
+            else:
+                for i in range(top_n, len(items)):
+                    lines.append(_fmt_industry_row(i + 1, items[i]))
         else:
             lines.append("行业数据获取为空。")
     except Exception as e:
         lines.append(f"行业对比查询失败: {e}")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# 18. Settlement prices for return calculation (memory/experience layer)
+# ---------------------------------------------------------------------------
+
+def fetch_settlement_prices(
+    ticker: str,
+    trade_date: str,
+    holding_days: int,
+) -> "dict | None":
+    """Fetch post-trade-date closes for a stock and the CSI300 benchmark.
+
+    Used by the reflection/memory layer to compute realized returns with
+    domestic sources (mootdx + sina) instead of yfinance, which is slow or
+    unreachable in CN networks and rate-limits aggressively.
+
+    Returns::
+
+        {"stock": [("YYYY-MM-DD", close), ...],
+         "benchmark": [("YYYY-MM-DD", close), ...]}
+
+    one entry per trading day from ``trade_date`` onward, or None when
+    either series has fewer than 2 entries (not enough data for a return).
+    """
+    code = _normalize_ticker(ticker)
+    # 缓冲 10 个自然日：确保 holding_days 个交易日落窗内（节假日多时不至于截短）。
+    end_dt = datetime.strptime(trade_date, "%Y-%m-%d") + relativedelta(
+        days=holding_days + 10
+    )
+    # 未来日期裁剪到今天：结算只关心已发生的价格。
+    end_str = min(end_dt, datetime.now(_MARKET_TZ)).strftime("%Y-%m-%d")
+
+    try:
+        stock_df = _load_ohlcv_astock(code, end_str)
+        stock_df = stock_df[stock_df["Date"] >= pd.to_datetime(trade_date)]
+        stock_series = list(
+            zip(
+                stock_df["Date"].dt.strftime("%Y-%m-%d"),
+                stock_df["Close"].astype(float),
+            )
+        )
+    except Exception as e:
+        logger.warning("settlement prices (stock %s) failed: %s", code, e)
+        return None
+
+    try:
+        bench_df = _sina_kline_fallback("000300", trade_date, end_str, prefix="sh")
+        bench_df = bench_df.copy()
+        bench_df["Date"] = pd.to_datetime(bench_df["Date"])
+        bench_df = bench_df[
+            (bench_df["Date"] >= pd.to_datetime(trade_date))
+            & (bench_df["Date"] <= pd.to_datetime(end_str))
+        ]
+        bench_series = list(
+            zip(
+                bench_df["Date"].dt.strftime("%Y-%m-%d"),
+                bench_df["Close"].astype(float),
+            )
+        )
+    except Exception as e:
+        logger.warning("settlement prices (benchmark 000300) failed: %s", e)
+        return None
+
+    if len(stock_series) < 2 or len(bench_series) < 2:
+        return None
+    return {"stock": stock_series, "benchmark": bench_series}

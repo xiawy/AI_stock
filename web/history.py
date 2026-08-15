@@ -1,3 +1,5 @@
+
+
 """Manage completed and incomplete analysis history."""
 
 from __future__ import annotations
@@ -16,12 +18,26 @@ from ai_stock.default_config import DEFAULT_CONFIG
 
 logger = logging.getLogger(__name__)
 
-_INCOMPLETE_TASKS_FILE = Path.home() / ".tradingagents" / "incomplete_tasks.json"
+# B4：跟随 DEFAULT_CONFIG（含 TRADINGAGENTS_RESULTS_DIR 环境变量）而不是
+# 硬编码 ~/.tradingagents——Docker 卷/自定义目录部署下，硬编码路径不在
+# 卷里，索引会写到容器内临时层，重启即丢（issues/005 同源问题）。
+_RESULTS_DIR = Path(DEFAULT_CONFIG["results_dir"])
+_INCOMPLETE_TASKS_FILE = _RESULTS_DIR.parent / "incomplete_tasks.json"
 _INCOMPLETE_TASKS_LOCK = threading.Lock()
 
 
 def _results_dir() -> Path:
-    return Path.home() / ".tradingagents" / "logs"
+    return _RESULTS_DIR
+
+
+# O8：侧边栏轮询每次都全量 rglob 结果目录，标的/历史多了之后 IO 线性上涨。
+# 进程内 TTL 缓存（5s）：UI 轮询间隔通常 >=5s，感知不到延迟；扫描成本
+# 随标的数增长而完全摊销。缓存键含结果目录路径——测试/多工作目录切换
+# （_results_dir 被 monkeypatch 或配置不同）时自动失效，不会拿到别的
+# 目录的陈旧列表。
+_HISTORY_CACHE_TTL = 5.0
+_history_cache_lock = threading.Lock()
+_history_cache: tuple[float, str, list[dict[str, str]]] = (0.0, "", [])
 
 
 def get_history() -> list[dict[str, str]]:
@@ -29,7 +45,15 @@ def get_history() -> list[dict[str, str]]:
 
     Each entry: {"ticker": "300750", "date": "2026-05-12", "path": "/abs/path/...json"}
     """
+    global _history_cache
     root = _results_dir()
+    root_key = str(root)
+    now = time.monotonic()
+    with _history_cache_lock:
+        cached_at, cached_root, cached = _history_cache
+        if cached_root == root_key and now - cached_at < _HISTORY_CACHE_TTL:
+            return list(cached)
+
     if not root.exists():
         return []
 
@@ -43,7 +67,9 @@ def get_history() -> list[dict[str, str]]:
         entries.append({"ticker": ticker, "date": date, "path": str(log_file)})
 
     entries.sort(key=lambda e: e["date"], reverse=True)
-    return entries
+    with _history_cache_lock:
+        _history_cache = (now, root_key, entries)
+    return list(entries)
 
 
 def _completed_key(ticker: str, trade_date: str) -> tuple[str, str]:

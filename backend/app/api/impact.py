@@ -7,7 +7,7 @@ GET /api/impact/detail/{id}  — Single news item detail
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.dependencies import get_current_user
 from app.models import User
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/impact", tags=["impact"])
 
 @router.get("/latest", summary="最新一期 Top 20 影响力榜")
 def get_latest(
-    current_user: User = ...,
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Return the latest completed pipeline run's Top 20 + recommendations."""
     svc = get_pipeline_service()
@@ -34,7 +34,7 @@ def get_latest(
 @router.get("/history", summary="按日期查询影响力榜")
 def get_history(
     date: str,
-    current_user: User = ...,
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Query impact ranking for a specific date (YYYY-MM-DD)."""
     svc = get_pipeline_service()
@@ -50,7 +50,7 @@ def get_history(
 @router.get("/detail/{news_id}", summary="单条新闻评估详情")
 def get_detail(
     news_id: int,
-    current_user: User = ...,
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Get detailed evaluation for a single news item."""
     try:

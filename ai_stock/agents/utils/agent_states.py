@@ -1,6 +1,7 @@
 from typing import Annotated
 from typing_extensions import TypedDict
 from langgraph.graph import MessagesState
+from langgraph.graph.message import add_messages
 
 
 # Researcher team state
@@ -49,6 +50,16 @@ class AgentState(MessagesState):
 
     sender: Annotated[str, "Agent that sent this message"]
 
+    # O1 并行化：分析师并行运行时，各自的工具循环消息走私有通道，
+    # 互不可见、互不覆盖；主通道 messages 只汇总各分析师的最终报告。
+    # 串行图不使用这些字段（保持原行为）。
+    market_messages: Annotated[list, add_messages]
+    social_messages: Annotated[list, add_messages]
+    news_messages: Annotated[list, add_messages]
+    fundamentals_messages: Annotated[list, add_messages]
+    policy_messages: Annotated[list, add_messages]
+    hot_money_messages: Annotated[list, add_messages]
+
     # research step
     market_report: Annotated[str, "Report from the Market Analyst"]
     sentiment_report: Annotated[str, "Report from the Social Media Analyst"]
@@ -77,3 +88,15 @@ class AgentState(MessagesState):
     final_trade_decision: Annotated[str, "Final decision made by the Risk Analysts"]
     past_context: Annotated[str, "Memory log context injected at run start (same-ticker decisions + cross-ticker lessons)"]
     evolution_context: Annotated[str, "Evolution layer context (strategies + episodic memories)"]
+
+
+# 分析师角色 → 私有消息通道字段名（O1 并行化用）。
+# 集中定义避免 setup.py/propagation.py 各自硬编码后漂移。
+ANALYST_CHANNEL_KEYS = {
+    "market": "market_messages",
+    "social": "social_messages",
+    "news": "news_messages",
+    "fundamentals": "fundamentals_messages",
+    "policy": "policy_messages",
+    "hot_money": "hot_money_messages",
+}

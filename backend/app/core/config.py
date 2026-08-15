@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 
@@ -11,6 +12,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 # Project root (ai-stock/), reused as the analysis engine.
 PROJECT_ROOT = BACKEND_DIR.parent
+
+# Sentinel default — get_settings() warns when this is still in use.
+_DEFAULT_SECRET_KEY = "dev-secret-key-change-me-in-production"
 
 
 class Settings(BaseSettings):
@@ -26,7 +30,7 @@ class Settings(BaseSettings):
 
     # ── Security ─────────────────────────────────────────────────────────
     # openssl rand -hex 32
-    secret_key: str = "dev-secret-key-change-me-in-production"
+    secret_key: str = _DEFAULT_SECRET_KEY
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24  # 24h
 
@@ -48,4 +52,10 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    if settings.secret_key == _DEFAULT_SECRET_KEY:
+        logging.getLogger(__name__).warning(
+            "SECRET_KEY is using its default value — JWTs are forgeable by anyone. "
+            "Set SECRET_KEY in backend/.env (openssl rand -hex 32) before deploying."
+        )
+    return settings
