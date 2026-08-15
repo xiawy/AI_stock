@@ -1,14 +1,11 @@
-"""Shared model catalog for CLI selections and validation."""
+"""Shared model catalog for validation."""
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
-
-ModelOption = Tuple[str, str]
-ProviderModeOptions = Dict[str, Dict[str, List[ModelOption]]]
+from typing import Dict, List
 
 
-MODEL_OPTIONS: ProviderModeOptions = {
+MODEL_OPTIONS: Dict[str, Dict[str, List[tuple[str, str]]]] = {
     "openai": {
         "quick": [
             ("GPT-5.4 Mini - Fast, strong coding and tool use", "gpt-5.4-mini"),
@@ -128,11 +125,6 @@ MODEL_OPTIONS: ProviderModeOptions = {
         ],
     },
 }
-
-
-def get_model_options(provider: str, mode: str) -> List[ModelOption]:
-    """Return shared model options for a provider and selection mode."""
-    return MODEL_OPTIONS[provider.lower()][mode]
 
 
 def get_known_models() -> Dict[str, List[str]]:

@@ -46,10 +46,11 @@ DEFAULT_CONFIG = {
     #   }
     # provider 省略则沿用 llm_provider；合法角色名见 graph/setup.py 的 ROLE_KEYS。
     "role_llms": {},
-    # Provider-specific thinking configuration
-    "google_thinking_level": None,      # "high", "minimal", etc.
-    "openai_reasoning_effort": None,    # "medium", "high", "low"
-    "anthropic_effort": None,           # "high", "medium", "low"
+    # Provider-specific thinking configuration (optional, from env)
+    # Set these in .env only when you need to fine-tune thinking behaviour.
+    "google_thinking_level": os.getenv("LLM_THINKING_LEVEL"),      # "high", "minimal"
+    "openai_reasoning_effort": os.getenv("LLM_REASONING_EFFORT"),  # "medium", "high", "low"
+    "anthropic_effort": os.getenv("LLM_EFFORT"),                   # "high", "medium", "low"
     # ── Claude Agent SDK provider（走个人 Pro/Max 订阅额度，可选依赖 [agentsdk]）──
     # 与内置 anthropic provider 的区别：anthropic 走 ANTHROPIC_API_KEY = **按 token 计费**；
     # 本 provider 走本机已登录的 claude CLI = **消耗订阅额度，不产生 API 账单**。
