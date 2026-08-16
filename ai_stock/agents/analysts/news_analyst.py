@@ -43,6 +43,17 @@ def create_news_analyst(llm):
         if evo_ctx:
             system_message += f"\n\n---\n## 自进化上下文\n{evo_ctx}\n---"
 
+        # Inject industry-board context (行业榜) when available
+        industry_ctx = state.get("industry_heatmap", "")
+        if industry_ctx:
+            system_message += (
+                f"\n\n---\n## 行业热度上下文（最新行业榜）\n{industry_ctx}"
+            )
+            hot_stocks_ctx = state.get("hot_sector_stocks", "")
+            if hot_stocks_ctx:
+                system_message += f"\n热门行业龙头：{hot_stocks_ctx}"
+            system_message += "\n（请结合该股所处行业的β环境研判，行业共振可放大个股信号；仅供参考）\n---"
+
         prompt = ChatPromptTemplate.from_messages(
             [
                 (

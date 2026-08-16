@@ -196,6 +196,128 @@ def save_recommendations(snapshot_id: int, recommendations: list[dict]) -> int:
     return count
 
 
+def save_industry_rankings(snapshot_id: int, rankings: list[dict]) -> int:
+    """Save a batch of IndustryRanking records. Returns count saved."""
+    from ai_stock.pipeline.db_models import IndustryRanking
+
+    session = _get_session()
+    if session is None:
+        return 0
+
+    count = 0
+    try:
+        for item in rankings:
+            ir = IndustryRanking(
+                snapshot_id=snapshot_id,
+                industry=item.get("industry", ""),
+                industry_code=item.get("industry_code", ""),
+                heat_score=item.get("heat_score", 0.0),
+                news_count=item.get("news_count", 0),
+                fund_flow_net=item.get("fund_flow_net"),
+                change_pct=item.get("change_pct"),
+                resonance=item.get("resonance", "none"),
+                rating=item.get("rating", "C"),
+                leader_stocks_json=json.dumps(
+                    item.get("leader_stocks", []), ensure_ascii=False,
+                ),
+                rank=item.get("rank", 0),
+            )
+            session.add(ir)
+            count += 1
+        session.commit()
+    except Exception as exc:
+        logger.error("Failed to save industry rankings: %s", exc)
+        session.rollback()
+        count = 0
+    finally:
+        session.close()
+    return count
+
+
+def _load_industry_rows(snapshot_id: int, session) -> list:
+    """Load IndustryRanking rows for a snapshot, ordered by rank."""
+    from ai_stock.pipeline.db_models import IndustryRanking
+
+    return (
+        session.query(IndustryRanking)
+        .filter(IndustryRanking.snapshot_id == snapshot_id)
+        .order_by(IndustryRanking.rank.asc())
+        .all()
+    )
+
+
+def get_latest_industry_rankings() -> Optional[dict]:
+    """Get the latest completed snapshot with its industry rankings."""
+    from ai_stock.pipeline.db_models import ImpactSnapshot
+
+    session = _get_session()
+    if session is None:
+        return None
+
+    try:
+        snapshot = (
+            session.query(ImpactSnapshot)
+            .filter(ImpactSnapshot.status == "completed")
+            .order_by(ImpactSnapshot.snapshot_time.desc())
+            .first()
+        )
+        if snapshot is None:
+            return None
+        rows = _load_industry_rows(snapshot.id, session)
+        return {
+            "snapshot": snapshot.to_dict(),
+            "rankings": [r.to_dict() for r in rows],
+        }
+    except Exception as exc:
+        logger.error("Failed to get latest industry rankings: %s", exc)
+        return None
+    finally:
+        session.close()
+
+
+def get_industry_rankings_by_date(date_str: str) -> Optional[dict]:
+    """Get the latest industry rankings snapshot for a date (YYYY-MM-DD)."""
+    from ai_stock.pipeline.db_models import ImpactSnapshot
+
+    session = _get_session()
+    if session is None:
+        return None
+
+    try:
+        snapshots = (
+            session.query(ImpactSnapshot)
+            .filter(ImpactSnapshot.status == "completed")
+            .filter(
+                ImpactSnapshot.snapshot_time
+                >= datetime.strptime(date_str, "%Y-%m-%d").replace(
+                    tzinfo=timezone.utc
+                )
+            )
+            .filter(
+                ImpactSnapshot.snapshot_time
+                < datetime.strptime(date_str, "%Y-%m-%d").replace(
+                    tzinfo=timezone.utc
+                )
+                + timedelta(days=1)
+            )
+            .order_by(ImpactSnapshot.snapshot_time.desc())
+            .all()
+        )
+        if not snapshots:
+            return None
+        snapshot = snapshots[0]
+        rows = _load_industry_rows(snapshot.id, session)
+        return {
+            "snapshot": snapshot.to_dict(),
+            "rankings": [r.to_dict() for r in rows],
+        }
+    except Exception as exc:
+        logger.error("Failed to get industry rankings for %s: %s", date_str, exc)
+        return None
+    finally:
+        session.close()
+
+
 def get_latest_snapshot() -> Optional[dict]:
     """Get the latest completed snapshot with its data."""
     from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem, StockRecommendation

@@ -38,7 +38,8 @@ class ScoredNews:
 
     __slots__ = (
         "news", "policy", "news_agent", "capital", "sentiment",
-        "composite", "industries", "top_stocks", "supply_demand_signals",
+        "composite", "primary_industry", "secondary_industry",
+        "industries", "top_stocks", "supply_demand_signals",
         "_supply_demand_result",
     )
 
@@ -49,6 +50,8 @@ class ScoredNews:
         self.capital: AgentScoreResult | None = None
         self.sentiment: AgentScoreResult | None = None
         self.composite: float = 0.0
+        self.primary_industry: str = ""
+        self.secondary_industry: str = ""
         self.industries: list[str] = []
         self.top_stocks: list[dict] = []
         self.supply_demand_signals: list[str] = []
@@ -64,6 +67,8 @@ class ScoredNews:
             "capital_score": self.capital.score if self.capital else 0.0,
             "sentiment_score": self.sentiment.score if self.sentiment else 0.0,
             "composite_score": round(self.composite, 2),
+            "primary_industry": self.primary_industry,
+            "secondary_industry": self.secondary_industry,
             "industries": self.industries,
             "top_stocks": self.top_stocks,
             "supply_demand_signals": self.supply_demand_signals,
@@ -215,6 +220,13 @@ def score_all_news(
             + AGENT_WEIGHTS["sentiment"] * sn.sentiment.score
         )
 
+        # Merge primary/secondary industry labels across the 4 agents.
+        # Cross-agent agreement beats any single agent's opinion; ties are
+        # broken by role priority (policy > capital > sentiment > news).
+        sn.primary_industry, sn.secondary_industry = _merge_industry_labels(
+            sn.policy, sn.news_agent, sn.capital, sn.sentiment,
+        )
+
         # Merge industries (deduplicated, preserving order)
         seen_industries: set[str] = set()
         for agent_result in (sn.policy, sn.news_agent, sn.capital, sn.sentiment):
@@ -260,6 +272,96 @@ def score_all_news(
     )
 
     return candidates
+
+
+# ---------------------------------------------------------------------------
+# Industry label merging
+# ---------------------------------------------------------------------------
+
+# Role priority for tie-breaks: policy news has the most authoritative
+# industry attribution, capital-flow agents know where money actually goes.
+_INDUSTRY_VOTE_PRIORITY = ("policy", "capital", "sentiment", "news")
+# Call order of _merge_industry_labels: (policy, news, capital, sentiment).
+_LABEL_CALL_ROLES = ("policy", "news", "capital", "sentiment")
+
+
+def _merge_industry_labels(
+    *agent_results: AgentScoreResult | None,
+) -> tuple[str, str]:
+    """Merge primary/secondary industry labels across the 4 agents.
+
+    Strategy: count primary votes first, then secondary votes (excluding the
+    chosen primary). A label needs >= 2 votes to win outright; otherwise the
+    highest-priority agent's (policy > capital > sentiment > news) non-empty
+    label is used. Returns (primary, secondary).
+    """
+    # Args arrive in call order (policy, news, capital, sentiment); map them
+    # back to priority order for the tie-break fallback.
+    role_by_result = {
+        id(r): _INDUSTRY_VOTE_PRIORITY.index(role)
+        for role, r in zip(_LABEL_CALL_ROLES, agent_results)
+    }
+
+    primary_votes: dict[str, int] = {}
+    secondary_votes: dict[str, int] = {}
+    for result in agent_results:
+        if result is None:
+            continue
+        if result.primary_industry:
+            primary_votes[result.primary_industry] = (
+                primary_votes.get(result.primary_industry, 0) + 1
+            )
+        if result.secondary_industry:
+            secondary_votes[result.secondary_industry] = (
+                secondary_votes.get(result.secondary_industry, 0) + 1
+            )
+
+    # Fallback: LLMs (especially in batch structured output) often leave
+    # primary/secondary empty while still filling ``industries``. Materialise
+    # each agent's industries[0] / industries[1] as its implicit primary /
+    # secondary vote so the industry heatmap never starves on missing labels.
+    if not primary_votes and not secondary_votes:
+        for result in agent_results:
+            if result is None:
+                continue
+            inds = [i.strip() for i in result.industries if i and i.strip()]
+            if not inds:
+                continue
+            if not result.primary_industry:
+                result.primary_industry = inds[0]
+            if not result.secondary_industry and len(inds) >= 2:
+                result.secondary_industry = inds[1]
+            primary_votes[result.primary_industry] = (
+                primary_votes.get(result.primary_industry, 0) + 1
+            )
+            if result.secondary_industry:
+                secondary_votes[result.secondary_industry] = (
+                    secondary_votes.get(result.secondary_industry, 0) + 1
+                )
+
+    def _pick(votes: dict[str, int], exclude: str = "") -> str:
+        # Majority label (>= 2 votes) wins; ties broken by priority vote order.
+        best_label, best_count = "", 0
+        for label, count in votes.items():
+            if label == exclude:
+                continue
+            if count > best_count:
+                best_label, best_count = label, count
+        if best_count >= 2:
+            return best_label
+        # No majority: fall back to the highest-priority agent's opinion.
+        for result in sorted(
+            (r for r in agent_results if r is not None),
+            key=lambda r: role_by_result[id(r)],
+        ):
+            for label in (result.primary_industry, result.secondary_industry):
+                if label and label != exclude:
+                    return label
+        return ""
+
+    primary = _pick(primary_votes)
+    secondary = _pick(secondary_votes, exclude=primary)
+    return primary, secondary
 
 
 def filter_candidates(

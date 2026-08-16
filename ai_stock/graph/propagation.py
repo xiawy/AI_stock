@@ -17,14 +17,27 @@ class Propagator:
         self.max_recur_limit = max_recur_limit
 
     def create_initial_state(
-        self, company_name: str, trade_date: str, past_context: str = ""
+        self,
+        company_name: str,
+        trade_date: str,
+        past_context: str = "",
+        industry_heatmap: str = "",
+        hot_sector_stocks: str = "",
     ) -> Dict[str, Any]:
-        """Create the initial state for the agent graph."""
+        """Create the initial state for the agent graph.
+
+        ``industry_heatmap`` / ``hot_sector_stocks`` carry the latest industry
+        board (行业榜) context so analysts can judge the stock's sector-beta
+        environment. Both must be initialized (possibly empty) because the
+        analyst prompts read them from state.
+        """
         initial = {
             "messages": [("human", company_name)],
             "company_of_interest": company_name,
             "trade_date": str(trade_date),
             "past_context": past_context,
+            "industry_heatmap": industry_heatmap,
+            "hot_sector_stocks": hot_sector_stocks,
             "investment_debate_state": InvestDebateState(
                 {
                     "bull_history": "",

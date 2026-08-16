@@ -263,3 +263,142 @@ def get_limit_up_stocks(
         len(all_entries), days, curr_date,
     )
     return all_entries
+
+
+# ---------------------------------------------------------------------------
+# Industry board data (行业板块行情 + 主力资金净流入)
+# ---------------------------------------------------------------------------
+
+# 东财 push2 字段映射：
+#   f12 板块代码(BKxxxx) / f14 名称 / f3 涨跌幅% / f62 主力净流入额(元)
+#   f104 上涨家数 / f105 下跌家数 / f128 领涨股名 / f140 领涨股代码 / f136 领涨股涨跌幅%
+_EM_INDUSTRY_FIELDS = "f12,f14,f3,f62,f104,f105,f128,f136,f140"
+
+# 部分网络环境（公司代理/区域风控）会直接断连 push2 主域及其数字镜像，
+# 但延迟行情域 push2delay 始终可用。行业资金流是分钟级数据，延迟域
+# 完全够用；按序尝试，首个可达主机生效。
+_EM_PUSH2_BASES = (
+    "https://push2.eastmoney.com",
+    "https://push2delay.eastmoney.com",
+)
+_EM_BOARD_HEADERS = {
+    "User-Agent": _UA,
+    "Referer": "https://quote.eastmoney.com/",
+}
+
+
+def _push2_get(path: str, params: dict):
+    """GET a push2 API path with host fallback (main → delay mirror)."""
+    last_exc: Exception | None = None
+    for base in _EM_PUSH2_BASES:
+        try:
+            return _em_get(
+                f"{base}{path}", params=params,
+                headers=_EM_BOARD_HEADERS, timeout=15,
+            )
+        except Exception as exc:
+            last_exc = exc
+    raise last_exc
+
+
+def get_industry_fund_flow() -> list[dict]:
+    """Fetch all ~90 industry boards with realtime price change and main
+    capital net inflow (主力净流入) from Eastmoney push2.
+
+    Returns a list of dicts with keys:
+        code (BKxxxx), name, change_pct, main_net_inflow (元),
+        up_count, down_count, top_stock_name, top_stock_code, top_stock_pct
+
+    Empty list on failure — the industry ranking pipeline degrades to
+    news-heat-only aggregation when fund-flow data is unavailable.
+    """
+    boards: list[dict] = []
+    try:
+        params = {
+            "pn": "1",
+            "pz": "100",
+            "po": "1",
+            "np": "1",
+            "fltt": "2",
+            "invt": "2",
+            "fid": "f3",
+            "fs": "m:90+t:2",
+            "fields": _EM_INDUSTRY_FIELDS,
+        }
+        r = _push2_get("/api/qt/clist/get", params)
+        items = r.json().get("data", {}).get("diff", []) or []
+        for item in items:
+            boards.append({
+                "code": str(item.get("f12", "")),
+                "name": str(item.get("f14", "")),
+                "change_pct": _to_float(item.get("f3")),
+                "main_net_inflow": _to_float(item.get("f62")),
+                "up_count": int(_to_float(item.get("f104"))),
+                "down_count": int(_to_float(item.get("f105"))),
+                "top_stock_name": str(item.get("f128", "")),
+                "top_stock_code": str(item.get("f140", "")),
+                "top_stock_pct": _to_float(item.get("f136")),
+            })
+    except Exception as e:
+        logger.warning("Industry fund-flow fetch failed: %s", e)
+        return []
+
+    logger.info("Fetched %d industry boards with fund flow", len(boards))
+    return boards
+
+
+def get_industry_leader_stocks(board_code: str, top_n: int = 5) -> list[dict]:
+    """Fetch the top-N constituents of an industry board by market cap.
+
+    Args:
+        board_code: Eastmoney board code, e.g. "BK1033".
+        top_n: number of leaders to return (default 5).
+
+    Returns a list of dicts with keys:
+        code, name, change_pct, market_cap (元)
+
+    Empty list on failure.
+    """
+    stocks: list[dict] = []
+    if not board_code:
+        return stocks
+    try:
+        params = {
+            "pn": "1",
+            "pz": str(max(top_n, 1) * 2),
+            "po": "1",
+            "np": "1",
+            "fltt": "2",
+            "invt": "2",
+            "fid": "f20",  # sort by total market cap desc
+            "fs": f"b:{board_code}",
+            "fields": "f12,f14,f3,f20",
+        }
+        r = _push2_get("/api/qt/clist/get", params)
+        items = r.json().get("data", {}).get("diff", []) or []
+        for item in items:
+            code = str(item.get("f12", ""))
+            if not code:
+                continue
+            stocks.append({
+                "code": code,
+                "name": str(item.get("f14", "")),
+                "change_pct": _to_float(item.get("f3")),
+                "market_cap": _to_float(item.get("f20")),
+            })
+            if len(stocks) >= top_n:
+                break
+    except Exception as e:
+        logger.warning("Industry leader fetch failed for %s: %s", board_code, e)
+        return []
+    return stocks
+
+
+def _to_float(value) -> float:
+    """Best-effort float conversion; Eastmoney returns '-' for missing values."""
+    try:
+        if value in (None, "", "-"):
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0

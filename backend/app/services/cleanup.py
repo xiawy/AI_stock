@@ -3,8 +3,8 @@
 Retention policy (see docs/README "功能" section):
 - 诊股 (diagnosis) records — DB task rows + on-disk reports + resumable-task
   index — are kept for 20 days.
-- 寻龙榜 / 新闻榜 (ranking) snapshots — impact snapshots with their news
-  items and recommendations — are kept for 70 days.
+- 寻龙榜 / 新闻榜 / 行业榜 (ranking) snapshots — impact snapshots with their
+  news items, industry rankings and recommendations — are kept for 70 days.
 
 One pass runs at backend startup (background thread, non-blocking) and the
 job repeats daily at 03:30 local time via APScheduler (between ranking
@@ -79,8 +79,8 @@ def cleanup_ranking_snapshots(
 ) -> int:
     """Delete ranking snapshots older than the retention window.
 
-    ORM-level cascade removes each snapshot's news items and stock
-    recommendations along with it.
+    ORM-level cascade removes each snapshot's news items, industry
+    rankings (行业榜) and stock recommendations along with it.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
 

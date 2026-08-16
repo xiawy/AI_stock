@@ -4,18 +4,34 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="新增gitignore">
+    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="修改agent执行顺序及数据共享情况">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/managers/portfolio_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/managers/portfolio_manager.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/managers/research_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/managers/research_manager.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/quality_gate.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/quality_gate.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/aggressive_debator.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/aggressive_debator.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/conservative_debator.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/conservative_debator.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/neutral_debator.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/neutral_debator.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/trader/trader.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/trader/trader.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/graph/setup.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/graph/setup.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_parallel_analysts.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_parallel_analysts.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/runner.py" beforeDir="false" afterPath="$PROJECT_DIR$/web/runner.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/fundamentals_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/fundamentals_analyst.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/hot_money_tracker.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/hot_money_tracker.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/market_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/market_analyst.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/news_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/news_analyst.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/policy_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/policy_analyst.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/social_media_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/social_media_analyst.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/utils/agent_states.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/utils/agent_states.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/dataflows/a_stock.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/dataflows/a_stock.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/dataflows/pipeline_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/dataflows/pipeline_data.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/graph/propagation.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/graph/propagation.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/graph/trading_graph.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/graph/trading_graph.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/candidate_pool.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/candidate_pool.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/db_models.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/db_models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/db_ops.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/db_ops.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/llm_judge.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/llm_judge.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/pipeline.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/pipeline.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/ranking.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/ranking.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/scoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/scoring.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/models/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/models/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/services/analysis_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/analysis_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/services/cleanup.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/cleanup.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/services/pipeline_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/pipeline_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/components/AppHeader.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/AppHeader.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/router/index.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/router/index.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/views/Home.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/views/Home.vue" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -79,7 +95,7 @@
       <workItem from="1786791279121" duration="6212000" />
       <workItem from="1786805416923" duration="3251000" />
       <workItem from="1786837533074" duration="5143000" />
-      <workItem from="1786843559220" duration="7762000" />
+      <workItem from="1786843559220" duration="16481000" />
     </task>
     <task id="LOCAL-00001" summary="迁移项目为web项目">
       <option name="closed" value="true" />
@@ -185,7 +201,15 @@
       <option name="project" value="LOCAL" />
       <updated>1786843859074</updated>
     </task>
-    <option name="localTasksCounter" value="14" />
+    <task id="LOCAL-00014" summary="修改agent执行顺序及数据共享情况">
+      <option name="closed" value="true" />
+      <created>1786885620541</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1786885620541</updated>
+    </task>
+    <option name="localTasksCounter" value="15" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -202,6 +226,7 @@
     <MESSAGE value="页面风格做统一处理" />
     <MESSAGE value="新增定时任务，刷新榜单" />
     <MESSAGE value="新增gitignore" />
-    <option name="LAST_COMMIT_MESSAGE" value="新增gitignore" />
+    <MESSAGE value="修改agent执行顺序及数据共享情况" />
+    <option name="LAST_COMMIT_MESSAGE" value="修改agent执行顺序及数据共享情况" />
   </component>
 </project>

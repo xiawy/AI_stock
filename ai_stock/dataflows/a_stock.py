@@ -553,6 +553,20 @@ _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 # 不限流（实测不封 IP 或风控极弱）。批量任务可调大 EM_MIN_INTERVAL 进一步降速。
 _EM_SESSION = _requests.Session()
 _EM_SESSION.headers.update({"User-Agent": _UA})
+# 东财服务器会主动关闭空闲 Keep-Alive 连接：下次复用死连接直接
+# RemoteDisconnected（urllib3 默认 max_retries=0 不会重放）。挂上连接级
+# 重试（仅 GET、共 2 次、指数退避），在新连接上自动重放，调用方无感。
+from requests.adapters import HTTPAdapter  # noqa: E402
+from urllib3.util.retry import Retry  # noqa: E402
+
+_EM_RETRY = Retry(
+    total=2,
+    backoff_factor=0.3,
+    status_forcelist=(502, 503, 504),
+    allowed_methods=frozenset(["GET"]),
+)
+_EM_SESSION.mount("https://", HTTPAdapter(max_retries=_EM_RETRY))
+_EM_SESSION.mount("http://", HTTPAdapter(max_retries=_EM_RETRY))
 # 两次东财请求最小间隔(秒)；批量多 Agent 场景可设环境变量 EM_MIN_INTERVAL=1.5~2 降速。
 _EM_MIN_INTERVAL = float(os.environ.get("EM_MIN_INTERVAL", "1.0"))
 _em_last_call = [0.0]  # 模块级上次东财请求时间戳

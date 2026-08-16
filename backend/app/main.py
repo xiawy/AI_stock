@@ -13,7 +13,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import analysis, auth, history, impact, recommendation, stocks, watchlist
+from app.api import (
+    analysis,
+    auth,
+    history,
+    impact,
+    industry,
+    recommendation,
+    stocks,
+    watchlist,
+)
 from app.core.config import get_settings
 from app.core.database import init_db
 
@@ -163,4 +172,5 @@ app.include_router(stocks.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(watchlist.router, prefix="/api")
 app.include_router(impact.router, prefix="/api")
+app.include_router(industry.router, prefix="/api")
 app.include_router(recommendation.router, prefix="/api")

@@ -1,8 +1,9 @@
 """SQLAlchemy ORM models for the impact assessment & recommendation pipeline.
 
-Three tables:
+Four tables:
 - ``impact_snapshots`` — one row per 12h pipeline run
 - ``news_items`` — individual news/policy evaluation results (Top 20)
+- ``industry_rankings`` — news-heat aggregated industry board ranking (行业榜)
 - ``stock_recommendations`` — final stock picks (Top 10 + 3 alternates)
 
 These models share the same SQLAlchemy engine as the rest of the backend
@@ -12,6 +13,7 @@ These models share the same SQLAlchemy engine as the rest of the backend
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Optional
 
 from sqlalchemy import (
     Boolean,
@@ -57,6 +59,9 @@ class ImpactSnapshot(Base):
 
     # Relationships
     news_items: Mapped[list["NewsItem"]] = relationship(
+        back_populates="snapshot", cascade="all, delete-orphan"
+    )
+    industry_rankings: Mapped[list["IndustryRanking"]] = relationship(
         back_populates="snapshot", cascade="all, delete-orphan"
     )
     recommendations: Mapped[list["StockRecommendation"]] = relationship(
@@ -144,6 +149,74 @@ class NewsItem(Base):
             "top_stocks": json.loads(self.top_stocks_json) if self.top_stocks_json else [],
             "expected_gain_low": self.expected_gain_low,
             "expected_gain_high": self.expected_gain_high,
+            "rank": self.rank,
+        }
+
+
+class IndustryRanking(Base):
+    """News-heat aggregated industry board entry (行业榜).
+
+    One row per hot industry per snapshot. ``heat_score`` aggregates the
+    composite scores of all debated news whose primary/secondary industry
+    maps here; ``fund_flow_net`` is the realtime main-capital net inflow
+    (主力净流入, 元) when the industry matched an Eastmoney board.
+    """
+
+    __tablename__ = "industry_rankings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id: Mapped[int] = mapped_column(
+        ForeignKey("impact_snapshots.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    industry: Mapped[str] = mapped_column(String(64), nullable=False)
+    industry_code: Mapped[str] = mapped_column(String(16), default="")  # BKxxxx
+
+    heat_score: Mapped[float] = mapped_column(Float, default=0.0)
+    news_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Realtime board data (nullable when the industry matched no board)
+    fund_flow_net: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True
+    )  # 主力净流入, 元
+    change_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+
+    # strong | divergence | quiet | none (舆论热度 × 资金流共振)
+    resonance: Mapped[str] = mapped_column(String(16), default="none")
+    rating: Mapped[str] = mapped_column(String(2), default="C")  # A | B | C
+
+    # JSON array [{code, name, change_pct, market_cap}] — leaders by market cap
+    leader_stocks_json: Mapped[str] = mapped_column(Text, default="")
+
+    rank: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+    # Relationship
+    snapshot: Mapped["ImpactSnapshot"] = relationship(
+        back_populates="industry_rankings"
+    )
+
+    def to_dict(self) -> dict:
+        import json
+
+        return {
+            "id": self.id,
+            "snapshot_id": self.snapshot_id,
+            "industry": self.industry,
+            "industry_code": self.industry_code,
+            "heat_score": self.heat_score,
+            "news_count": self.news_count,
+            "fund_flow_net": self.fund_flow_net,
+            "change_pct": self.change_pct,
+            "resonance": self.resonance,
+            "rating": self.rating,
+            "leader_stocks": json.loads(self.leader_stocks_json)
+            if self.leader_stocks_json
+            else [],
             "rank": self.rank,
         }
 

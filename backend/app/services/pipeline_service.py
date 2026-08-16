@@ -149,6 +149,16 @@ class PipelineService:
         from ai_stock.pipeline.db_ops import get_snapshot_by_date
         return get_snapshot_by_date(date_str)
 
+    def get_industry_latest(self) -> Optional[dict]:
+        """Get the latest industry board (行业榜)."""
+        from ai_stock.pipeline.db_ops import get_latest_industry_rankings
+        return get_latest_industry_rankings()
+
+    def get_industry_by_date(self, date_str: str) -> Optional[dict]:
+        """Get industry board for a specific date."""
+        from ai_stock.pipeline.db_ops import get_industry_rankings_by_date
+        return get_industry_rankings_by_date(date_str)
+
     @property
     def is_running(self) -> bool:
         """True while a pipeline run is executing (shared with the scheduler)."""

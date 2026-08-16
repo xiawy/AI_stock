@@ -1,10 +1,12 @@
 """Candidate pool generation for stock recommendation.
 
 Combines Top 5 bullish events' affected stocks with recent limit-up stocks
-to build a candidate pool of 30-50 stocks for further scoring.
+and the industry board's Top-3 leader stocks (行业榜联动) to build a
+candidate pool of 30-50 stocks for further scoring.
 
 Priority tiers:
 - P0: Event top_stocks ∩ limit-up stocks (direct hit)
+      + industry-board leaders (行业榜龙头, sector-beta plays)
 - P1: Event industries ∩ limit-up stocks (industry beta)
 - P2: Supply chain / indirect beneficiaries (LLM-assisted)
 """
@@ -25,14 +27,18 @@ def generate_candidate_pool(
     top_events: list[dict],
     limit_up_stocks: list[dict],
     llm: Any,
+    industry_leaders: list[dict] | None = None,
 ) -> list[dict]:
-    """Generate a candidate stock pool from events + limit-up data.
+    """Generate a candidate stock pool from events + limit-up + industry data.
 
     Args:
         top_events: Top N events from the impact ranking (with industries,
             top_stocks, supply_demand_json).
         limit_up_stocks: Recent limit-up stocks from get_limit_up_stocks.
         llm: LLM for supply-chain association (P2 tier).
+        industry_leaders: Leader stocks from the industry board's Top-3 hot
+            industries (行业榜龙头), each {code, name, industry, rank}. They
+            enter at tier P0 — most excess return comes from sector beta.
 
     Returns:
         List of candidate dicts, each with:
@@ -59,6 +65,24 @@ def generate_candidate_pool(
     events = top_events[:TOP_N_EVENTS_FOR_CANDIDATES]
 
     candidates: dict[str, dict] = {}  # code -> candidate dict
+
+    # --- P0 (industry): 行业榜 Top-3 龙头股 — sector-beta injection ---
+    # Most excess return comes from industry beta, not stock alpha: leaders of
+    # the hottest industries enter the pool at the same tier as direct event
+    # hits so the stock scoring/debate stages can pick them up.
+    for leader in industry_leaders or []:
+        code = leader.get("code", "")
+        if not code:
+            continue
+        industry = leader.get("industry", "")
+        _add_candidate(
+            candidates, code,
+            name=leader.get("name", ""),
+            tier="P0",
+            event_title=f"行业榜Top{leader.get('rank', 3)}·{industry}" if industry else "行业榜龙头",
+            industries=[industry] if industry else [],
+            elasticity=0.6,
+        )
 
     # --- P0: Direct hit — event top_stocks that are also limit-up ---
     for event in events:

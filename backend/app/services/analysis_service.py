@@ -15,6 +15,7 @@ the heavy analysis stack installed.
 
 from __future__ import annotations
 
+import logging
 import threading
 import uuid
 from types import SimpleNamespace
@@ -135,6 +136,9 @@ class AnalysisTaskManager:
             "news_data": "a_stock",
             "signal_data": "a_stock",
         }
+        # 行业榜联动（宏观→中观→微观）：把最新行业热度榜注入诊股上下文，
+        # 分析师可结合个股所处行业的β环境研判。无数据时静默跳过。
+        config["industry_context"] = AnalysisTaskManager._build_industry_context()
         if lookback_days is None:
             # Default: analysis window = first day of trade_date's month.
             from datetime import date, timedelta
@@ -148,6 +152,52 @@ class AnalysisTaskManager:
         config["checkpoint_enabled"] = True
         config["output_language"] = "Chinese"
         return config
+
+    @staticmethod
+    def _build_industry_context() -> dict[str, str]:
+        """Summarize the latest industry board (行业榜) for analyst prompts.
+
+        Returns {"heatmap": str, "hot_sector_stocks": str}; both empty when
+        the industry ranking DB is unavailable or empty.
+        """
+        try:
+            from ai_stock.pipeline.db_ops import get_latest_industry_rankings
+
+            data = get_latest_industry_rankings()
+        except Exception as exc:  # engine missing / table absent — degrade silently
+            logging.getLogger(__name__).debug(
+                "industry context unavailable: %s", exc
+            )
+            return {"heatmap": "", "hot_sector_stocks": ""}
+
+        rankings = (data or {}).get("rankings") or []
+        if not rankings:
+            return {"heatmap": "", "hot_sector_stocks": ""}
+
+        snapshot = (data or {}).get("snapshot") or {}
+        lines = [f"榜单时间：{snapshot.get('snapshot_time', '')}（{snapshot.get('period', '')}盘）"]
+        for row in rankings[:10]:
+            inflow = row.get("fund_flow_net")
+            inflow_txt = (
+                f"主力净流入{inflow / 1e8:+.1f}亿" if isinstance(inflow, (int, float))
+                else "资金数据缺失"
+            )
+            lines.append(
+                f"{row.get('rank')}. {row.get('industry')} 热度{row.get('heat_score', 0)} "
+                f"{inflow_txt} 评级{row.get('rating', 'C')}"
+            )
+
+        hot_stocks: list[str] = []
+        for row in rankings[:3]:
+            for stock in row.get("leader_stocks") or []:
+                name = stock.get("name") or stock.get("code")
+                if name:
+                    hot_stocks.append(f"{name}({row.get('industry')})")
+
+        return {
+            "heatmap": "\n".join(lines),
+            "hot_sector_stocks": "、".join(hot_stocks[:15]),
+        }
 
     # ── Registry access ──────────────────────────────────────────────────
 

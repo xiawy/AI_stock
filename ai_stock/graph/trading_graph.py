@@ -651,8 +651,15 @@ class TradingAgentsGraph:
         # Initialize state only for fresh runs. Passing a new initial state to
         # LangGraph would start a new run and replay completed nodes.
         past_context = self.memory_log.get_past_context(company_name)
+        # 行业榜联动：config["industry_context"] 由诊股入口（AnalysisTaskManager）
+        # 从最新行业榜生成；无数据时为空 dict，分析师按无行业上下文处理。
+        industry_ctx = self.config.get("industry_context") or {}
         init_agent_state = self.propagator.create_initial_state(
-            company_name, trade_date, past_context=past_context
+            company_name,
+            trade_date,
+            past_context=past_context,
+            industry_heatmap=str(industry_ctx.get("heatmap", "")),
+            hot_sector_stocks=str(industry_ctx.get("hot_sector_stocks", "")),
         )
         return init_agent_state, args, resume_step
 

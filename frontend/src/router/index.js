@@ -47,6 +47,11 @@ const routes = [
     component: () => import('../views/ImpactRanking.vue'),
   },
   {
+    path: '/industry',
+    name: 'industry',
+    component: () => import('../views/IndustryRanking.vue'),
+  },
+  {
     path: '/recommendation',
     name: 'recommendation',
     component: () => import('../views/StockRecommendation.vue'),

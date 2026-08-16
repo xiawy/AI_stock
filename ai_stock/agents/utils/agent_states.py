@@ -110,6 +110,17 @@ class AgentState(MessagesState):
     past_context: Annotated[str, "Memory log context injected at run start (same-ticker decisions + cross-ticker lessons)"]
     evolution_context: Annotated[str, "Evolution layer context (strategies + episodic memories)"]
 
+    # 行业榜联动（宏观情绪 → 中观行业 → 微观个股）：最新行业热度榜及
+    # 热门行业龙头股上下文，由诊股入口在 run start 时注入，供分析师
+    # 判断个股所处行业的β环境。空字符串 = 无行业榜数据（字段必须存在，
+    # 否则分析师 prompt 引用会 KeyError）。
+    industry_heatmap: Annotated[
+        str, "Latest industry heat ranking summary (行业榜) for sector-beta context"
+    ]
+    hot_sector_stocks: Annotated[
+        str, "Leader stocks of the hottest industries (热门行业龙头股)"
+    ]
+
 
 # 分析师角色 → 私有消息通道字段名（O1 并行化用）。
 # 集中定义避免 setup.py/propagation.py 各自硬编码后漂移。
