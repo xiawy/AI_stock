@@ -4,24 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="页面风格做统一处理">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/config.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/db_models.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/db_models.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/scoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/scoring.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/backend/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/api/analysis.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/api/analysis.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/api/history.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/api/history.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/api/recommendation.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/api/recommendation.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/api/recommendation.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/api/recommendation.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/components/AppHeader.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/AppHeader.vue" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/components/ImpactDetail.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/ImpactDetail.vue" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/views/Home.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/views/Home.vue" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/views/StockRecommendation.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/views/StockRecommendation.vue" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/web/history.py" beforeDir="false" afterPath="$PROJECT_DIR$/web/history.py" afterDir="false" />
-    </list>
+    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="新增定时任务，刷新榜单" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -82,7 +65,7 @@
       <workItem from="1786750880866" duration="27893000" />
       <workItem from="1786791279121" duration="6212000" />
       <workItem from="1786805416923" duration="3251000" />
-      <workItem from="1786837533074" duration="4489000" />
+      <workItem from="1786837533074" duration="5143000" />
     </task>
     <task id="LOCAL-00001" summary="迁移项目为web项目">
       <option name="closed" value="true" />
@@ -172,7 +155,15 @@
       <option name="project" value="LOCAL" />
       <updated>1786808989306</updated>
     </task>
-    <option name="localTasksCounter" value="12" />
+    <task id="LOCAL-00012" summary="新增定时任务，刷新榜单">
+      <option name="closed" value="true" />
+      <created>1786842780206</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1786842780206</updated>
+    </task>
+    <option name="localTasksCounter" value="13" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -187,6 +178,7 @@
     <MESSAGE value="合并env" />
     <MESSAGE value="页面修改" />
     <MESSAGE value="页面风格做统一处理" />
-    <option name="LAST_COMMIT_MESSAGE" value="页面风格做统一处理" />
+    <MESSAGE value="新增定时任务，刷新榜单" />
+    <option name="LAST_COMMIT_MESSAGE" value="新增定时任务，刷新榜单" />
   </component>
 </project>

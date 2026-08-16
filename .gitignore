@@ -223,3 +223,5 @@ node_modules/
 
 # Backend local database (SQLite)
 backend/data/
+
+custom_strategies
