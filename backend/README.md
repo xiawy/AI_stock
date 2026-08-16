@@ -89,13 +89,13 @@ ai-stock/
 | GET | `/api/analysis/result/{task_id}` | 最终报告（完成后） |
 | POST | `/api/analysis/{task_id}/pause\|resume\|stop` | 生命周期控制 |
 | GET | `/api/analysis/tasks` | 当前用户任务记录（SQLite） |
-| GET | `/api/analysis/incomplete` | 可续跑任务（文件系统断点） |
+| GET | `/api/analysis/incomplete` | 可续跑任务（文件系统断点，仅当前用户） |
 | GET | `/api/stocks/search?q=` | 代码/中文名 → 6 位代码 |
 | GET | `/api/stocks/{code}/quote` | 实时行情（腾讯源） |
 | GET | `/api/stocks/{code}/kline?days=` | 日 K 线（ECharts 蜡烛图数据） |
-| GET | `/api/history` | 历史分析列表 |
-| GET | `/api/history/{ticker}/{date}` | 历史报告 JSON |
-| GET | `/api/history/{ticker}/{date}/markdown\|pdf` | 导出下载 |
+| GET | `/api/history` | 历史分析列表（仅当前用户的记录） |
+| GET | `/api/history/{ticker}/{date}` | 历史报告 JSON（仅限本人） |
+| GET | `/api/history/{ticker}/{date}/markdown\|pdf` | 导出下载（仅限本人） |
 | GET/POST/DELETE | `/api/watchlist` | 自选股管理 |
 | GET | `/api/health` | 健康检查 |
 

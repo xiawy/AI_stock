@@ -9,8 +9,4 @@ export const recommendationApi = {
   history(date) {
     return request.get('/recommendation/history', { params: { date } })
   },
-  /** 手动触发流水线 */
-  trigger() {
-    return request.post('/recommendation/trigger')
-  },
 }

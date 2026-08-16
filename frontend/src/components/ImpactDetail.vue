@@ -37,8 +37,8 @@
       </div>
 
       <div v-if="news.content" class="content-section">
-        <h4>新闻摘要</h4>
-        <p>{{ news.content }}</p>
+        <h4>新闻内容</h4>
+        <p class="news-body">{{ news.content }}</p>
       </div>
 
       <div v-if="news.industries?.length" class="section">
@@ -174,5 +174,11 @@ const biasLabel = computed(() => {
   font-size: 0.85rem;
   line-height: 1.6;
   color: var(--text-dim);
+}
+/* Full news body: preserve paragraph breaks, cap height with scroll. */
+.news-body {
+  white-space: pre-wrap;
+  max-height: 260px;
+  overflow-y: auto;
 }
 </style>

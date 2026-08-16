@@ -56,6 +56,7 @@ def get_status(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
+    _require_task_owner(db, current_user, task_id)
     snapshot = task_manager.snapshot(task_id)
     _sync_row(db, task_id)
     return snapshot
@@ -71,6 +72,7 @@ def get_result(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
+    _require_task_owner(db, current_user, task_id)
     _sync_row(db, task_id)
     return task_manager.result(task_id)
 
@@ -79,7 +81,9 @@ def get_result(
 def pause_task(
     task_id: str,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> dict:
+    _require_task_owner(db, current_user, task_id)
     if not task_manager.pause(task_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="当前状态无法暂停（未在运行或已暂停）"
@@ -91,7 +95,9 @@ def pause_task(
 def resume_task(
     task_id: str,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> dict:
+    _require_task_owner(db, current_user, task_id)
     if not task_manager.resume(task_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="当前状态无法恢复（未处于暂停）"
@@ -103,7 +109,9 @@ def resume_task(
 def stop_task(
     task_id: str,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> dict:
+    _require_task_owner(db, current_user, task_id)
     task_manager.stop(task_id)
     return {"detail": "已停止"}
 
@@ -126,11 +134,27 @@ def list_tasks(
     return [row.to_dict() for row in rows]
 
 
-@router.get("/incomplete", summary="可从断点续跑的未完成任务")
+@router.get("/incomplete", summary="当前用户可从断点续跑的未完成任务")
 def incomplete_tasks(
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> list[dict]:
-    return task_manager.incomplete_tasks()
+    # Checkpoint files are shared on disk (keyed by ticker+date only); filter
+    # them down to tasks this user started (running / paused / error).
+    rows = (
+        db.query(AnalysisTask.ticker, AnalysisTask.trade_date)
+        .filter(
+            AnalysisTask.user_id == current_user.id,
+            AnalysisTask.status.in_(("running", "paused", "error")),
+        )
+        .all()
+    )
+    owned = {(ticker.upper(), trade_date) for ticker, trade_date in rows}
+    return [
+        entry
+        for entry in task_manager.incomplete_tasks()
+        if (entry["ticker"], entry["trade_date"]) in owned
+    ]
 
 
 @router.post(
@@ -146,6 +170,17 @@ def resume_checkpoint(
 ) -> dict:
     payload.fresh = False
     return start_analysis(payload, current_user, db)
+
+
+def _require_task_owner(db: Session, current_user: User, task_id: str) -> None:
+    """Per-user isolation for task operations. 404 (not 403) so other users'
+    task ids are not discoverable."""
+    row = db.get(AnalysisTask, task_id)
+    if row is None or row.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"任务不存在或已随服务重启丢失: {task_id}",
+        )
 
 
 def _sync_row(db: Session, task_id: str) -> None:

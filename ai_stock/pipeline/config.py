@@ -63,7 +63,7 @@ STOCK_DEBATE_MAX_ROUNDS = 2
 # Times at which the pipeline runs (local time), "HH:MM" 24h format.
 # The first slot of the day is also the boundary before which the previous
 # day's ranking is served as "today" (see PipelineService.ensure_today_data).
-PIPELINE_SCHEDULE = ["08:00", "14:30"]
+PIPELINE_SCHEDULE = ["08:00", "11:30", "14:30"]
 
 # News collection window (hours)
 NEWS_WINDOW_HOURS = 12

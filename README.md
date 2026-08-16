@@ -298,7 +298,7 @@ npm run dev
 
 ### 功能
 
-- **用户系统**：注册 / 登录（JWT 会话），分析任务与自选股按用户隔离（SQLite）
+- **用户系统**：注册 / 登录（JWT 会话），分析任务、诊股记录（历史报告 / 断点续跑）与自选股按用户隔离（SQLite）
 - **模型自选**：支持 11 个 LLM 供应商切换（MiniMax/DeepSeek/Qwen/GLM/OpenAI/Anthropic/Google/xAI/OpenRouter/Ollama/OpenAI 兼容网关）
 - **一键分析**：输入 6 位 A 股代码或中文名 + 分析日期，点击「开始分析」；支持断点续跑
 - **实时进度**：12 阶段 pipeline 实时显示（7 分析师 → 质量门控 → 辩论 → 风控 → 决策），支持暂停 / 恢复 / 停止

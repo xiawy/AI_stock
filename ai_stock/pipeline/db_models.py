@@ -127,6 +127,8 @@ class NewsItem(Base):
             "id": self.id,
             "snapshot_id": self.snapshot_id,
             "title": self.title,
+            # Full news body — the impact detail dialog shows it verbatim.
+            "content": self.content,
             "source": self.source,
             "pub_time": self.pub_time,
             "category": self.category,

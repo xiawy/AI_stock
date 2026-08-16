@@ -9,7 +9,7 @@
       <nav class="nav">
         <router-link to="/">首页</router-link>
         <router-link to="/diagnosis">诊股</router-link>
-        <router-link to="/recommendation">荐股</router-link>
+        <router-link to="/recommendation">寻龙榜</router-link>
         <router-link to="/impact">新闻榜</router-link>
       </nav>
 

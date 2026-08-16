@@ -240,6 +240,73 @@ def get_incomplete_history() -> list[dict[str, Any]]:
     return active_entries
 
 
+def cleanup_expired(max_age_days: int) -> dict[str, int]:
+    """Delete analysis logs and incomplete-task entries past the retention age.
+
+    Report files are named ``full_states_log_YYYY-MM-DD.json`` and organized
+    under ``<results_dir>/<ticker>/<date-dir>/``; both the file and any
+    directories it leaves empty are removed. Best-effort: errors are logged,
+    never raised — cleanup must never break a running analysis.
+
+    Returns {"files": removed_log_count, "incomplete": removed_index_count}.
+    """
+    from datetime import date as date_type
+    from datetime import timedelta
+
+    cutoff = date_type.today() - timedelta(days=max_age_days)
+    removed_files = 0
+
+    root = _results_dir()
+    if root.exists():
+        for log_file in root.rglob("full_states_log_*.json"):
+            match = re.search(r"full_states_log_(\d{4}-\d{2}-\d{2})\.json$", log_file.name)
+            if not match:
+                continue
+            try:
+                if date_type.fromisoformat(match.group(1)) >= cutoff:
+                    continue
+                log_file.unlink(missing_ok=True)
+                removed_files += 1
+                # Prune directories left empty by the deletion (innermost first).
+                for parent in (log_file.parent, log_file.parent.parent):
+                    try:
+                        parent.rmdir()  # only succeeds when empty
+                    except OSError:
+                        break
+            except OSError as e:
+                logger.warning("Cleanup failed for %s: %s", log_file, e)
+
+    removed_incomplete = 0
+    with _INCOMPLETE_TASKS_LOCK:
+        entries = _load_incomplete_index()
+        kept = [
+            entry
+            for entry in entries
+            if not _entry_expired(entry.get("trade_date", ""), cutoff)
+        ]
+        removed_incomplete = len(entries) - len(kept)
+        if removed_incomplete:
+            _save_incomplete_index(kept)
+
+    # The in-memory history cache may still reference deleted paths; drop it
+    # so the next listing re-scans the disk.
+    global _history_cache
+    with _history_cache_lock:
+        _history_cache = (0.0, "", [])
+
+    return {"files": removed_files, "incomplete": removed_incomplete}
+
+
+def _entry_expired(trade_date: str, cutoff) -> bool:
+    """True when a YYYY-MM-DD string parses and is older than the cutoff."""
+    from datetime import date as date_type
+
+    try:
+        return date_type.fromisoformat(trade_date) < cutoff
+    except ValueError:
+        return False
+
+
 def load_analysis(path: str) -> dict[str, Any]:
     """Load a saved analysis JSON file."""
     with open(path, encoding="utf-8") as f:

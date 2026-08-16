@@ -39,6 +39,7 @@ class ScoredNews:
     __slots__ = (
         "news", "policy", "news_agent", "capital", "sentiment",
         "composite", "industries", "top_stocks", "supply_demand_signals",
+        "_supply_demand_result",
     )
 
     def __init__(self, news: dict):
@@ -51,6 +52,9 @@ class ScoredNews:
         self.industries: list[str] = []
         self.top_stocks: list[dict] = []
         self.supply_demand_signals: list[str] = []
+        # Attached later by the pipeline (Step 5); must be a slot or the
+        # assignment raises AttributeError on this __slots__ class.
+        self._supply_demand_result = None
 
     def to_dict(self) -> dict:
         return {

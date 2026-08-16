@@ -53,12 +53,55 @@ def _reap_orphaned_tasks() -> None:
             )
 
 
+def _reap_orphaned_snapshots() -> None:
+    """Mark impact-pipeline snapshots left ``running`` by a previous process
+    as ``failed``.
+
+    Pipeline runs execute in daemon threads; a backend restart mid-run kills
+    the thread and freezes the snapshot in ``running`` forever. Those rows are
+    invisible to ``get_latest_snapshot`` (completed only) but keep today's
+    ``ensure_today_data`` bootstrap from ever being considered done, so the
+    rankings would stay empty until the next scheduled slot.
+    """
+    from sqlalchemy import update
+
+    from ai_stock.pipeline.db_models import ImpactSnapshot
+    from app.core.database import SessionLocal
+
+    with SessionLocal() as session:
+        result = session.execute(
+            update(ImpactSnapshot)
+            .where(ImpactSnapshot.status == "running")
+            .values(status="failed")
+        )
+        session.commit()
+        if result.rowcount:
+            logger.warning(
+                "Reaped %d orphaned impact snapshot(s) left running by a previous process",
+                result.rowcount,
+            )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # Create SQLite tables on first start; Alembic owns later migrations.
     init_db()
 
     _reap_orphaned_tasks()
+    _reap_orphaned_snapshots()
+
+    # Data retention: 诊股 > 20 days / 寻龙榜·新闻榜 > 70 days. One pass now
+    # (background thread) and daily at 03:30 afterwards.
+    try:
+        from app.services.cleanup import (
+            start_cleanup_scheduler,
+            start_initial_cleanup,
+        )
+
+        start_initial_cleanup()
+        start_cleanup_scheduler()
+    except Exception as exc:
+        logger.warning("Cleanup scheduler init failed (non-fatal): %s", exc)
 
     # Initialize the impact pipeline service (scheduler + LLM clients).
     try:
@@ -78,10 +121,15 @@ async def lifespan(_: FastAPI):
 
     yield
 
-    # Shutdown pipeline scheduler
+    # Shutdown pipeline scheduler + cleanup scheduler
     try:
         from app.services.pipeline_service import get_pipeline_service
         get_pipeline_service().shutdown()
+    except Exception:
+        pass
+    try:
+        from app.services.cleanup import stop_cleanup_scheduler
+        stop_cleanup_scheduler()
     except Exception:
         pass
 

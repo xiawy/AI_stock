@@ -7,10 +7,12 @@ from types import SimpleNamespace
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from sqlalchemy.orm import Session
 
+from app.core.database import get_db
 from app.core.trading import bootstrap as bootstrap_engine
 from app.dependencies import get_current_user
-from app.models import User
+from app.models import AnalysisTask, User
 
 
 def _web() -> SimpleNamespace:
@@ -42,10 +44,31 @@ def _content_disposition(label: str, ticker: str, trade_date: str, ext: str) -> 
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"
 
 
-def _find_history_path(ticker: str, trade_date: str) -> str:
+def _user_task_keys(db: Session, user_id: int) -> set[tuple[str, str]]:
+    """(ticker, trade_date) pairs the user has ever run an analysis for.
+
+    Report files are shared on disk (keyed by ticker+date only), so user
+    isolation is enforced against the per-user ``analysis_tasks`` rows.
+    """
+    rows = (
+        db.query(AnalysisTask.ticker, AnalysisTask.trade_date)
+        .filter(AnalysisTask.user_id == user_id)
+        .all()
+    )
+    return {(ticker.upper(), trade_date) for ticker, trade_date in rows}
+
+
+def _find_history_path(db: Session, current_user: User, ticker: str, trade_date: str) -> str:
     if not _TICKER_RE.match(ticker) or not _DATE_RE.match(trade_date):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="参数格式错误（需6位代码与 YYYY-MM-DD）"
+        )
+    # Per-user isolation: only the user who ran this analysis may read its
+    # report. 404 (not 403) so other users' records are not discoverable.
+    if (ticker.upper(), trade_date) not in _user_task_keys(db, current_user.id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"未找到 {ticker} 在 {trade_date} 的分析记录",
         )
     for entry in _web().history.get_history():
         if entry["ticker"] == ticker.upper() and entry["date"] == trade_date:
@@ -56,27 +79,38 @@ def _find_history_path(ticker: str, trade_date: str) -> str:
     )
 
 
-def _load_normalized(ticker: str, trade_date: str) -> dict:
+def _load_normalized(db: Session, current_user: User, ticker: str, trade_date: str) -> dict:
     web = _web()
-    state = web.history.load_analysis(_find_history_path(ticker, trade_date))
+    state = web.history.load_analysis(
+        _find_history_path(db, current_user, ticker, trade_date)
+    )
     # Normalize "code name" mentions the same way the live report does (#55).
     web.display.normalize_report_state_mentions(state, ticker)
     return state
 
 
-@router.get("", summary="分析历史记录列表（文件系统日志）")
-def list_history(current_user: User = Depends(get_current_user)) -> list[dict]:
-    return _web().history.get_history()
+@router.get("", summary="分析历史记录列表（仅当前用户的记录）")
+def list_history(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    owned = _user_task_keys(db, current_user.id)
+    return [
+        entry
+        for entry in _web().history.get_history()
+        if (entry["ticker"], entry["date"]) in owned
+    ]
 
 
-@router.get("/{ticker}/{trade_date}", summary="加载某次分析的完整报告 JSON")
+@router.get("/{ticker}/{trade_date}", summary="加载某次分析的完整报告 JSON（仅限本人）")
 def get_report(
     ticker: str,
     trade_date: str,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> dict:
     web = _web()
-    state = _load_normalized(ticker, trade_date)
+    state = _load_normalized(db, current_user, ticker, trade_date)
     return {
         "ticker": ticker.upper(),
         "stock_label": web.display.stock_display_label(ticker, state),
@@ -86,14 +120,17 @@ def get_report(
     }
 
 
-@router.get("/{ticker}/{trade_date}/markdown", summary="导出 Markdown 报告")
+@router.get("/{ticker}/{trade_date}/markdown", summary="导出 Markdown 报告（仅限本人）")
 def export_markdown(
     ticker: str,
     trade_date: str,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> Response:
     web = _web()
-    state = web.history.load_analysis(_find_history_path(ticker, trade_date))
+    state = web.history.load_analysis(
+        _find_history_path(db, current_user, ticker, trade_date)
+    )
     signal = web.history.extract_signal(state)
     label = web.display.stock_display_label(ticker, state)
     md = web.pdf.generate_markdown(state, ticker, trade_date, signal)
@@ -104,14 +141,15 @@ def export_markdown(
     )
 
 
-@router.get("/{ticker}/{trade_date}/pdf", summary="导出 PDF 报告")
+@router.get("/{ticker}/{trade_date}/pdf", summary="导出 PDF 报告（仅限本人）")
 def export_pdf(
     ticker: str,
     trade_date: str,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> Response:
     web = _web()
-    state = _load_normalized(ticker, trade_date)
+    state = _load_normalized(db, current_user, ticker, trade_date)
     signal = web.history.extract_signal(state)
     label = web.display.stock_display_label(ticker, state)
     try:

@@ -3,7 +3,7 @@
     <AppHeader />
     <div class="page">
       <div class="page-header">
-        <h2>今日荐股</h2>
+        <h2>今日寻龙榜</h2>
         <div class="header-actions">
           <el-button :icon="ArrowLeft" @click="router.push('/')">返回首页</el-button>
           <el-date-picker
@@ -14,9 +14,6 @@
             value-format="YYYY-MM-DD"
             @change="loadData"
           />
-          <el-button type="primary" :loading="triggering" @click="triggerPipeline">
-            手动运行
-          </el-button>
         </div>
       </div>
 
@@ -35,8 +32,8 @@
       <StockCard v-for="stock in alternates" :key="stock.ticker" :stock="stock" />
     </div>
 
-    <el-empty v-else-if="!loading" description="暂无荐股数据">
-      <el-button type="primary" @click="triggerPipeline">手动运行流水线</el-button>
+    <el-empty v-else-if="!loading" description="暂无寻龙榜数据，榜单由服务端定时更新">
+      <span class="empty-hint">如需当日数据，可稍后刷新查看；也可选择日期查看历史榜单</span>
     </el-empty>
     </div>
   </div>
@@ -46,14 +43,12 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
 import { recommendationApi } from '../api/recommendation'
 import AppHeader from '../components/AppHeader.vue'
 import StockCard from '../components/StockCard.vue'
 
 const router = useRouter()
 const loading = ref(false)
-const triggering = ref(false)
 const snapshot = ref(null)
 const recommendations = ref([])
 const selectedDate = ref('')
@@ -82,22 +77,6 @@ async function loadData() {
     recommendations.value = []
   } finally {
     loading.value = false
-  }
-}
-
-async function triggerPipeline() {
-  triggering.value = true
-  try {
-    await recommendationApi.trigger()
-    ElMessage.success('流水线已启动，请稍后刷新查看结果')
-  } catch (err) {
-    // The global axios interceptor already toasts backend `detail` messages;
-    // only fall back to a generic one when there is no detail (e.g. network error).
-    if (!err.response?.data?.detail) {
-      ElMessage.error('流水线启动失败')
-    }
-  } finally {
-    triggering.value = false
   }
 }
 
@@ -143,5 +122,9 @@ onMounted(loadData)
   margin-bottom: 12px;
   padding-left: 8px;
   border-left: 3px solid var(--brand, #409eff);
+}
+.empty-hint {
+  color: var(--text-dim);
+  font-size: 0.82rem;
 }
 </style>
