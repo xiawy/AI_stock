@@ -39,6 +39,20 @@ def _strip_think_tags(text: str) -> str:
     return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
 
 
+def _unwrap_stream_item(item: Any) -> tuple[bool, dict[str, Any]]:
+    """拆 langgraph ``subgraphs=True`` 的流事件。
+
+    开启 subgraphs 后子图事件会冒泡到顶层，形如 ``(namespace, chunk)``：
+    namespace 非空表示来自子图（分析师阶段内部各链的中间快照），
+    空元组表示主图快照。子图快照用于实时进度展示；只有主图快照才是
+    完整状态，可作为 finalize/落盘依据。
+    """
+    if isinstance(item, tuple) and len(item) == 2:
+        namespace, chunk = item
+        return bool(namespace), chunk
+    return False, item
+
+
 def _detect_completed_stages(
     chunk: dict[str, Any],
     tracker: ProgressTracker,
@@ -117,14 +131,17 @@ def _run(ticker: str, trade_date: str, config: dict, tracker: ProgressTracker) -
             _close_and_discard()
             return
 
-        stream = graph.graph.stream(init_state, **args)
+        # 分析师并行层是子图（setup.py）：主图在 "Analysts Stage" 节点执行
+        # 期间不产生快照，必须开启 subgraphs 冒泡，否则整个分析师阶段
+        # （可能持续数分钟）没有任何流事件，进度/暂停/终止都无法响应。
+        stream = graph.graph.stream(init_state, subgraphs=True, **args)
         while True:
             tracker.wait_if_paused()
             if tracker.stop_requested:
                 _close_and_discard()
                 return
             try:
-                chunk = next(stream)
+                item = next(stream)
             except StopIteration:
                 break
 
@@ -132,7 +149,7 @@ def _run(ticker: str, trade_date: str, config: dict, tracker: ProgressTracker) -
                 _close_and_discard()
                 return
 
-            last_chunk = chunk
+            is_subgraph, chunk = _unwrap_stream_item(item)
             _detect_completed_stages(chunk, tracker)
             _infer_active_stage(tracker)
             record_incomplete_task(
@@ -141,6 +158,10 @@ def _run(ticker: str, trade_date: str, config: dict, tracker: ProgressTracker) -
                 status="paused" if tracker.is_paused else "running",
                 completed_stages=tracker.completed_stages,
             )
+            if not is_subgraph:
+                # 子图快照缺少辩论/决策字段（尚未产生），只有主图快照才是
+                # 完整状态，可作为 finalize/落盘的最终状态。
+                last_chunk = chunk
 
             s = stats.get_stats()
             tracker.update_stats(s["llm_calls"], s["tool_calls"], s["tokens_in"], s["tokens_out"])

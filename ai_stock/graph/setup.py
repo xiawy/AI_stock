@@ -254,16 +254,39 @@ class GraphSetup:
 
         # Add analyst nodes to the graph
         if parallel:
+            # 分析师并行层封装为子图（"Analysts Stage"）：子图的 END 是
+            # LangGraph 真正的 fan-in barrier，主图要等全部分析师链完成后
+            # 才会进入 Quality Gate。
+            # 此前直接把各链的条件边指向 "Quality Gate"——条件边汇入的节点
+            # 是「任一分支到达即执行」而非等待全部分支：各分析师的工具循环
+            # 轮数天然不同，先完成的链就会触发一次 Quality Gate 并把流程
+            # 推进到辩论阶段，导致 (a) 质量门控在多数报告仍为空时就输出
+            # F 级摘要，(b) 辩论与分析循环并行、多个辩手在同一 superstep
+            # 写 investment_debate_state（曾触发 INVALID_CONCURRENT_GRAPH_
+            # UPDATE 崩溃，merge reducer 只是掩盖了症状）。
+            analyst_stage = StateGraph(AgentState)
             for analyst_type, node in analyst_nodes.items():
                 channel = ANALYST_CHANNEL_KEYS[analyst_type]
-                workflow.add_node(
+                analyst_stage.add_node(
                     f"{analyst_type.capitalize()} Analyst",
                     _channel_adapter(channel, node),
                 )
-                workflow.add_node(
+                analyst_stage.add_node(
                     f"tools_{analyst_type}",
                     _tool_channel_adapter(channel, tool_nodes[analyst_type]),
                 )
+                analyst_stage.add_edge(START, f"{analyst_type.capitalize()} Analyst")
+                analyst_stage.add_conditional_edges(
+                    f"{analyst_type.capitalize()} Analyst",
+                    _channel_route(
+                        channel, f"tools_{analyst_type}", END
+                    ),
+                    [f"tools_{analyst_type}", END],
+                )
+                analyst_stage.add_edge(
+                    f"tools_{analyst_type}", f"{analyst_type.capitalize()} Analyst"
+                )
+            workflow.add_node("Analysts Stage", analyst_stage.compile())
         else:
             for analyst_type, node in analyst_nodes.items():
                 workflow.add_node(f"{analyst_type.capitalize()} Analyst", node)
@@ -285,22 +308,10 @@ class GraphSetup:
 
         # Define edges
         if parallel:
-            # START fans out to every selected analyst; each analyst loops
-            # through its own tools until it emits a final tool-call-free
-            # message, then hands off to the Quality Gate. LangGraph's barrier
-            # semantics hold the gate until every chain has arrived.
-            for analyst_type in selected_analysts:
-                analyst_name = f"{analyst_type.capitalize()} Analyst"
-                tools_name = f"tools_{analyst_type}"
-                workflow.add_edge(START, analyst_name)
-                workflow.add_conditional_edges(
-                    analyst_name,
-                    _channel_route(
-                        ANALYST_CHANNEL_KEYS[analyst_type], tools_name, "Quality Gate"
-                    ),
-                    [tools_name, "Quality Gate"],
-                )
-                workflow.add_edge(tools_name, analyst_name)
+            # 主图：分析师阶段（子图，内部 6 链并行工具循环）作为单个节点
+            # 串行接入 Quality Gate —— 阶段内并行、阶段间串行。
+            workflow.add_edge(START, "Analysts Stage")
+            workflow.add_edge("Analysts Stage", "Quality Gate")
         else:
             # Sequential chain (original behaviour, config parallel_analysts=False)
             # Start with the first analyst

@@ -1,5 +1,9 @@
 from typing import Annotated
 
+from langchain_core.messages import ToolMessage
+
+from ai_stock.agents.utils.agent_states import ANALYST_CHANNEL_KEYS
+
 REPORT_FIELDS = {
     "market": "market_report",
     "social": "sentiment_report",
@@ -60,6 +64,34 @@ def _hard_check_report(analyst_type: str, report: str) -> tuple:
         return ("B", "；".join(issues) if issues else "基本合格")
 
     return ("A", f"完整 ({length} chars)")
+
+
+def _tool_ledger_lines(state, active_fields):
+    """工具调用台账：各分析师私有消息通道里的工具调用统计。
+
+    并行模式下工具循环记录在 {role}_messages 私有通道，门控时已随
+    "Analysts Stage" 子图输出回到主图 State；串行模式没有私有通道，
+    返回空列表（不出台账段）。
+    """
+    lines = []
+    for analyst_type in active_fields:
+        channel = ANALYST_CHANNEL_KEYS.get(analyst_type)
+        if not channel:
+            continue
+        tool_msgs = [
+            m for m in (state.get(channel) or []) if isinstance(m, ToolMessage)
+        ]
+        if not tool_msgs:
+            continue
+        names: dict = {}
+        for m in tool_msgs:
+            name = getattr(m, "name", None) or "unknown"
+            names[name] = names.get(name, 0) + 1
+        detail = ", ".join(f"{n}×{c}" for n, c in names.items())
+        lines.append(
+            f"- {ANALYST_NAMES[analyst_type]}: {len(tool_msgs)} 次调用 ({detail})"
+        )
+    return lines
 
 
 def _build_review_prompt(
@@ -186,10 +218,19 @@ def create_quality_gate(llm, active_analysts=None):
             except Exception as e:
                 llm_review = f"（LLM 复审失败: {type(e).__name__}: {e}）"
 
+        # 工具调用台账：依赖各分析师私有通道里的工具循环记录
+        ledger_lines = _tool_ledger_lines(state, active_fields)
+        ledger_section = (
+            "### 工具调用台账\n" + "\n".join(ledger_lines) + "\n\n"
+            if ledger_lines
+            else ""
+        )
+
         summary = (
             f"## 数据质量门控结果\n\n"
             f"**标的**: {ticker} | **交易日**: {trade_date}\n\n"
             f"### 硬检查结果\n{hard_summary}\n\n"
+            f"{ledger_section}"
             f"### LLM 复审\n"
             f"{llm_review if llm_review else '（跳过 — 多数报告未通过硬检查）'}\n"
         )

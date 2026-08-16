@@ -37,7 +37,8 @@ def create_portfolio_manager(llm):
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
-        research_plan = state["investment_plan"]
+        # 数据依赖（阶段六）：Trader 交易方案 + 三方风险辩论记录。
+        # RM 投资计划已由交易方案承载，不再直读。
         trader_plan = state["trader_investment_plan"]
 
         past_context = state.get("past_context", "")
@@ -81,7 +82,6 @@ def create_portfolio_manager(llm):
 - **Sell**: Exit position or avoid entry
 
 **Context:**
-- Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**
 {lessons_line}
 **Risk Analysts Debate History:**

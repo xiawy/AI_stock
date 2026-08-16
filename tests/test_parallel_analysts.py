@@ -6,6 +6,8 @@
 3. 私有消息通道隔离：一个分析师看不到另一个分析师的工具循环。
 4. 主通道 messages 只汇总各分析师的最终报告。
 5. Quality Gate 是 fan-in barrier：所有报告就绪后才执行（B1 动态阈值生效）。
+6. 分析师层子图化（"Analysts Stage"）后：链长短不一时 Quality Gate 只执行
+   一次且执行时报告齐全；runner 能解包 subgraphs=True 的流事件。
 """
 
 import time
@@ -78,6 +80,40 @@ def make_fake_analyst(report_key, intervals, delay=0.3):
     return node
 
 
+def make_rounds_analyst(report_key, tool_rounds):
+    """可配置工具轮数的 fake 分析师：循环 tool_rounds 轮后再交报告。
+
+    真实场景各分析师的工具循环轮数天然不同；旧的「固定两轮」fake 让
+    Quality Gate 被提前/多次触发的 bug 在测试里不可见。
+    """
+
+    def node(state):
+        msgs = state["messages"]
+        done_tools = sum(1 for m in msgs if isinstance(m, ToolMessage))
+        if done_tools >= tool_rounds:
+            return {
+                "messages": [AIMessage(content=GOOD_REPORT)],
+                report_key: GOOD_REPORT,
+            }
+        return {
+            "messages": [
+                AIMessage(
+                    content="fetching data",
+                    tool_calls=[
+                        {
+                            "name": "get_stock_data",
+                            "args": {"symbol": "600519"},
+                            # 每轮唯一 id，FakeToolNode 才能逐轮回包
+                            "id": f"call_{report_key}_{done_tools}",
+                        }
+                    ],
+                )
+            ]
+        }
+
+    return node
+
+
 def make_fake_debator(name, state_key, response_prefix):
     def node(state):
         debate = dict(state.get(state_key) or {})
@@ -117,6 +153,13 @@ def patched_factories(monkeypatch):
                 report_keys[_role], intervals
             ),
         )
+
+    _patch_downstream(monkeypatch)
+    return intervals
+
+
+def _patch_downstream(monkeypatch):
+    """patch 辩论/交易/风控/PM 等下游节点工厂（分析师层测试的公共部分）。"""
 
     def fake_bull(state):
         debate = dict(state.get("investment_debate_state") or {})
@@ -180,7 +223,6 @@ def patched_factories(monkeypatch):
             }
         ),
     )
-    return intervals
 
 
 def _build_graph(selected, parallel=True):
@@ -296,3 +338,77 @@ def test_quality_gate_threshold_scales_with_active_analysts():
     assert "2 位分析师" in prompt
     assert "技术分析师" in prompt and "新闻分析师" in prompt
     assert "情绪分析师" not in prompt  # 未选中的分析师不进 prompt
+
+
+def test_quality_gate_waits_for_staggered_analysts(monkeypatch):
+    """回归（子图化修复）：分析师链长短不一时（真实 bug 场景——短链先到
+    曾让 Quality Gate 在多数报告为空时就执行、辩论与分析循环并行），
+    Quality Gate 必须只执行一次，且执行时全部报告就绪。"""
+    specs = {
+        "market": ("create_market_analyst", "market_report", 1),
+        "social": ("create_social_media_analyst", "sentiment_report", 3),
+        "news": ("create_news_analyst", "news_report", 2),
+    }
+    report_keys = [spec[1] for spec in specs.values()]
+    for factory_name, report_key, rounds in specs.values():
+        monkeypatch.setattr(
+            graph_setup_mod,
+            factory_name,
+            lambda llm, _rk=report_key, _r=rounds: make_rounds_analyst(_rk, _r),
+        )
+    _patch_downstream(monkeypatch)
+
+    # 包装 quality gate，记录每次执行时各报告的长度
+    gate_calls = []
+    real_create_gate = graph_setup_mod.create_quality_gate
+
+    def recording_gate(llm, active_analysts):
+        inner = real_create_gate(llm, active_analysts)
+
+        def wrapped(state):
+            gate_calls.append(
+                {rk: len(str(state.get(rk) or "")) for rk in report_keys}
+            )
+            return inner(state)
+
+        return wrapped
+
+    monkeypatch.setattr(graph_setup_mod, "create_quality_gate", recording_gate)
+
+    selected = ["market", "social", "news"]
+    graph = _build_graph(selected).compile()
+    init_state = Propagator().create_initial_state("600519", "2026-08-14")
+
+    final_state = graph.invoke(init_state, {"recursion_limit": 100})
+
+    # 旧拓扑下 market（1 轮）先完成就会触发一次 gate，social/news 完成时
+    # 再触发——现在子图 END 是真 barrier，必须恰好执行一次
+    assert len(gate_calls) == 1, gate_calls
+    # 且执行时三份报告全部就绪（旧 bug：只有 market 有内容，其余 [F] 空）
+    for rk in report_keys:
+        assert gate_calls[0][rk] > 0, (rk, gate_calls)
+    # 全链照常走通
+    assert final_state.get("final_trade_decision") == "BUY"
+    assert "数据质量门控结果" in final_state.get("data_quality_summary", "")
+
+
+def test_unwrap_stream_item_handles_subgraph_events():
+    """runner 解包 subgraphs=True 流事件：子图/主图/裸 dict 三种形态。"""
+    from web.runner import _unwrap_stream_item
+
+    # 主图事件：namespace 为空元组
+    is_sub, chunk = _unwrap_stream_item(((), {"messages": []}))
+    assert is_sub is False
+    assert chunk == {"messages": []}
+
+    # 子图事件：namespace 非空（Analysts Stage 内部快照）
+    is_sub, chunk = _unwrap_stream_item(
+        (("Analysts Stage:ab12cd",), {"market_report": "x"})
+    )
+    assert is_sub is True
+    assert chunk == {"market_report": "x"}
+
+    # 未开启 subgraphs 的裸 dict（历史形态）不误判
+    is_sub, chunk = _unwrap_stream_item({"messages": []})
+    assert is_sub is False
+    assert chunk == {"messages": []}

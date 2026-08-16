@@ -9,13 +9,9 @@ def create_conservative_debator(llm):
         current_aggressive_response = risk_debate_state.get("current_aggressive_response", "")
         current_neutral_response = risk_debate_state.get("current_neutral_response", "")
 
-        market_research_report = state["market_report"]
-        sentiment_report = state["sentiment_report"]
-        news_report = state["news_report"]
-        fundamentals_report = state["fundamentals_report"]
-        policy_report = state.get("policy_report", "")
-        hot_money_report = state.get("hot_money_report", "")
-
+        # 数据依赖（阶段五）：Trader 交易方案 + 本阶段三方辩论记录。
+        # 风险辩手评估的是交易方案本身，不直读研报——研报证据已由
+        # Bull/Bear 辩论与 RM 计划传导。
         trader_decision = state["trader_investment_plan"]
 
         prompt = f"""As the Conservative Risk Analyst evaluating an A-share (China mainland) stock, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. Critically examine high-risk elements in the trader's plan, pointing out where it may expose the firm to undue risk.
@@ -32,14 +28,8 @@ Here is the trader's decision:
 
 {trader_decision}
 
-Counter the aggressive and neutral analysts. Highlight where their optimism overlooks A-share structural risks. Use these data sources:
+Counter the aggressive and neutral analysts. Highlight where their optimism overlooks A-share structural risks.
 
-Market Research Report: {market_research_report}
-Social Media Sentiment Report: {sentiment_report}
-Latest News Report: {news_report}
-Company Fundamentals Report: {fundamentals_report}
-Policy Analysis Report: {policy_report}
-Hot Money / Capital Flow Report: {hot_money_report}
 Conversation history: {history} Last aggressive argument: {current_aggressive_response} Last neutral argument: {current_neutral_response}. If no responses yet, present your own argument.
 
 Demonstrate why a conservative stance is the safest path, especially given A-share market structure where downside protection mechanisms (stop-loss, same-day exit) are severely limited. Output conversationally without special formatting."""

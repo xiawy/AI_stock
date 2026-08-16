@@ -4,7 +4,19 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="新增定时任务，刷新榜单" />
+    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="新增gitignore">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/managers/portfolio_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/managers/portfolio_manager.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/managers/research_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/managers/research_manager.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/quality_gate.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/quality_gate.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/aggressive_debator.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/aggressive_debator.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/conservative_debator.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/conservative_debator.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/neutral_debator.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/risk_mgmt/neutral_debator.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/agents/trader/trader.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/trader/trader.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/graph/setup.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/graph/setup.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_parallel_analysts.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_parallel_analysts.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/web/runner.py" beforeDir="false" afterPath="$PROJECT_DIR$/web/runner.py" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -24,6 +36,7 @@
   </component>
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
+    "ASKED_MARK_IGNORED_FILES_AS_EXCLUDED": "true",
     "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "ModuleVcsDetector.initialDetectionPerformed": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
@@ -66,6 +79,7 @@
       <workItem from="1786791279121" duration="6212000" />
       <workItem from="1786805416923" duration="3251000" />
       <workItem from="1786837533074" duration="5143000" />
+      <workItem from="1786843559220" duration="7762000" />
     </task>
     <task id="LOCAL-00001" summary="迁移项目为web项目">
       <option name="closed" value="true" />
@@ -163,7 +177,15 @@
       <option name="project" value="LOCAL" />
       <updated>1786842780206</updated>
     </task>
-    <option name="localTasksCounter" value="13" />
+    <task id="LOCAL-00013" summary="新增gitignore">
+      <option name="closed" value="true" />
+      <created>1786843859074</created>
+      <option name="number" value="00013" />
+      <option name="presentableId" value="LOCAL-00013" />
+      <option name="project" value="LOCAL" />
+      <updated>1786843859074</updated>
+    </task>
+    <option name="localTasksCounter" value="14" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -179,6 +201,7 @@
     <MESSAGE value="页面修改" />
     <MESSAGE value="页面风格做统一处理" />
     <MESSAGE value="新增定时任务，刷新榜单" />
-    <option name="LAST_COMMIT_MESSAGE" value="新增定时任务，刷新榜单" />
+    <MESSAGE value="新增gitignore" />
+    <option name="LAST_COMMIT_MESSAGE" value="新增gitignore" />
   </component>
 </project>

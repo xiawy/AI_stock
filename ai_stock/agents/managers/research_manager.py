@@ -19,6 +19,17 @@ def create_research_manager(llm):
 
         investment_debate_state = state["investment_debate_state"]
 
+        # 数据依赖（阶段三）：辩论记录 + 6 份研报（通过 State）+ 质量门控摘要。
+        # 辩手的论证是对研报的提炼，最终裁决必须能回到原始证据核对，
+        # 防止辩论中的夸大/遗漏直接变成投资计划。
+        market_research_report = state.get("market_report", "")
+        sentiment_report = state.get("sentiment_report", "")
+        news_report = state.get("news_report", "")
+        fundamentals_report = state.get("fundamentals_report", "")
+        policy_report = state.get("policy_report", "")
+        hot_money_report = state.get("hot_money_report", "")
+        data_quality_summary = state.get("data_quality_summary", "")
+
         prompt = f"""As the Research Manager and debate facilitator, your role is to critically evaluate this round of debate and deliver a clear, actionable investment plan for the trader.
 
 {instrument_context}
@@ -38,8 +49,24 @@ Commit to a clear stance whenever the debate's strongest arguments warrant one; 
 
 ---
 
+**Analyst Research Reports** (primary evidence):
+Market research report: {market_research_report}
+Social media sentiment report: {sentiment_report}
+Latest news report: {news_report}
+Company fundamentals report: {fundamentals_report}
+Policy analysis report: {policy_report}
+Hot money / capital flow report: {hot_money_report}
+
+**Data Quality Assessment:** {data_quality_summary}
+
+---
+
 **Debate History:**
-{history}""" + get_language_instruction()
+{history}
+
+---
+
+Weigh the debate arguments against the underlying reports: when a debater overstates or ignores evidence in the reports, trust the reports. Reduce the weight of any report the data quality assessment flags as low-confidence (grade C/D/F) and note the limitation in your plan.""" + get_language_instruction()
 
         # Inject evolution context if available
         evo_ctx = state.get("evolution_context")

@@ -29,17 +29,9 @@ def create_trader(llm):
         instrument_context = build_instrument_context(company_name)
         investment_plan = state["investment_plan"]
 
-        # Collect A-stock specific analyst reports
-        policy_report = state.get("policy_report", "")
-        hot_money_report = state.get("hot_money_report", "")
-
-        # Build optional A-stock context block
-        astock_context_parts = []
-        if policy_report:
-            astock_context_parts.append(f"Policy Analysis Report:\n{policy_report}")
-        if hot_money_report:
-            astock_context_parts.append(f"Hot Money / Capital Flow Report:\n{hot_money_report}")
-        astock_context = "\n\n".join(astock_context_parts)
+        # 数据依赖（阶段四）：仅 Research Manager 的投资计划。
+        # 政策/游资等研报信号已经 RM（deep，读全部研报）综合进计划，
+        # Trader 不再直读研报，避免绕过辩论裁决。
 
         # Inject evolution context into system message if available
         evo_ctx = state.get("evolution_context", "")
@@ -63,7 +55,7 @@ def create_trader(llm):
                     "- Trading hours (Beijing time): call auction 09:15-09:25, continuous "
                     "09:30-11:30 / 13:00-14:57, closing auction 14:57-15:00, after-hours "
                     "fixed-price session 15:05-15:30 (all A-shares since 2026-07-06)\n"
-                    "Anchor your reasoning in the analysts' reports and the research plan. "
+                    "Anchor your reasoning in the research plan. "
                     f"{_NO_LEVELS_INSTRUCTION} "
                     "（以上参数仅供技术研究参考，不构成投资建议）"
                 ),
@@ -71,13 +63,11 @@ def create_trader(llm):
             {
                 "role": "user",
                 "content": (
-                    f"Based on a comprehensive analysis by a team of analysts (including market, "
-                    f"sentiment, news, fundamentals, policy, and capital flow "
-                    f"specialists), here is an investment plan for {company_name}.\n\n"
+                    f"Here is the Research Manager's investment plan for {company_name}, "
+                    f"synthesised from the analyst debate.\n\n"
                     f"{instrument_context}\n\n"
                     f"Proposed Investment Plan:\n{investment_plan}\n\n"
-                    + (f"Additional A-Stock Analyst Context:\n{astock_context}\n\n" if astock_context else "")
-                    + "Leverage these insights to craft the transaction view."
+                    "Translate this plan into the transaction view."
                     + get_language_instruction()
                 ),
             },
