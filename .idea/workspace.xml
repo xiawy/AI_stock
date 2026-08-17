@@ -4,34 +4,24 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="修改agent执行顺序及数据共享情况">
+    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="新增行业榜">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/fundamentals_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/fundamentals_analyst.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/hot_money_tracker.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/hot_money_tracker.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/market_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/market_analyst.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/news_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/news_analyst.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/policy_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/policy_analyst.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/social_media_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/social_media_analyst.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/utils/agent_states.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/utils/agent_states.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/dataflows/a_stock.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/dataflows/a_stock.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/dataflows/pipeline_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/dataflows/pipeline_data.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/graph/propagation.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/graph/propagation.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/graph/trading_graph.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/graph/trading_graph.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/candidate_pool.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/candidate_pool.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/db_models.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/db_models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/config.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/db_ops.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/db_ops.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/llm_judge.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/llm_judge.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/pipeline.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/pipeline.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/ranking.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/ranking.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/scoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/scoring.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/scheduler.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/scheduler.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/api/impact.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/api/impact.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/api/industry.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/api/industry.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/api/recommendation.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/api/recommendation.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/app/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/models/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/models/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/services/analysis_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/analysis_service.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/app/services/cleanup.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/cleanup.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/backend/app/services/pipeline_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/pipeline_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/tests/conftest.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/tests/conftest.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/api/industry.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/api/industry.js" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/frontend/src/components/AppHeader.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/AppHeader.vue" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/frontend/src/router/index.js" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/router/index.js" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/frontend/src/views/Home.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/views/Home.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/views/IndustryRanking.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/views/IndustryRanking.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/views/StockRecommendation.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/views/StockRecommendation.vue" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -50,31 +40,31 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ASKED_MARK_IGNORED_FILES_AS_EXCLUDED": "true",
-    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "git-widget-placeholder": "main",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "ts.external.directory.path": "D:\\soft\\PyCharm 2025.3\\plugins\\javascript-plugin\\jsLanguageServicesImpl\\external",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ASKED_MARK_IGNORED_FILES_AS_EXCLUDED&quot;: &quot;true&quot;,
+    &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;ts.external.directory.path&quot;: &quot;D:\\soft\\PyCharm 2025.3\\plugins\\javascript-plugin\\jsLanguageServicesImpl\\external&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   },
-  "keyToStringList": {
-    "DatabaseDriversLRU": [
-      "sqlite"
+  &quot;keyToStringList&quot;: {
+    &quot;DatabaseDriversLRU&quot;: [
+      &quot;sqlite&quot;
     ]
   }
-}]]></component>
+}</component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -95,7 +85,8 @@
       <workItem from="1786791279121" duration="6212000" />
       <workItem from="1786805416923" duration="3251000" />
       <workItem from="1786837533074" duration="5143000" />
-      <workItem from="1786843559220" duration="16481000" />
+      <workItem from="1786843559220" duration="16560000" />
+      <workItem from="1786969777687" duration="4682000" />
     </task>
     <task id="LOCAL-00001" summary="迁移项目为web项目">
       <option name="closed" value="true" />
@@ -209,7 +200,15 @@
       <option name="project" value="LOCAL" />
       <updated>1786885620541</updated>
     </task>
-    <option name="localTasksCounter" value="15" />
+    <task id="LOCAL-00015" summary="新增行业榜">
+      <option name="closed" value="true" />
+      <created>1786898747145</created>
+      <option name="number" value="00015" />
+      <option name="presentableId" value="LOCAL-00015" />
+      <option name="project" value="LOCAL" />
+      <updated>1786898747145</updated>
+    </task>
+    <option name="localTasksCounter" value="16" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -227,6 +226,7 @@
     <MESSAGE value="新增定时任务，刷新榜单" />
     <MESSAGE value="新增gitignore" />
     <MESSAGE value="修改agent执行顺序及数据共享情况" />
-    <option name="LAST_COMMIT_MESSAGE" value="修改agent执行顺序及数据共享情况" />
+    <MESSAGE value="新增行业榜" />
+    <option name="LAST_COMMIT_MESSAGE" value="新增行业榜" />
   </component>
 </project>

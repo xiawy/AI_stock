@@ -20,7 +20,7 @@
       <div v-if="snapshot" class="snapshot-info">
         <el-tag>{{ snapshot.period === 'AM' ? '上午盘' : '下午盘' }}</el-tag>
         <span>快照时间：{{ formatTime(snapshot.snapshot_time) }}</span>
-        <span class="funnel-hint">宏观情绪（行业榜）→ 中观行业（龙头/寻龙）→ 微观个股（深度诊股）</span>
+        <span class="funnel-hint">宏观情绪（行业榜）→ 中观行业（龙头/热股）→ 微观个股（深度诊股）</span>
       </div>
 
       <div v-loading="loading" class="tri-board">
@@ -45,7 +45,9 @@
                 </div>
                 <div class="industry-meta">
                   <span class="heat">热度 {{ row.heat_score?.toFixed(1) }}</span>
-                  <span>{{ row.news_count }} 条新闻</span>
+                  <a class="news-link" title="查看该行业相关新闻" @click.stop="openNews(row)">
+                    {{ row.news_count }} 条新闻 ↗
+                  </a>
                   <span :class="pctClass(row.change_pct)">{{ pctText(row.change_pct) }}</span>
                   <span :class="flowClass(row.fund_flow_net)">{{ flowText(row.fund_flow_net) }}</span>
                 </div>
@@ -88,9 +90,9 @@
           <el-empty v-else description="点击左侧行业，查看领涨龙头" :image-size="60" />
         </div>
 
-        <!-- 第三栏：寻龙榜 -->
+        <!-- 第三栏：热股榜 -->
         <div class="board">
-          <h3>寻龙榜 Top {{ primary.length }}</h3>
+          <h3>热股榜 Top {{ primary.length }}</h3>
           <div v-if="primary.length" class="board-scroll">
             <div v-for="stock in primary" :key="stock.ticker" class="stock-row rec-row">
               <div class="rank-badge">{{ stock.rank }}</div>
@@ -113,9 +115,40 @@
               </el-button>
             </div>
           </div>
-          <el-empty v-else-if="!loading" description="暂无寻龙榜数据" :image-size="60" />
+          <el-empty v-else-if="!loading" description="暂无热股榜数据" :image-size="60" />
         </div>
       </div>
+
+      <!-- 行业相关新闻弹窗 -->
+      <el-dialog
+        v-model="newsVisible"
+        :title="`「${newsIndustry}」相关新闻`"
+        width="640px"
+        top="8vh"
+      >
+        <div v-loading="newsLoading" class="news-list">
+          <div v-for="n in newsItems" :key="n.id" class="news-item">
+            <div class="news-head">
+              <el-tag size="small" :type="biasType(n.bull_bear_bias)">
+                {{ biasLabel(n.bull_bear_bias) }}
+              </el-tag>
+              <span class="news-title">{{ n.title }}</span>
+              <span class="news-score">{{ n.composite_score?.toFixed(1) }}</span>
+            </div>
+            <div class="news-meta">
+              <span v-if="n.source">{{ n.source }}</span>
+              <span v-if="n.pub_time">{{ n.pub_time }}</span>
+              <span v-if="n.category === 'policy'" class="news-cat">政策</span>
+            </div>
+            <p v-if="n.debate_summary" class="news-summary">{{ n.debate_summary }}</p>
+          </div>
+          <el-empty
+            v-if="!newsLoading && !newsItems.length"
+            description="该行业暂无关联新闻"
+            :image-size="60"
+          />
+        </div>
+      </el-dialog>
     </div>
   </div>
 </template>
@@ -138,6 +171,10 @@ const recommendations = ref([])
 const selectedDate = ref('')
 const selected = ref(null)
 const diagnosing = ref('')
+const newsVisible = ref(false)
+const newsLoading = ref(false)
+const newsIndustry = ref('')
+const newsItems = ref([])
 
 const primary = computed(() => recommendations.value.filter((s) => !s.is_alternate))
 const leaders = computed(() => selected.value?.leader_stocks || [])
@@ -145,7 +182,7 @@ const leaders = computed(() => selected.value?.leader_stocks || [])
 async function loadData() {
   loading.value = true
   try {
-    // 行业榜暂无数据（404）不应阻断寻龙榜展示，故用 allSettled
+    // 行业榜暂无数据（404）不应阻断热股榜展示，故用 allSettled
     const [indRes, recRes] = await Promise.allSettled([
       selectedDate.value ? industryApi.history(selectedDate.value) : industryApi.latest(),
       selectedDate.value ? recommendationApi.history(selectedDate.value) : recommendationApi.latest(),
@@ -178,6 +215,31 @@ async function startDiagnosis(code, name) {
   } finally {
     diagnosing.value = ''
   }
+}
+
+/** 查看行业相关新闻：拉取该行业热度来源的新闻列表 */
+async function openNews(row) {
+  if (!row?.id) return
+  newsVisible.value = true
+  newsIndustry.value = row.industry
+  newsItems.value = []
+  newsLoading.value = true
+  try {
+    const { data } = await industryApi.news(row.id)
+    newsItems.value = data.news_items || []
+  } catch {
+    ElMessage.error('行业新闻加载失败，请稍后重试')
+  } finally {
+    newsLoading.value = false
+  }
+}
+
+function biasType(b) {
+  return { bullish: 'danger', bearish: 'success', neutral: 'info' }[b] || 'info'
+}
+
+function biasLabel(b) {
+  return { bullish: '偏多', bearish: '偏空', neutral: '中性' }[b] || '中性'
 }
 
 function pctText(v) {
@@ -338,6 +400,15 @@ onMounted(loadData)
   color: var(--brand);
   font-weight: 600;
 }
+.news-link {
+  color: var(--brand);
+  cursor: pointer;
+  text-decoration: none;
+  border-bottom: 1px dashed transparent;
+}
+.news-link:hover {
+  border-bottom-color: var(--brand);
+}
 
 /* 股票行（第二/三栏共用） */
 .stock-row {
@@ -373,7 +444,7 @@ onMounted(loadData)
   color: var(--text-dim);
 }
 
-/* 第三栏：寻龙榜行 */
+/* 第三栏：热股榜行 */
 .rec-row {
   align-items: flex-start;
 }
@@ -430,5 +501,57 @@ onMounted(loadData)
 }
 .dim {
   color: var(--text-dim);
+}
+
+/* 行业新闻弹窗 */
+.news-list {
+  max-height: 62vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.news-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.news-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.news-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+.news-score {
+  color: var(--brand);
+  font-weight: 700;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+.news-meta {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+.news-cat {
+  color: var(--brand);
+}
+.news-summary {
+  margin: 8px 0 0;
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 </style>

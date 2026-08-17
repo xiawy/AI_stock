@@ -9,4 +9,8 @@ export const industryApi = {
   history(date) {
     return request.get('/industry/history', { params: { date } })
   },
+  /** 行业对应新闻（该行业热度的来源新闻） */
+  news(rankingId) {
+    return request.get(`/industry/${rankingId}/news`)
+  },
 }

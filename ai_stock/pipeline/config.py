@@ -61,9 +61,19 @@ STOCK_DEBATE_MAX_ROUNDS = 2
 # ---------------------------------------------------------------------------
 
 # Times at which the pipeline runs (local time), "HH:MM" 24h format.
+# - 00:00 generates the day's initial rankings (news from the previous
+#   12h window via NEWS_WINDOW_HOURS).
+# - 08:30 / 12:30 / 14:30 generate a fresh snapshot, which supersedes the
+#   earlier one for that date (readers always get the day's latest
+#   completed snapshot).
 # The first slot of the day is also the boundary before which the previous
 # day's ranking is served as "today" (see PipelineService.ensure_today_data).
-PIPELINE_SCHEDULE = ["08:00", "11:30", "14:30"]
+PIPELINE_SCHEDULE = ["00:00", "08:30", "12:30", "14:30"]
+
+# Daily ranking backup slot (local time). After this point the day's
+# rankings (新闻榜/行业榜/热股榜) are exported to a dated JSON file; see
+# ai_stock.pipeline.backup. Keep it before the 03:30 cleanup pass.
+BACKUP_DAILY_AT = (23, 30)
 
 # News collection window (hours)
 NEWS_WINDOW_HOURS = 12

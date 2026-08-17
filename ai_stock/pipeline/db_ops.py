@@ -318,6 +318,53 @@ def get_industry_rankings_by_date(date_str: str) -> Optional[dict]:
         session.close()
 
 
+def get_news_by_industry_ranking(ranking_id: int) -> Optional[dict]:
+    """Get the news items behind an industry-ranking row (行业榜→新闻).
+
+    Loads the IndustryRanking row, then returns the same snapshot's news
+    items whose primary/secondary industry list (``industries_json``)
+    contains the ranking's industry name — i.e. exactly the news that fed
+    the row's heat score. Ordered by composite score, best first.
+    """
+    from ai_stock.pipeline.db_models import IndustryRanking, NewsItem
+
+    session = _get_session()
+    if session is None:
+        return None
+
+    try:
+        ranking = session.get(IndustryRanking, ranking_id)
+        if ranking is None:
+            return None
+
+        # Escape LIKE wildcards inside the industry name (defense in depth;
+        # board names are Chinese and normally contain none).
+        escaped = (
+            ranking.industry
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        needle = f'%"{escaped}"%'
+        rows = (
+            session.query(NewsItem)
+            .filter(NewsItem.snapshot_id == ranking.snapshot_id)
+            .filter(NewsItem.industries_json.like(needle, escape="\\"))
+            .order_by(NewsItem.composite_score.desc())
+            .all()
+        )
+        return {
+            "industry": ranking.industry,
+            "snapshot_id": ranking.snapshot_id,
+            "news_items": [r.to_dict() for r in rows],
+        }
+    except Exception as exc:
+        logger.error("Failed to get news for ranking %s: %s", ranking_id, exc)
+        return None
+    finally:
+        session.close()
+
+
 def get_latest_snapshot() -> Optional[dict]:
     """Get the latest completed snapshot with its data."""
     from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem, StockRecommendation

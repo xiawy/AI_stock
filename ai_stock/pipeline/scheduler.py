@@ -1,17 +1,20 @@
 """APScheduler-based scheduler for the impact pipeline.
 
-Runs the full pipeline at 08:00 and 20:00 daily.  Follows the same pattern
-as the evolution scheduler: graceful degradation if APScheduler is not
-installed, and the scheduler lives/dies with the host process.
+Runs the full pipeline daily at 00:00 / 08:30 / 12:30 / 14:30 (local) and
+backs up the day's rankings at 23:30 (see ai_stock.pipeline.backup).
+Follows the same pattern as the evolution scheduler: graceful degradation
+if APScheduler is not installed, and the scheduler lives/dies with the host
+process — jobs only fire while the backend server is running.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+from datetime import datetime
 from typing import Any, Optional
 
-from .config import MAX_CONSECUTIVE_FAILURES, PIPELINE_SCHEDULE
+from .config import BACKUP_DAILY_AT, MAX_CONSECUTIVE_FAILURES, PIPELINE_SCHEDULE
 
 logger = logging.getLogger(__name__)
 
@@ -87,12 +90,25 @@ class PipelineScheduler:
                 id=f"pipeline_{hour:02d}{minute:02d}",
                 name=f"Impact pipeline {hour:02d}:{minute:02d}",
                 replace_existing=True,
+                misfire_grace_time=3600,
             )
+
+        # Daily ranking backup (新闻榜/行业榜/热股榜) after the last slot.
+        backup_hour, backup_minute = BACKUP_DAILY_AT
+        self._scheduler.add_job(
+            self._run_backup,
+            CronTrigger(hour=backup_hour, minute=backup_minute),
+            id="pipeline_backup",
+            name=f"Ranking backup {backup_hour:02d}:{backup_minute:02d}",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
 
         self._scheduler.start()
         logger.info(
-            "Pipeline scheduler started: runs at %s",
+            "Pipeline scheduler started: runs at %s, backup at %02d:%02d",
             ", ".join(f"{h:02d}:{m:02d}" for h, m in slots),
+            backup_hour, backup_minute,
         )
 
     def stop(self) -> None:
@@ -105,6 +121,41 @@ class PipelineScheduler:
     def trigger_manual(self) -> dict:
         """Manually trigger a pipeline run (for API endpoint)."""
         return self._run_pipeline()
+
+    def _run_backup(self) -> dict:
+        """Back up today's rankings; idempotent and never raises."""
+        from .backup import backup_today_data
+
+        try:
+            return backup_today_data()
+        except Exception as exc:
+            logger.error("Ranking backup failed: %s", exc, exc_info=True)
+            return {"status": "failed", "error": str(exc)}
+
+    def ensure_today_backup(self) -> None:
+        """Startup compensation for a missed backup slot.
+
+        If the backend was not running at 23:30 and it is already past that
+        slot with no backup file for today, kick one off now in a background
+        thread. Before 23:30 the scheduled job owns the task.
+        """
+        now = datetime.now()
+        if (now.hour, now.minute) < BACKUP_DAILY_AT:
+            return
+
+        from .backup import backup_exists_for_date
+
+        today = now.strftime("%Y-%m-%d")
+        try:
+            if backup_exists_for_date(today):
+                return
+        except Exception as exc:
+            logger.warning("Backup existence check failed (%s); trying anyway", exc)
+
+        logger.info("No ranking backup for today %s; starting one now", today)
+        threading.Thread(
+            target=self._run_backup, name="ranking-backup", daemon=True,
+        ).start()
 
     def _run_pipeline(self) -> dict:
         """Execute the full pipeline with failure tracking."""

@@ -96,10 +96,12 @@ class PipelineService:
     def ensure_today_data(self) -> None:
         """Kick off a pipeline run if today's ranking is missing.
 
-        - Before the first scheduled slot (08:00 local) the previous day's
+        - Before the first scheduled slot (00:00 local) the previous day's
           snapshot is served as today's ranking, so no run is started.
         - From the first slot onwards, a missing snapshot (e.g. the backend
-          started after the scheduled run) triggers an immediate background run.
+          started after the scheduled run) triggers an immediate background
+          run — this also compensates for slots missed while the backend was
+          down.
         """
         if not self._initialized or self._llm_quick is None:
             return
@@ -108,7 +110,7 @@ class PipelineService:
 
         now = datetime.now()
         slots = self._scheduler.schedule_slots if self._scheduler else []
-        first_slot = min(slots) if slots else (8, 0)
+        first_slot = min(slots) if slots else (0, 0)
         if (now.hour, now.minute) < first_slot:
             logger.info(
                 "Before first pipeline slot %02d:%02d; serving previous day's ranking",
@@ -139,6 +141,19 @@ class PipelineService:
         except Exception as exc:
             logger.error("Bootstrap pipeline run failed: %s", exc)
 
+    def ensure_today_backup(self) -> None:
+        """Compensate for a missed 23:30 backup slot on startup.
+
+        Delegates to the scheduler; no-op before the backup slot or when
+        today's backup file already exists.
+        """
+        if not self._initialized or self._scheduler is None:
+            return
+        try:
+            self._scheduler.ensure_today_backup()
+        except Exception as exc:
+            logger.warning("Today-backup check failed (non-fatal): %s", exc)
+
     def get_latest(self) -> Optional[dict]:
         """Get the latest pipeline results."""
         from ai_stock.pipeline.db_ops import get_latest_snapshot
@@ -158,6 +173,11 @@ class PipelineService:
         """Get industry board for a specific date."""
         from ai_stock.pipeline.db_ops import get_industry_rankings_by_date
         return get_industry_rankings_by_date(date_str)
+
+    def get_industry_news(self, ranking_id: int) -> Optional[dict]:
+        """Get the news items behind one industry-ranking row."""
+        from ai_stock.pipeline.db_ops import get_news_by_industry_ranking
+        return get_news_by_industry_ranking(ranking_id)
 
     @property
     def is_running(self) -> bool:

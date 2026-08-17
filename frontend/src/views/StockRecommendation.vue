@@ -3,7 +3,7 @@
     <AppHeader />
     <div class="page">
       <div class="page-header">
-        <h2>今日寻龙榜</h2>
+        <h2>今日热股榜</h2>
         <div class="header-actions">
           <el-button :icon="ArrowLeft" @click="router.push('/')">返回首页</el-button>
           <el-date-picker
@@ -32,7 +32,7 @@
       <StockCard v-for="stock in alternates" :key="stock.ticker" :stock="stock" />
     </div>
 
-    <el-empty v-else-if="!loading" description="暂无寻龙榜数据，榜单由服务端定时更新">
+    <el-empty v-else-if="!loading" description="暂无热股榜数据，榜单由服务端定时更新">
       <span class="empty-hint">如需当日数据，可稍后刷新查看；也可选择日期查看历史榜单</span>
     </el-empty>
     </div>

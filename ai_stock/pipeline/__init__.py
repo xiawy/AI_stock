@@ -10,5 +10,6 @@ Two core features built on top of the existing agent framework:
    recent limit-up stocks, score candidates on fundamentals / technicals
    / event-matching, run per-stock debates, and output Top 10 buys.
 
-Scheduled at 08:00 and 20:00 daily via APScheduler.
+Scheduled at 00:00 / 08:30 / 12:30 / 14:30 daily via APScheduler; the
+day's rankings are backed up at 23:30 (see ai_stock.pipeline.backup).
 """

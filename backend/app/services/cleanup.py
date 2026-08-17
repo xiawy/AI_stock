@@ -3,8 +3,9 @@
 Retention policy (see docs/README "功能" section):
 - 诊股 (diagnosis) records — DB task rows + on-disk reports + resumable-task
   index — are kept for 20 days.
-- 寻龙榜 / 新闻榜 / 行业榜 (ranking) snapshots — impact snapshots with their
-  news items, industry rankings and recommendations — are kept for 70 days.
+- 热股榜 / 新闻榜 / 行业榜 (ranking) snapshots — impact snapshots with their
+  news items, industry rankings and recommendations — are kept for 70 days,
+  together with their daily JSON backup files (backups/ next to the DB).
 
 One pass runs at backend startup (background thread, non-blocking) and the
 job repeats daily at 03:30 local time via APScheduler (between ranking
@@ -104,7 +105,7 @@ def cleanup_ranking_snapshots(
 
 
 def run_all_cleanup() -> dict:
-    """Run both cleanups; each is independently fault-tolerant."""
+    """Run all cleanups; each is independently fault-tolerant."""
     stats: dict = {}
     try:
         stats["diagnosis"] = cleanup_diagnosis_data()
@@ -116,6 +117,13 @@ def run_all_cleanup() -> dict:
     except Exception as exc:
         logger.error("Ranking cleanup failed: %s", exc)
         stats["rankings"] = "error"
+    try:
+        from ai_stock.pipeline.backup import cleanup_old_backups
+
+        stats["backups"] = cleanup_old_backups(RANKING_RETENTION_DAYS)
+    except Exception as exc:
+        logger.error("Backup file cleanup failed: %s", exc)
+        stats["backups"] = "error"
     return stats
 
 

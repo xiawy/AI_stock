@@ -22,7 +22,7 @@ def get_latest(
 ) -> dict:
     """Return the latest completed pipeline run's Top 20 + recommendations.
 
-    Before today's first slot (08:00) this naturally serves yesterday's
+    Before today's first slot (00:00) this naturally serves yesterday's
     snapshot, which is by design.
     """
     svc = get_pipeline_service()

@@ -4,8 +4,8 @@ GET /api/industry/latest   — Latest industry heat ranking
 GET /api/industry/history  — Historical query by date
 
 The industry board is produced by the same scheduled pipeline as the news
-ranking (08:00 / 11:30 / 14:30); rows cascade-delete with their snapshot
-after the 70-day retention window.
+ranking (00:00 / 08:30 / 12:30 / 14:30); rows cascade-delete with their
+snapshot after the 70-day retention window.
 """
 
 from __future__ import annotations
@@ -47,4 +47,24 @@ def get_history(
     result = svc.get_industry_by_date(date)
     if result is None:
         return {"snapshot": None, "rankings": []}
+    return result
+
+
+@router.get("/{ranking_id}/news", summary="查看行业对应新闻")
+def get_industry_news(
+    ranking_id: int,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """News items that fed one industry-ranking row's heat score.
+
+    Same snapshot, filtered by the row's industry in each news item's
+    industries list, ordered by composite score.
+    """
+    svc = get_pipeline_service()
+    result = svc.get_industry_news(ranking_id)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="未找到该行业榜单记录",
+        )
     return result

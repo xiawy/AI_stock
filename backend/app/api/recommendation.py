@@ -18,7 +18,7 @@ from app.services.pipeline_service import get_pipeline_service
 router = APIRouter(prefix="/recommendation", tags=["recommendation"])
 
 
-@router.get("/latest", summary="最新一期寻龙榜 Top 10 + 3 备选")
+@router.get("/latest", summary="最新一期热股榜 Top 10 + 3 备选")
 def get_latest(
     current_user: User = Depends(get_current_user),
 ) -> dict:
@@ -28,7 +28,7 @@ def get_latest(
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="暂无寻龙榜数据，系统生成中，请稍后重试",
+            detail="暂无热股榜数据，系统生成中，请稍后重试",
         )
     # Return only the recommendations portion
     return {
@@ -37,7 +37,7 @@ def get_latest(
     }
 
 
-@router.get("/history", summary="按日期查询寻龙榜结果")
+@router.get("/history", summary="按日期查询热股榜结果")
 def get_history(
     date: str,
     current_user: User = Depends(get_current_user),

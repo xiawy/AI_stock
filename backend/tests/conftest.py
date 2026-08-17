@@ -16,6 +16,9 @@ import os
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 os.environ.setdefault("SECRET_KEY", "unit-test-secret-key-0123456789abcdef0123456789abcdef")
 os.environ["DATABASE_URL"] = "sqlite://"  # in-memory
+# Keep TestClient lifespan from starting real pipeline/LLM/scheduler threads
+# (the in-memory DB would otherwise trigger a bootstrap run on every suite).
+os.environ["AISTOCK_DISABLE_SCHEDULERS"] = "1"
 
 from app.core.database import Base, get_db  # noqa: E402
 import app.models  # noqa: F401, E402

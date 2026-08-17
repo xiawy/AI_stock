@@ -8,6 +8,7 @@ Run (dev):  cd backend && .venv/Scripts/python -m uvicorn app.main:app --reload 
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -91,6 +92,12 @@ def _reap_orphaned_snapshots() -> None:
             )
 
 
+def _background_jobs_enabled() -> bool:
+    """False in test runs, where lifespan side effects (pipeline bootstrap,
+    LLM clients, schedulers, cleanup threads) must not start."""
+    return os.environ.get("AISTOCK_DISABLE_SCHEDULERS", "").lower() not in ("1", "true", "yes")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # Create SQLite tables on first start; Alembic owns later migrations.
@@ -99,7 +106,12 @@ async def lifespan(_: FastAPI):
     _reap_orphaned_tasks()
     _reap_orphaned_snapshots()
 
-    # Data retention: 诊股 > 20 days / 寻龙榜·新闻榜 > 70 days. One pass now
+    if not _background_jobs_enabled():
+        logger.info("Background jobs disabled via AISTOCK_DISABLE_SCHEDULERS")
+        yield
+        return
+
+    # Data retention: 诊股 > 20 days / 热股榜·新闻榜 > 70 days. One pass now
     # (background thread) and daily at 03:30 afterwards.
     try:
         from app.services.cleanup import (
@@ -123,6 +135,10 @@ async def lifespan(_: FastAPI):
         # slot), kick off an immediate background run. Before the first slot
         # the previous day's snapshot is served as today's ranking.
         svc.ensure_today_data()
+        # Compensate for a missed 23:30 ranking backup (backend was down at
+        # the slot): back up now if it is already past the slot and today's
+        # backup file is absent.
+        svc.ensure_today_backup()
     except Exception as exc:
         logger.warning(
             "Pipeline service init failed (non-fatal): %s", exc,
