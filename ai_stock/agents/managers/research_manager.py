@@ -37,7 +37,31 @@ def create_research_manager(llm):
 Note: This is an A-share (China mainland) stock. Factor in regulatory policy impact and hot money / capital flow dynamics when synthesising the debate.
 
 ---
+**INVESTMENT DECISION CORE FRAMEWORK** (apply these principles to your analysis):
 
+1. **Strategic Direction (主线与节奏)**:
+   - Always align with the national strategic objectives (e.g., "breakthrough in bottleneck technologies", "AI+industrial upgrading") – these are the most durable market drivers.
+   - Identify the primary theme and assess its stage: is it in early breakout, accelerated main uptrend, or late-stage overheating? Timing mistakes (e.g., chasing at peaks, panic-selling at corrections) can be more damaging than wrong strategy.
+
+2. **Positioning Horizon (长线与短线)**:
+   - For core holdings in the main theme, adopt a "long-term base + tactical roll" approach: hold a substantial base position through fluctuations, and use a small portion (20-30%) for tactical trading based on sentiment/technical signals.
+   - Avoid excessive short-term trading, especially in the current quant-and-hot-money dominated market – it is a disadvantaged game for individual investors.
+
+3. **Concentration vs. Diversification (集中与分散)**:
+   - Favor focused concentration (2-3 sectors, 3-5 core stocks) over over-diversification. Deep research on a few names beats superficial coverage of many.
+   - Adjust positions dynamically as sub-sectors rotate within the main theme.
+
+4. **Patience vs. Decisiveness (耐心与果断)**:
+   - Be patient in waiting for entry (pullback to support), holding through consolidation, and exiting after a strong run.
+   - Be decisive when conditions change:
+     * **Stop-Loss**: if price breaks key support (e.g., -5%~-8%) or shows "false breakout", exit immediately to preserve capital.
+     * **Stop-Being-Wrong (止错)**: if the underlying industry logic collapses (e.g., technology substitution, worsening competition, policy shift), exit regardless of profit/loss – time is no longer on your side.
+
+5. **Market Phase Recognition (反弹 vs. 反转, 筑底 vs. 主升)**:
+   - Distinguish between a tactical bounce (lack of sector synergy, sporadic volume, irregular price action, driven by oversold or minor news) and a true trend reversal (strong sector-wide move, sustained volume, clear leadership, backed by industry fundamentals).
+   - Only commit larger, longer-term positions when you identify a confirmed reversal with solid fundamentals; otherwise treat it as a short-term swing.
+
+---
 **Rating Scale** (use exactly one):
 - **Buy**: Strong conviction in the bull thesis; recommend taking or growing the position
 - **Overweight**: Constructive view; recommend gradually increasing exposure
@@ -66,7 +90,14 @@ Hot money / capital flow report: {hot_money_report}
 
 ---
 
-Weigh the debate arguments against the underlying reports: when a debater overstates or ignores evidence in the reports, trust the reports. Reduce the weight of any report the data quality assessment flags as low-confidence (grade C/D/F) and note the limitation in your plan.""" + get_language_instruction()
+Weigh the debate arguments against the underlying reports: when a debater overstates or ignores evidence in the reports, trust the reports. Reduce the weight of any report the data quality assessment flags as low-confidence (grade C/D/F) and note the limitation in your plan.
+
+In your final investment plan, explicitly address:
+- Which market phase you believe the stock/sector is in (using the above framework).
+- Your strategic stance (long-term base vs. tactical play) and the corresponding position sizing.
+- Key risk points and the specific conditions under which you would trigger stop-loss or stop-being-wrong. 
+
+""" + get_language_instruction()
 
         # Inject evolution context if available
         evo_ctx = state.get("evolution_context")
