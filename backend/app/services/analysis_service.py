@@ -182,8 +182,9 @@ class AnalysisTaskManager:
                 f"主力净流入{inflow / 1e8:+.1f}亿" if isinstance(inflow, (int, float))
                 else "资金数据缺失"
             )
+            display_name = row.get("board_name") or row.get("industry")
             lines.append(
-                f"{row.get('rank')}. {row.get('industry')} 热度{row.get('heat_score', 0)} "
+                f"{row.get('rank')}. {display_name} 热度{row.get('heat_score', 0)} "
                 f"{inflow_txt} 评级{row.get('rating', 'C')}"
             )
 
@@ -192,7 +193,8 @@ class AnalysisTaskManager:
             for stock in row.get("leader_stocks") or []:
                 name = stock.get("name") or stock.get("code")
                 if name:
-                    hot_stocks.append(f"{name}({row.get('industry')})")
+                    display_name = row.get("board_name") or row.get("industry")
+                    hot_stocks.append(f"{name}({display_name})")
 
         return {
             "heatmap": "\n".join(lines),

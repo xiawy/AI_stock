@@ -15,7 +15,6 @@ from ai_stock.pipeline.llm_judge import AgentScoreResult
 from ai_stock.pipeline.scoring import _merge_industry_labels
 from ai_stock.pipeline.ranking import calculate_industry_heatmap
 from ai_stock.pipeline.candidate_pool import generate_candidate_pool
-from ai_stock.graph.propagation import Propagator
 
 
 def _agent(primary="", secondary="", score=7.0, industries=None):
@@ -247,6 +246,73 @@ class TestCalculateIndustryHeatmap:
         assert result[0]["fund_flow_net"] == pytest.approx(3e9)
         assert result[0]["resonance"] == "strong"
 
+    def test_alias_resolves_fine_concept_board(self):
+        # LLM outputs "封测"; alias resolves to concept board "先进封装"
+        news = [_news(8.0, primary="封测")]
+        flows = [
+            {"name": "先进封装", "code": "BK1101", "main_net_inflow": 4e9,
+             "change_pct": 3.1, "board_level": "concept"},
+        ]
+        result = calculate_industry_heatmap(news, flows)
+        assert result[0]["board_name"] == "先进封装"
+        assert result[0]["industry_code"] == "BK1101"
+        assert result[0]["industry_level"] == "concept"
+
+    def test_mlcc_exact_concept_match_over_coarse_industry(self):
+        # "MLCC" must hit the fine concept board, not the coarse 电子元件 industry
+        news = [_news(7.5, primary="MLCC")]
+        flows = [
+            {"name": "MLCC", "code": "BK0890", "main_net_inflow": 2e9,
+             "change_pct": 1.5, "board_level": "concept"},
+            {"name": "电子元件", "code": "BK1334", "main_net_inflow": 1e9,
+             "change_pct": 0.5, "board_level": "industry"},
+        ]
+        result = calculate_industry_heatmap(news, flows)
+        assert result[0]["industry_code"] == "BK0890"
+        assert result[0]["industry_level"] == "concept"
+
+    def test_suffix_normalized_match(self):
+        # LLM "被动元件" matches board "被动元件概念" via suffix-stripping
+        news = [_news(7.0, primary="被动元件")]
+        flows = [
+            {"name": "被动元件概念", "code": "BK0976", "main_net_inflow": 1e9,
+             "change_pct": 2.0, "board_level": "concept"},
+        ]
+        result = calculate_industry_heatmap(news, flows)
+        assert result[0]["industry_code"] == "BK0976"
+
+    def test_unmatched_industry_has_empty_level(self):
+        # No flow match → industry_level empty, code empty
+        news = [_news(7.0, primary="未知题材")]
+        result = calculate_industry_heatmap(news, [])
+        assert result[0]["board_name"] == ""
+        assert result[0]["industry_code"] == ""
+        assert result[0]["industry_level"] == ""
+
+    def test_new_theme_auto_resolves_without_alias(self):
+        # A brand-new theme (机器人) resolves via substring — no alias entry
+        # needed, so the alias table never has to grow as 题材 evolve.
+        news = [_news(8.0, primary="机器人")]
+        flows = [
+            {"name": "机器人概念", "code": "BK1108", "main_net_inflow": 2e9,
+             "change_pct": 2.0, "board_level": "concept"},
+        ]
+        result = calculate_industry_heatmap(news, flows)
+        assert result[0]["industry_code"] == "BK1108"
+        assert result[0]["industry_level"] == "concept"
+
+    def test_fuzzy_fallback_bridges_typo(self):
+        # difflib fallback bridges a dropped-character typo 存芯片→存储芯片,
+        # which exact/normalize/substring all miss (储 is skipped in the label).
+        news = [_news(7.5, primary="存芯片")]
+        flows = [
+            {"name": "存储芯片", "code": "BK1137", "main_net_inflow": 1e9,
+             "change_pct": 1.5, "board_level": "concept"},
+        ]
+        result = calculate_industry_heatmap(news, flows)
+        assert result[0]["industry_code"] == "BK1137"
+        assert result[0]["industry_level"] == "concept"
+
 
 @pytest.mark.unit
 class TestCandidatePoolIndustryLeaders:
@@ -294,6 +360,8 @@ class TestCandidatePoolIndustryLeaders:
 @pytest.mark.unit
 class TestInitialStateIndustryContext:
     def test_fields_initialized(self):
+        from ai_stock.graph.propagation import Propagator
+
         state = Propagator().create_initial_state(
             "300750",
             "2026-08-16",
@@ -304,6 +372,8 @@ class TestInitialStateIndustryContext:
         assert "宁德时代" in state["hot_sector_stocks"]
 
     def test_fields_default_empty(self):
+        from ai_stock.graph.propagation import Propagator
+
         state = Propagator().create_initial_state("300750", "2026-08-16")
         assert state["industry_heatmap"] == ""
         assert state["hot_sector_stocks"] == ""

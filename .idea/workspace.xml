@@ -4,11 +4,18 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="定时更新各榜单的bug修复">
+    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="prompt优化">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/fundamentals_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/fundamentals_analyst.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/analysts/news_analyst.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/analysts/news_analyst.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai_stock/agents/managers/research_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/agents/managers/research_manager.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/dataflows/pipeline_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/dataflows/pipeline_data.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/db_models.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/db_models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/db_ops.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/db_ops.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/llm_judge.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/llm_judge.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/pipeline.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/pipeline.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/ranking.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/ranking.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/services/analysis_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/analysis_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/tests/test_industry_ranking_db.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/tests/test_industry_ranking_db.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/views/IndustryRanking.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/views/IndustryRanking.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_pipeline_industry.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_pipeline_industry.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -75,7 +82,10 @@
       <workItem from="1786837533074" duration="5143000" />
       <workItem from="1786843559220" duration="16560000" />
       <workItem from="1786969777687" duration="5132000" />
-      <workItem from="1786976447823" duration="4511000" />
+      <workItem from="1786976447823" duration="4733000" />
+      <workItem from="1787059578828" duration="377000" />
+      <workItem from="1787060090719" duration="7077000" />
+      <workItem from="1787144387544" duration="153000" />
     </task>
     <task id="LOCAL-00001" summary="迁移项目为web项目">
       <option name="closed" value="true" />
@@ -205,7 +215,15 @@
       <option name="project" value="LOCAL" />
       <updated>1786976082380</updated>
     </task>
-    <option name="localTasksCounter" value="17" />
+    <task id="LOCAL-00017" summary="prompt优化">
+      <option name="closed" value="true" />
+      <created>1787059245237</created>
+      <option name="number" value="00017" />
+      <option name="presentableId" value="LOCAL-00017" />
+      <option name="project" value="LOCAL" />
+      <updated>1787059245237</updated>
+    </task>
+    <option name="localTasksCounter" value="18" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -225,6 +243,7 @@
     <MESSAGE value="修改agent执行顺序及数据共享情况" />
     <MESSAGE value="新增行业榜" />
     <MESSAGE value="定时更新各榜单的bug修复" />
-    <option name="LAST_COMMIT_MESSAGE" value="定时更新各榜单的bug修复" />
+    <MESSAGE value="prompt优化" />
+    <option name="LAST_COMMIT_MESSAGE" value="prompt优化" />
   </component>
 </project>

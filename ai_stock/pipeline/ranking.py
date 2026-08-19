@@ -8,6 +8,7 @@ heat by industry into the industry heatmap (行业榜).
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 from typing import Any
@@ -157,6 +158,96 @@ _HOT_HEAT_FRACTION = 0.5
 _MEANINGFUL_INFLOW_FRACTION = 0.10
 
 
+# ---------------------------------------------------------------------------
+# Fine-grained (concept-level) industry mapping
+# ---------------------------------------------------------------------------
+
+# 细分概念板块别名表（语义种子，极小且不会随题材增长）。
+#
+# 为什么只需要这么点、且不需要为新题材继续加：
+#   - 字符串层面的错位（存储→存储芯片、光模块→光通信模块、拼写/后缀差异、以及
+#     未来出现的任何新题材）由 `_normalize_board_name` + 子串 + `difflib` 模糊匹配
+#     自动桥接，因为东财板块名几乎总是和题材词本身接近。
+#   - 这里只保留「完全没有公共子串、纯语义同义」的少数几条（封测→先进封装、
+#     MLCC→陶瓷电容、内存/DRAM→存储芯片…），模糊匹配/子串都无能为力时才用。
+#   - 语义归一的主力是 LLM 本身（prompt 里要求输出东财规范概念名），本表只是兜底。
+# 键统一小写；值必须是东财概念板块的真实名称（已核验存在）。
+_INDUSTRY_ALIASES: dict[str, str] = {
+    # 半导体封测 / 封装
+    "封测": "先进封装", "半导体封测": "先进封装", "集成电路封测": "先进封装",
+    "封装测试": "先进封装", "芯片封测": "先进封装", "ic封装": "先进封装",
+    "chiplet": "先进封装", "先进封装": "先进封装",
+    # 被动元件 / MLCC
+    "被动元件": "被动元件概念", "被动元器件": "被动元件概念",
+    "被动元件概念": "被动元件概念",
+    "mlcc": "MLCC", "mlcc概念": "MLCC", "陶瓷电容": "MLCC",
+    # 存储 / 内存
+    "存储": "存储芯片", "内存": "存储芯片", "存储芯片": "存储芯片",
+    "dram": "存储芯片", "nand": "存储芯片", "闪存": "存储芯片",
+    "hbm": "高带宽内存", "高带宽内存": "高带宽内存",
+    # 光通信 / CPO / 算力
+    "光模块": "光通信模块", "光通信": "光通信模块", "光器件": "光通信模块",
+    "光模块概念": "光通信模块",
+    "cpo": "CPO概念", "cpo概念": "CPO概念",
+    "算力": "算力概念", "算力概念": "算力概念", "算力租赁": "算力概念",
+    "ai芯片": "AI芯片", "人工智能芯片": "AI芯片", "ai算力芯片": "AI芯片",
+    # PCB / 覆铜板
+    "pcb": "PCB", "印制电路板": "PCB", "覆铜板": "PCB", "覆铜板ccl": "PCB",
+    # 功率半导体 / 第三代半导体
+    "igbt": "IGBT概念",
+    "第三代半导体": "第三代半导体",
+    "碳化硅": "碳化硅", "sic": "碳化硅",
+    "氮化镓": "氮化镓", "gan": "氮化镓",
+    # 散热 / 连接
+    "液冷": "液冷服务器", "液冷服务器": "液冷服务器", "液冷散热": "液冷服务器",
+    "铜缆": "铜缆高速连接", "高速连接": "铜缆高速连接", "铜连接": "铜缆高速连接",
+    # 光刻 / 其他
+    "光刻胶": "光刻胶", "光刻机": "光刻机",
+    "人工智能": "人工智能", "ai": "人工智能",
+}
+
+
+def _normalize_board_name(name: str) -> str:
+    """Lowercase a board/label name and strip common board suffixes.
+
+    e.g. “被动元件概念” → “被动元件”, “CPO概念” → “cpo”, “电子元件” → “电子元件”.
+    Bridges LLM free-form labels and Eastmoney board names (both directions).
+    """
+    norm = (name or "").strip().lower()
+    for suffix in ("概念", "板块", "行业", "指数"):
+        if norm.endswith(suffix):
+            norm = norm[: -len(suffix)]
+            break
+    return norm
+
+
+# difflib fuzzy threshold. High enough to avoid false positives, low enough to
+# catch 光模块→光通信模块 (0.75) and 被动元器件→被动元件概念 (~0.73).
+_FUZZY_CUTOFF = 0.72
+
+
+def _fuzzy_match_board(
+    label: str,
+    flows_by_lower: dict[str, dict],
+    board_names_lower: list[str],
+) -> dict | None:
+    """difflib fuzzy fallback: bridge string-level variants to a real board.
+
+    Purely mechanical (no semantic knowledge) — handles typos, suffix drift and
+    non-contiguous overlaps like 光模块→光通信模块. Brand-new themes whose board
+    name is close to the theme word resolve here automatically, so the alias
+    table above never needs to grow for new 题材.
+    """
+    if not board_names_lower or len(label) < 2:
+        return None
+    hit = difflib.get_close_matches(
+        label.lower(), board_names_lower, n=1, cutoff=_FUZZY_CUTOFF
+    )
+    if hit:
+        return flows_by_lower.get(hit[0])
+    return None
+
+
 def calculate_industry_heatmap(
     debated_news: list[dict],
     industry_flows: list[dict] | None = None,
@@ -180,14 +271,16 @@ def calculate_industry_heatmap(
     Args:
         debated_news: Ranked/debated news dicts with composite_score,
             bull_bear_bias, primary_industry, secondary_industry.
-        industry_flows: Output of ``get_industry_fund_flow()`` (optional;
-            when None/empty the ranking degrades to news heat only).
+        industry_flows: Output of ``get_all_board_fund_flow()`` (行业 + 概念
+            板块, optional; when None/empty the ranking degrades to news heat only).
         top_n: Number of industries to return (default 10).
 
     Returns:
         List of industry dicts sorted by heat_score desc, each with:
-        industry, industry_code, heat_score, news_count, fund_flow_net
-        (元, None when unmatched), change_pct, resonance, rating, top_stock_*.
+        industry (LLM 原始标签), board_name (东财规范板块名), industry_code
+        (BKxxxx), industry_level (concept|industry), heat_score, news_count,
+        fund_flow_net (元, None when unmatched), change_pct, resonance,
+        rating, top_stock_*.
     """
     heat: dict[str, dict] = {}
 
@@ -213,22 +306,56 @@ def calculate_industry_heatmap(
     if not heat:
         return []
 
-    # Fund-flow matching: exact name first, then bidirectional substring
-    # (LLM outputs 申万-style names like “电子”, boards are named like
-    # “半导体” / “电子元件” — substring matching bridges the two taxonomies).
+    # Fund-flow matching: exact name → alias (fine-grained concept) →
+    # normalized (suffix-stripped) → bidirectional substring.
+    # LLM outputs free-form labels like “封测” / “MLCC” / “存储”; Eastmoney
+    # boards are named “先进封装” / “MLCC” / “存储芯片”. The alias table +
+    # suffix-stripping bridge the two taxonomies so concept-level themes
+    # (细分概念板块) can surface on the heatmap.
     flows_by_name: dict[str, dict] = {
         f.get("name", ""): f for f in (industry_flows or []) if f.get("name")
     }
+    flows_by_norm: dict[str, dict] = {
+        _normalize_board_name(f.get("name", "")): f
+        for f in (industry_flows or [])
+        if f.get("name")
+    }
+    # Lowercased view for the difflib fuzzy fallback (handles 光模块→光通信模块,
+    # typos, and future/新兴题材 without a hardcoded alias entry).
+    flows_by_lower: dict[str, dict] = {
+        (f.get("name") or "").lower(): f
+        for f in (industry_flows or [])
+        if f.get("name")
+    }
+    board_names_lower = list(flows_by_lower)
 
     def _match_flow(industry: str) -> dict | None:
         if not flows_by_name:
             return None
-        if industry in flows_by_name:
-            return flows_by_name[industry]
+        label = (industry or "").strip()
+        if not label:
+            return None
+        # 1. Exact board name.
+        if label in flows_by_name:
+            return flows_by_name[label]
+        # 2. Semantic alias seed (only zero-string-overlap synonyms that
+        #    fuzzy/substring cannot bridge, e.g. 封测→先进封装, MLCC→陶瓷电容).
+        canon = _INDUSTRY_ALIASES.get(label.lower()) or _INDUSTRY_ALIASES.get(
+            _normalize_board_name(label)
+        )
+        if canon and canon in flows_by_name:
+            return flows_by_name[canon]
+        # 3. Normalized exact match (strips 概念/板块/行业 suffixes both sides).
+        norm = _normalize_board_name(label)
+        if norm and norm in flows_by_norm:
+            return flows_by_norm[norm]
+        # 4. Bidirectional substring (存储→存储芯片, CPO→CPO概念, 铜缆→铜缆高速连接).
         for name, flow in flows_by_name.items():
-            if industry in name or name in industry:
+            if label in name or name in label:
                 return flow
-        return None
+        # 5. difflib fuzzy fallback — self-healing bridge for typos, non-
+        #    contiguous variants (光模块→光通信模块), and brand-new themes.
+        return _fuzzy_match_board(label, flows_by_lower, board_names_lower)
 
     max_abs_inflow = max(
         (abs(f.get("main_net_inflow", 0.0)) for f in (industry_flows or [])),
@@ -238,8 +365,11 @@ def calculate_industry_heatmap(
     max_heat = max(e["heat_score"] for e in heat.values()) or 1.0
 
     ranked: list[dict] = []
+    unmatched_labels: set[str] = set()
     for entry in heat.values():
         flow = _match_flow(entry["industry"])
+        if flow is None:
+            unmatched_labels.add(entry["industry"])
         fund_flow_net = flow.get("main_net_inflow") if flow else None
         inflow_positive = (
             fund_flow_net is not None
@@ -271,7 +401,9 @@ def calculate_industry_heatmap(
 
         ranked.append({
             "industry": entry["industry"],
+            "board_name": flow.get("name", "") if flow else "",
             "industry_code": flow.get("code", "") if flow else "",
+            "industry_level": flow.get("board_level", "") if flow else "",
             "heat_score": round(entry["heat_score"], 2),
             "news_count": entry["news_count"],
             "fund_flow_net": fund_flow_net,
@@ -285,4 +417,9 @@ def calculate_industry_heatmap(
     ranked.sort(key=lambda r: r["heat_score"], reverse=True)
     for i, row in enumerate(ranked[:top_n], 1):
         row["rank"] = i
+    if industry_flows and unmatched_labels:
+        logger.warning(
+            "Industry labels unmatched to any board (%d): %s",
+            len(unmatched_labels), ", ".join(sorted(unmatched_labels)),
+        )
     return ranked[:top_n]

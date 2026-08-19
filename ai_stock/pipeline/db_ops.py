@@ -211,6 +211,8 @@ def save_industry_rankings(snapshot_id: int, rankings: list[dict]) -> int:
                 snapshot_id=snapshot_id,
                 industry=item.get("industry", ""),
                 industry_code=item.get("industry_code", ""),
+                board_name=item.get("board_name", ""),
+                industry_level=item.get("industry_level", ""),
                 heat_score=item.get("heat_score", 0.0),
                 news_count=item.get("news_count", 0),
                 fund_flow_net=item.get("fund_flow_net"),

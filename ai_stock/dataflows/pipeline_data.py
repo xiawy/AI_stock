@@ -301,32 +301,46 @@ def _push2_get(path: str, params: dict):
     raise last_exc
 
 
-def get_industry_fund_flow() -> list[dict]:
-    """Fetch all ~90 industry boards with realtime price change and main
-    capital net inflow (主力净流入) from Eastmoney push2.
+# 东财 push2 板块口径：
+#   m:90+t:2  行业板块（数百个，细分到 半导体材料/半导体设备/种子/种植业…）
+#   m:90+t:3  概念板块（数百个，细分到 MLCC/先进封装/存储芯片/CPO…）
+# 行业榜要落到 MLCC、半导体封测等细分级别，须同时拉取行业 + 概念板块资金流。
+_EM_BOARD_FS = {
+    "industry": "m:90+t:2",
+    "concept": "m:90+t:3",
+}
+
+
+def _fetch_board_flow(board_level: str) -> list[dict]:
+    """Fetch Eastmoney board fund-flow for one board taxonomy.
+
+    Args:
+        board_level: "industry" (行业板块) or "concept" (概念板块).
 
     Returns a list of dicts with keys:
         code (BKxxxx), name, change_pct, main_net_inflow (元),
-        up_count, down_count, top_stock_name, top_stock_code, top_stock_pct
-
-    Empty list on failure — the industry ranking pipeline degrades to
-    news-heat-only aggregation when fund-flow data is unavailable.
+        up_count, down_count, top_stock_name, top_stock_code, top_stock_pct,
+        board_level ("industry" / "concept").
     """
+    fs = _EM_BOARD_FS[board_level]
     boards: list[dict] = []
-    try:
+    page = 1
+    while page <= 10:  # pz is capped at ~100/页; paginate until empty
         params = {
-            "pn": "1",
+            "pn": str(page),
             "pz": "100",
             "po": "1",
             "np": "1",
             "fltt": "2",
             "invt": "2",
             "fid": "f3",
-            "fs": "m:90+t:2",
+            "fs": fs,
             "fields": _EM_INDUSTRY_FIELDS,
         }
         r = _push2_get("/api/qt/clist/get", params)
         items = r.json().get("data", {}).get("diff", []) or []
+        if not items:
+            break
         for item in items:
             boards.append({
                 "code": str(item.get("f12", "")),
@@ -338,12 +352,60 @@ def get_industry_fund_flow() -> list[dict]:
                 "top_stock_name": str(item.get("f128", "")),
                 "top_stock_code": str(item.get("f140", "")),
                 "top_stock_pct": _to_float(item.get("f136")),
+                "board_level": board_level,
             })
+        if len(items) < 100:
+            break
+        page += 1
+    return boards
+
+
+def get_industry_fund_flow() -> list[dict]:
+    """Fetch all 行业板块 (m:90+t:2, ~500 boards) with realtime price change
+    and main capital net inflow (主力净流入).
+
+    Backward-compatible entry point. For fine-grained (概念板块级别) matching
+    use ``get_concept_board_flow`` or ``get_all_board_fund_flow``.
+
+    Empty list on failure — the ranking degrades to news-heat-only.
+    """
+    try:
+        boards = _fetch_board_flow("industry")
     except Exception as e:
         logger.warning("Industry fund-flow fetch failed: %s", e)
         return []
-
     logger.info("Fetched %d industry boards with fund flow", len(boards))
+    return boards
+
+
+def get_concept_board_flow() -> list[dict]:
+    """Fetch all 概念板块 (m:90+t:3, ~500 boards) with realtime price change
+    and main capital net inflow — the fine-grained MLCC/先进封装/存储芯片 level.
+
+    Empty list on failure.
+    """
+    try:
+        boards = _fetch_board_flow("concept")
+    except Exception as e:
+        logger.warning("Concept board fund-flow fetch failed: %s", e)
+        return []
+    logger.info("Fetched %d concept boards with fund flow", len(boards))
+    return boards
+
+
+def get_all_board_fund_flow() -> list[dict]:
+    """Fetch both 行业板块 + 概念板块 fund flow (merged, tagged by board_level).
+
+    This is the universe the industry heatmap matches against: concept boards
+    give the fine granularity, industry boards give the standard classification.
+    """
+    boards: list[dict] = []
+    for level in ("industry", "concept"):
+        try:
+            boards.extend(_fetch_board_flow(level))
+        except Exception as e:
+            logger.warning("%s board fund-flow fetch failed: %s", level, e)
+    logger.info("Fetched %d total boards (industry + concept)", len(boards))
     return boards
 
 

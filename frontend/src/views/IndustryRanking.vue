@@ -38,7 +38,16 @@
               <div class="rank-badge">{{ row.rank }}</div>
               <div class="industry-main">
                 <div class="industry-name">
-                  {{ row.industry }}
+                  {{ row.board_name || row.industry }}
+                  <el-tag
+                    v-if="row.industry_level"
+                    size="small"
+                    effect="plain"
+                    :type="levelType(row.industry_level)"
+                    class="level-tag"
+                  >
+                    {{ levelLabel(row.industry_level) }}
+                  </el-tag>
                   <el-tag size="small" :type="ratingType(row.rating)" class="rating-tag">
                     {{ row.rating }}
                   </el-tag>
@@ -62,7 +71,7 @@
 
         <!-- 第二栏：行业龙头股（联动） -->
         <div class="board">
-          <h3>{{ selected ? `${selected.industry} · 龙头股` : '行业龙头' }}</h3>
+          <h3>{{ selected ? `${selected.board_name || selected.industry} · 龙头股` : '行业龙头' }}</h3>
           <template v-if="selected">
             <div v-if="leaders.length" class="board-scroll">
               <div v-for="s in leaders" :key="s.code" class="stock-row">
@@ -221,7 +230,7 @@ async function startDiagnosis(code, name) {
 async function openNews(row) {
   if (!row?.id) return
   newsVisible.value = true
-  newsIndustry.value = row.industry
+  newsIndustry.value = row.board_name || row.industry
   newsItems.value = []
   newsLoading.value = true
   try {
@@ -282,6 +291,14 @@ function resLabel(r) {
   return (
     { strong: '热度资金共振', divergence: '热度资金背离', quiet: '资金潜伏', none: '暂无资金数据' }[r] || r
   )
+}
+
+function levelType(l) {
+  return { concept: 'danger', industry: 'warning' }[l] || 'info'
+}
+
+function levelLabel(l) {
+  return { concept: '概念板块', industry: '行业板块' }[l] || l
 }
 
 function formatTime(iso) {

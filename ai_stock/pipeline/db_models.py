@@ -172,6 +172,8 @@ class IndustryRanking(Base):
     )
     industry: Mapped[str] = mapped_column(String(64), nullable=False)
     industry_code: Mapped[str] = mapped_column(String(16), default="")  # BKxxxx
+    board_name: Mapped[str] = mapped_column(String(64), default="")  # 东财规范板块名
+    industry_level: Mapped[str] = mapped_column(String(16), default="")  # concept | industry
 
     heat_score: Mapped[float] = mapped_column(Float, default=0.0)
     news_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -208,6 +210,8 @@ class IndustryRanking(Base):
             "snapshot_id": self.snapshot_id,
             "industry": self.industry,
             "industry_code": self.industry_code,
+            "board_name": self.board_name,
+            "industry_level": self.industry_level,
             "heat_score": self.heat_score,
             "news_count": self.news_count,
             "fund_flow_net": self.fund_flow_net,

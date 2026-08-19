@@ -281,15 +281,15 @@ def _build_industry_ranking(
     DB unavailable → rankings still returned for the candidate pool.
     """
     from ai_stock.dataflows.pipeline_data import (
-        get_industry_fund_flow,
+        get_all_board_fund_flow,
         get_industry_leader_stocks,
     )
 
     industry_flows = []
     try:
-        industry_flows = get_industry_fund_flow()
+        industry_flows = get_all_board_fund_flow()
     except Exception as exc:
-        logger.warning("Industry fund-flow fetch failed; heat-only ranking: %s", exc)
+        logger.warning("Board fund-flow fetch failed; heat-only ranking: %s", exc)
 
     rankings = calculate_industry_heatmap(debated_news, industry_flows, top_n=top_n)
 

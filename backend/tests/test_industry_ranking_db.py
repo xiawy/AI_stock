@@ -1,3 +1,4 @@
+
 """IndustryRanking persistence tests (行业榜).
 
 - save_industry_rankings / get_latest_industry_rankings / by-date roundtrip
@@ -71,6 +72,8 @@ def test_save_and_latest_roundtrip(ops_db):
         {
             "industry": "电子",
             "industry_code": "BK1033",
+            "board_name": "电子元件",
+            "industry_level": "industry",
             "heat_score": 9.5,
             "news_count": 4,
             "fund_flow_net": 5.2e9,
@@ -104,8 +107,12 @@ def test_save_and_latest_roundtrip(ops_db):
 
     top = result["rankings"][0]
     assert top["industry"] == "电子"
+    assert top["board_name"] == "电子元件"
+    assert top["industry_level"] == "industry"
     assert top["leader_stocks"][0]["code"] == "000063"
     second = result["rankings"][1]
+    assert second["board_name"] == ""
+    assert second["industry_level"] == ""
     assert second["fund_flow_net"] is None
     assert second["leader_stocks"] == []
 
