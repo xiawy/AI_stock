@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     # The engine packages stay in place and importable as a library.
     project_root: str = str(PROJECT_ROOT)
 
+    # ── Quant trading subsystem (V3.0) ──────────────────────────────────
+    # Starts MQ consumers + APScheduler with the app. The engine itself
+    # boots with global_trade_enable=0 (simulation only).
+    quant_enabled: bool = True
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

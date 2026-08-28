@@ -50,6 +50,13 @@ const cards = [
     to: '/recommendation',
   },
   {
+    icon: '📈',
+    title: '量化',
+    desc: '自选池 · 持仓池 · 交易历史三视图；多 Agent 引擎选股/建仓/止损决策自动同步到每个用户的模拟账户，逐笔记录资金变动与盈亏胜率，支持手动加减仓，预留实盘对接',
+    cta: '进入量化',
+    to: '/quant',
+  },
+  {
     icon: '🔍',
     title: '诊股',
     desc: '7 位分析师研报 + 质量门控 + 多空辩论 + 风控评估的完整多 Agent 流水线，自动注入行业榜热度上下文，输出买入/观望决策与完整分析报告',
@@ -92,11 +99,11 @@ const cards = [
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(4, 1fr); /* four landscape cards in one row */
+  grid-template-columns: repeat(5, 1fr); /* five landscape cards in one row */
   gap: 16px;
   padding: 8px 16px 40px;
 }
-@media (max-width: 960px) {
+@media (max-width: 1100px) {
   .cards {
     grid-template-columns: repeat(2, 1fr);
   }

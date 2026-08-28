@@ -21,6 +21,7 @@ from app.api import (
     history,
     impact,
     industry,
+    quant,
     recommendation,
     stocks,
     watchlist,
@@ -145,6 +146,19 @@ async def lifespan(_: FastAPI):
             "Pipeline service init failed (non-fatal): %s", exc,
         )
 
+    # Start the quant trading subsystem (V3.0): MQ consumers + scheduler +
+    # FSM recovery. Ships with global_trade_enable=0 (simulation only) until
+    # an operator flips the switch; failure is non-fatal for the API.
+    try:
+        if settings.quant_enabled:
+            from app.services.quant_service import start_quant_service
+
+            start_quant_service()
+        else:
+            logger.info("Quant service disabled via QUANT_ENABLED")
+    except Exception as exc:
+        logger.warning("Quant service init failed (non-fatal): %s", exc)
+
     # Start the evolution review scheduler. It only generates learning
     # summaries + strategy *drafts* on schedule — nothing is applied without
     # explicit human approval on the 进化审核 page / CLI.
@@ -180,6 +194,13 @@ async def lifespan(_: FastAPI):
 
     yield
 
+    # Shutdown quant consumers/scheduler first (they own background threads)
+    try:
+        from app.services.quant_service import stop_quant_service
+
+        stop_quant_service()
+    except Exception:
+        pass
     # Shutdown evolution scheduler first (its review_fn shares the LLM)
     try:
         if evo_scheduler is not None:
@@ -231,3 +252,4 @@ app.include_router(impact.router, prefix="/api")
 app.include_router(industry.router, prefix="/api")
 app.include_router(recommendation.router, prefix="/api")
 app.include_router(evolution.router, prefix="/api")
+app.include_router(quant.router, prefix="/api")

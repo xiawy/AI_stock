@@ -44,7 +44,7 @@ class EvolutionScheduler:
         """Start the scheduler."""
         try:
             from apscheduler.schedulers.background import BackgroundScheduler
-            from apscheduler.triggers.weekly import Weekly
+            from apscheduler.triggers.cron import CronTrigger
         except ImportError:
             logger.warning(
                 "APScheduler not installed. Evolution scheduler disabled. "
@@ -56,24 +56,24 @@ class EvolutionScheduler:
 
         # Schedule periodic reviews (default: Tue/Thu/Sun at 16:00)
         schedule = self.config.get("review_schedule", ["Tue", "Thu", "Sun"])
-        # APScheduler Weekly trigger expects lowercase day abbreviations
+        # APScheduler 3.x 没有 Weekly trigger, 周期任务用 CronTrigger 的
+        # day_of_week (逗号分隔多个小写星期缩写, 如 "mon,wed,fri")
         day_map = {"Mon": "mon", "Tue": "tue", "Wed": "wed", "Thu": "thu",
                    "Fri": "fri", "Sat": "sat", "Sun": "sun"}
-        for day in schedule:
-            apscheduler_day = day_map.get(day, day.lower())
-            self._scheduler.add_job(
-                self._run_all_reviews,
-                Weekly(day=apscheduler_day, hour=16, minute=0),
-                id="evolution_review",
-                name="Evolution periodic review",
-                replace_existing=True,
-            )
+        days = ",".join(day_map.get(day, day.lower()) for day in schedule)
+        self._scheduler.add_job(
+            self._run_all_reviews,
+            CronTrigger(day_of_week=days, hour=16, minute=0),
+            id="evolution_review",
+            name="Evolution periodic review",
+            replace_existing=True,
+        )
 
         # Optional volatility trigger (daily at 15:30)
         if self.config.get("review_volatility_trigger", False):
             self._scheduler.add_job(
                 self._check_volatility_trigger,
-                Weekly(day="mon,tue,wed,thu,fri", hour=15, minute=30),
+                CronTrigger(day_of_week="mon-fri", hour=15, minute=30),
                 id="volatility_trigger",
                 name="Volatility trigger check",
                 replace_existing=True,

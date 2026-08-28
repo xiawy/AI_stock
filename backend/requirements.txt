@@ -11,6 +11,10 @@ pydantic-settings>=2.2
 email-validator>=2.1
 python-dotenv>=1.0
 
+# Quant trading subsystem (ai_stock.quant) — started in-process by the app
+apscheduler>=3.10
+redis>=5.0
+
 # The original project is reused as the analysis engine library
 # (ai_stock/, web/, cli/ packages). Installed from the repo root:
 #   pip install -e ..

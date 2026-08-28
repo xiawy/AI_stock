@@ -7,7 +7,11 @@ heatmap and attaches leader stocks (领涨 + 板块最相关 + 弹性, not marke
 Older snapshots were produced by a commit that only attached leaders to
 ``rankings[:3]``, so ranks 4-10 ended up with empty ``leader_stocks``. This
 script replays Step 8 using the *current* working-tree code and persists the
-refreshed ``industry_rankings`` rows **in place** for the target snapshot.
+refreshed ``industry_rankings`` rows **
+
+
+
+in place** for the target snapshot.
 
 No LLM calls are made: it reuses the already-debated news stored in the DB
 (the only fields it needs are composite_score / bull_bear_bias / industries)
