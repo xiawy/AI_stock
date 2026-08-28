@@ -409,15 +409,92 @@ def get_all_board_fund_flow() -> list[dict]:
     return boards
 
 
-def get_industry_leader_stocks(board_code: str, top_n: int = 5) -> list[dict]:
-    """Fetch the top-N constituents of an industry board by market cap.
+# 龙头股口径：不是「市值最大」，而是「领涨 + 板块最相关 + 弹性最大」。
+# 打分维度（_leader_composite_score）：
+#   领涨    — 当日涨幅（主导因子）
+#   板块相关 — 涨停封板、板块官方领涨股、主力资金净流入
+#   弹性    — 跑赢板块的超额收益、换手率、量比
+_LEADER_QUOTE_FIELDS = "f12,f14,f3,f8,f10,f20,f62"
+
+
+def _limit_up_threshold(code: str) -> float:
+    """涨停近似阈值（主板 10% / 创业+科创 20% / 北交所 30%），留 0.2% 缓冲。"""
+    if code.startswith(("300", "301", "688", "689")):
+        return 19.8
+    if code.startswith(("4", "8", "92")):
+        return 29.8
+    return 9.8
+
+
+def _leader_composite_score(
+    stock: dict,
+    board_change_pct: float | None,
+    is_board_top: bool,
+) -> float:
+    """综合打分：领涨 × 板块相关 × 弹性，分越高越像该板块龙头。"""
+    change = stock.get("change_pct", 0.0)
+    excess = change - board_change_pct if board_change_pct is not None else 0.0
+    turnover = min(stock.get("turnover_rate") or 0.0, 30.0)
+    volume_ratio = min(stock.get("volume_ratio") or 0.0, 5.0)
+    inflow_yi = max(stock.get("main_net_inflow") or 0.0, 0.0) / 1e8
+
+    score = change * 3.0                       # 领涨（主导因子）
+    if change >= _limit_up_threshold(stock.get("code", "")):
+        score += 3.0                           # 涨停封板 = 主题核心（最相关）
+    if is_board_top:
+        score += 3.0                           # 板块官方领涨股 = 最相关
+    score += excess                            # 弹性：跑赢板块的超额收益
+    score += turnover * 0.08                   # 弹性：换手活跃度
+    score += volume_ratio * 0.5                # 弹性：放量确认
+    score += min(inflow_yi, 10.0) * 0.3        # 相关：主力资金主攻方向
+    return score
+
+
+def _rank_board_leaders(
+    stocks: list[dict],
+    board_change_pct: float | None,
+    top_stock_code: str,
+    top_n: int,
+) -> list[dict]:
+    """按 领涨×相关×弹性 打分排序，取前 top_n 并打上标签。"""
+    ranked = sorted(
+        stocks,
+        key=lambda s: _leader_composite_score(
+            s, board_change_pct, s["code"] == top_stock_code,
+        ),
+        reverse=True,
+    )
+    leaders = ranked[:top_n]
+    for s in leaders:
+        s["leader_label"] = "领涨" if s["code"] == top_stock_code else "龙头"
+    return leaders
+
+
+def get_industry_leader_stocks(
+    board_code: str,
+    top_n: int = 5,
+    board_change_pct: float | None = None,
+    top_stock_code: str = "",
+) -> list[dict]:
+    """Fetch a board's leading stocks — 领涨 + 板块最相关 + 弹性最大, not market-cap.
+
+    Candidates are the board's biggest gainers (``fid=f3``), then re-ranked
+    by ``_leader_composite_score`` so the returned Top-N are the ones that
+    lead the board in gains, are most board-relevant (limit-up / official
+    top gainer / main-capital inflow), and have the highest elasticity
+    (excess return over the board, turnover, volume ratio).
 
     Args:
         board_code: Eastmoney board code, e.g. "BK1033".
         top_n: number of leaders to return (default 5).
+        board_change_pct: the board's own change% — used to measure
+            excess return (弹性).
+        top_stock_code: the board's official top gainer code — the most
+            board-relevant stock, gets the 领涨 label.
 
     Returns a list of dicts with keys:
-        code, name, change_pct, market_cap (元)
+        code, name, change_pct, turnover_rate (%), volume_ratio,
+        market_cap (元), main_net_inflow (元), leader_label ("领涨"/"龙头").
 
     Empty list on failure.
     """
@@ -427,14 +504,14 @@ def get_industry_leader_stocks(board_code: str, top_n: int = 5) -> list[dict]:
     try:
         params = {
             "pn": "1",
-            "pz": str(max(top_n, 1) * 2),
+            "pz": str(max(top_n, 1) * 6),
             "po": "1",
             "np": "1",
             "fltt": "2",
             "invt": "2",
-            "fid": "f20",  # sort by total market cap desc
+            "fid": "f3",  # 先取板块内领涨候选（涨幅降序）
             "fs": f"b:{board_code}",
-            "fields": "f12,f14,f3,f20",
+            "fields": _LEADER_QUOTE_FIELDS,
         }
         r = _push2_get("/api/qt/clist/get", params)
         items = r.json().get("data", {}).get("diff", []) or []
@@ -446,10 +523,15 @@ def get_industry_leader_stocks(board_code: str, top_n: int = 5) -> list[dict]:
                 "code": code,
                 "name": str(item.get("f14", "")),
                 "change_pct": _to_float(item.get("f3")),
+                "turnover_rate": _to_float(item.get("f8")),
+                "volume_ratio": _to_float(item.get("f10")),
                 "market_cap": _to_float(item.get("f20")),
+                "main_net_inflow": _to_float(item.get("f62")),
             })
-            if len(stocks) >= top_n:
-                break
+        if stocks:
+            stocks = _rank_board_leaders(
+                stocks, board_change_pct, top_stock_code, top_n,
+            )
     except Exception as e:
         logger.warning("Industry leader fetch failed for %s: %s", board_code, e)
         return []

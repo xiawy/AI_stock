@@ -230,8 +230,9 @@ def test_fundamentals_prompt_tells_the_model_to_pass_the_date():
     from ai_stock.agents.analysts import fundamentals_analyst
 
     src = inspect.getsource(fundamentals_analyst.create_fundamentals_analyst)
-    assert "get_profit_forecast(ticker, curr_date)" in src
-    assert "curr_date 必须传" in src
+    # 工具调用顺序里明确要求必传 curr_date（da9df41 起文案为「curr_date必传」，
+    # 此处断言跟随实际提示词，防止后续被改回默认值）。
+    assert "get_profit_forecast(curr_date必传)" in src
 
 
 def test_fund_flow_history_trimmed_to_twenty_rows(monkeypatch):

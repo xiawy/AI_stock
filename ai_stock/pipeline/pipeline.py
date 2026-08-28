@@ -9,7 +9,7 @@ Steps:
 6. Bull/bear debate → Top 20
 7. Rank Top 20
 8. Industry heatmap aggregation (行业榜: news heat × fund-flow resonance)
-   + leader stocks of the Top-3 hot industries
+   + leader stocks of every ranked industry (领涨+相关+弹性)
 9. Candidate pool generation (Top 5 events + limit-up + industry leaders)
 10. 3-dimensional scoring → top 20 advance
 11. Per-stock debate → final scoring → Top 10 + 3 alternates → write to DB
@@ -268,11 +268,12 @@ def _build_industry_ranking(
     snapshot_id: int | None,
     top_n: int = 10,
 ) -> tuple[list[dict], list[dict]]:
-    """Build the industry heat ranking (行业榜) and its Top-3 leader stocks.
+    """Build the industry heat ranking (行业榜) and its leader stocks (领涨+相关+弹性).
 
     Returns (industry_rankings, industry_leaders):
     - industry_rankings: dicts ready for ``db_ops.save_industry_rankings``
-      (with ``leader_stocks`` attached for the Top-3 industries)
+      (with ``leader_stocks`` attached for every ranked industry —
+       leaders = 领涨 + 板块最相关 + 弹性最大, not market-cap)
     - industry_leaders: flat, deduped list of the Top-3 industries' leader
       stocks ({code, name, industry, rank}) for candidate-pool injection
 
@@ -293,16 +294,22 @@ def _build_industry_ranking(
 
     rankings = calculate_industry_heatmap(debated_news, industry_flows, top_n=top_n)
 
-    # Attach leader stocks (market-cap top constituents) to the Top-3
-    # industries and collect them for the candidate pool.
+    # Attach leader stocks to every ranked board for the 行业榜联动展示.
+    # 龙头口径 = 领涨 + 板块最相关 + 弹性最大（见 get_industry_leader_stocks）,
+    # 不再是市值龙头。候选池注入仍只取 Top-3 热门行业（板块 β 更有意义）。
     industry_leaders: list[dict] = []
     seen_codes: set[str] = set()
-    for row in rankings[:3]:
+    for row in rankings[:top_n]:
         leaders: list[dict] = []
         board_code = row.get("industry_code", "")
         if board_code:
             try:
-                leaders = get_industry_leader_stocks(board_code, top_n=5)
+                leaders = get_industry_leader_stocks(
+                    board_code,
+                    top_n=5,
+                    board_change_pct=row.get("change_pct"),
+                    top_stock_code=row.get("top_stock_code", ""),
+                )
             except Exception as exc:
                 logger.warning(
                     "Leader fetch failed for %s (%s): %s",
@@ -313,21 +320,27 @@ def _build_industry_ranking(
             leaders = [{
                 "code": row["top_stock_code"],
                 "name": row.get("top_stock_name", ""),
-                "change_pct": row.get("change_pct") or 0.0,
+                "change_pct": row.get("top_stock_pct") or 0.0,
+                "turnover_rate": 0.0,
+                "volume_ratio": 0.0,
                 "market_cap": 0.0,
+                "main_net_inflow": 0.0,
+                "leader_label": "领涨",
             }]
         row["leader_stocks"] = leaders
 
-        for stock in leaders:
-            code = stock.get("code", "")
-            if code and code not in seen_codes:
-                seen_codes.add(code)
-                industry_leaders.append({
-                    "code": code,
-                    "name": stock.get("name", ""),
-                    "industry": row.get("industry", ""),
-                    "rank": row.get("rank", 0),
-                })
+        # Candidate-pool injection stays Top-3 only (unchanged semantics).
+        if (row.get("rank") or 99) <= 3:
+            for stock in leaders:
+                code = stock.get("code", "")
+                if code and code not in seen_codes:
+                    seen_codes.add(code)
+                    industry_leaders.append({
+                        "code": code,
+                        "name": stock.get("name", ""),
+                        "industry": row.get("industry", ""),
+                        "rank": row.get("rank", 0),
+                    })
 
     if snapshot_id and rankings:
         try:

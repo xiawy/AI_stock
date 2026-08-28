@@ -188,7 +188,9 @@ class IndustryRanking(Base):
     resonance: Mapped[str] = mapped_column(String(16), default="none")
     rating: Mapped[str] = mapped_column(String(2), default="C")  # A | B | C
 
-    # JSON array [{code, name, change_pct, market_cap}] — leaders by market cap
+    # JSON array [{code, name, change_pct, turnover_rate, volume_ratio,
+    #              main_net_inflow, market_cap, leader_label}] —
+    # 龙头 = 领涨 + 板块最相关 + 弹性最大（非市值龙头）
     leader_stocks_json: Mapped[str] = mapped_column(Text, default="")
 
     rank: Mapped[int] = mapped_column(Integer, default=0)

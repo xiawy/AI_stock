@@ -18,6 +18,7 @@ from typing import Annotated
 from datetime import date, datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
 import contextlib
+import io
 import json as _json
 import os
 import logging
@@ -640,7 +641,7 @@ def _ths_eps_forecast(code: str) -> pd.DataFrame:
     }
     r = _requests.get(url, headers=headers, timeout=15)
     r.encoding = "gbk"
-    dfs = pd.read_html(r.text)
+    dfs = pd.read_html(io.StringIO(r.text))
     # Find the table containing EPS data
     for df in dfs:
         cols = [str(c) for c in df.columns]

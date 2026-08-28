@@ -57,6 +57,11 @@ const routes = [
     component: () => import('../views/StockRecommendation.vue'),
   },
   {
+    path: '/evolution',
+    name: 'evolution',
+    component: () => import('../views/EvolutionReview.vue'),
+  },
+  {
     path: '/:pathMatch(.*)*',
     redirect: '/',
   },

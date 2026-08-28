@@ -173,7 +173,10 @@ START → [Analyst₁ → ToolNode₁ → MsgClear₁]* → QualityGate
 - `EvolutionWrapper` 包装每个图节点：执行前检索相似历史经验注入提示词，执行后写入经验库
 - 三层记忆：semantic（`custom_strategies/*.md`，按角色/市场状态组织）/ episodic（Chroma 向量）/ working
 - `market_regime` 识别牛/熊/震荡 → `weight_allocator` 决定注入哪些策略及权重
-- chromadb 未安装 → `evolution_enabled` 自动降级 False（⚠️ 无日志提示，见 §11 B11）
+- `review_service`：共享复盘服务（CLI 与 backend 共用）——`run_review_for_agent`（ReviewEngine → LocalEvolver 生成草稿）、`list_drafts/get_draft/approve_draft/reject_draft`、`agent_status`；草稿位于 `{evolution_base_dir}/review_queue/{agent}/`，**仅批准路径**修改 `custom_strategies/`（先备份）
+- 人工审核入口：Web `/api/evolution/*`（前端 `/evolution` 进化审核页）+ CLI `ai-stock draft-review list|show|approve|reject`
+- backend lifespan 会启动 `EvolutionScheduler`（按 `review_schedule` 定期复盘，仅产草稿）
+- chromadb 未安装 → 向量检索自动降级为「仅 JSON」，`EvolutionWrapper` 退化为裸节点（⚠️ 见 §11 B11）；复盘/审核流程不受影响
 
 ## 9. Web / Backend / Frontend
 

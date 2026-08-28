@@ -1286,6 +1286,37 @@ def analyze(
     run_analysis(checkpoint=checkpoint)
 
 
+def _chromadb_available() -> bool:
+    """True when chromadb is installed (vector retrieval enabled)."""
+    try:
+        import chromadb  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def _show_evolution_status(agents: list[str]) -> None:
+    """Dry-run: print per-agent evolution status without calling the LLM."""
+    from ai_stock.evolution import review_service
+
+    statuses = [s for s in review_service.agent_status(DEFAULT_CONFIG, agents=agents) if s["agent"] in agents]
+    table = Table(title="Agent 进化状态", box=box.ROUNDED)
+    table.add_column("Agent")
+    table.add_column("情节记忆", justify="right")
+    table.add_column("策略文件")
+    table.add_column("待审草稿", justify="right")
+    table.add_column("上次复盘")
+    for s in statuses:
+        table.add_row(
+            s["agent"],
+            str(s["episodes_total"]),
+            ", ".join(s["strategy_files"]) or "无",
+            str(s["draft_count"]),
+            s["last_learning"]["date"] if s["last_learning"] else "—",
+        )
+    console.print(table)
+
+
 @app.command()
 def evolve(
     agent: str = typer.Option(
@@ -1294,84 +1325,136 @@ def evolve(
     ),
     dry_run: bool = typer.Option(
         True,
-        help="Dry-run mode: show what would be reviewed without writing changes.",
+        help="Dry-run mode: show episode/status without calling the LLM.",
     ),
 ):
     """手动触发 Agent 自进化复盘。
 
-    读取指定 Agent 的情节记忆，生成复盘总结和改进建议草稿。
-    所有策略修改都进入审核队列，不会自动应用。
+    读取指定 Agent 的情节记忆，调用 LLM 生成复盘总结与改进建议，并据此
+    生成策略修改草稿。所有草稿进入审核队列（review_queue），**不会自动
+    应用**——用 `ai-stock draft-review approve` 或在 Web「进化审核」页批准。
 
     需要安装可选依赖: pip install -e '.[evolution]'
     """
+    from ai_stock.evolution import review_service
+
     try:
-        import chromadb  # noqa: F401
-    except ImportError:
-        console.print(
-            "[red]自进化层需要 chromadb。请运行:[/red]\n"
-            "  [cyan]pip install -e '.[evolution]'[/cyan]"
-        )
+        agents_to_review = review_service.resolve_agents(agent)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
-
-    agents_to_review = []
-    all_agents = [
-        "market", "fundamentals", "hot_money", "policy", "social", "news",
-        "bull", "bear", "trader", "risk", "quality_gate", "portfolio",
-    ]
-    if agent == "all":
-        agents_to_review = all_agents
-    elif agent in all_agents:
-        agents_to_review = [agent]
-    else:
-        console.print(f"[red]Unknown agent: {agent}. Available: {', '.join(all_agents)}[/red]")
-        raise typer.Exit(1)
-
-    from ai_stock.evolution.memory_system import AgentMemorySystem
-
-    base_dir = Path(DEFAULT_CONFIG["evolution_base_dir"])
-    strategies_dir = Path(DEFAULT_CONFIG["custom_strategies_dir"])
-    learnings_dir = Path(DEFAULT_CONFIG["learnings_dir"])
 
     console.print(Panel(
         f"[bold]Agent 自进化复盘[/bold]\n"
         f"Agents: {', '.join(agents_to_review)}\n"
-        f"Mode: {'dry-run' if dry_run else 'LIVE'}",
+        f"Mode: {'dry-run' if dry_run else 'LIVE'}\n"
+        f"Vector: {'chromadb' if _chromadb_available() else 'degraded (JSON-only)'}",
         border_style="cyan",
     ))
+
+    if dry_run:
+        _show_evolution_status(agents_to_review)
+        console.print(
+            "\n[dim]Dry-run 模式仅展示状态。运行 "
+            "[bold]ai-stock evolve --no-dry-run[/bold] 触发真实复盘。[/dim]"
+        )
+        return
+
+    try:
+        llm = review_service.build_llm(DEFAULT_CONFIG)
+    except Exception as exc:
+        console.print(f"[red]LLM 初始化失败: {exc}[/red]")
+        raise typer.Exit(1)
 
     for agent_name in agents_to_review:
         console.print(f"\n[bold cyan]Reviewing: {agent_name}[/bold cyan]")
         try:
-            memory = AgentMemorySystem(
-                agent_name,
-                base_dir=base_dir,
-                strategies_dir=strategies_dir,
-                top_k=DEFAULT_CONFIG.get("evolution_top_k_episodes", 3),
+            result = review_service.run_review_for_agent(
+                agent_name, DEFAULT_CONFIG, llm=llm, generate_draft=True,
             )
-            # Count episodes
-            all_episodes = memory.episodic.load_all()
-            if not all_episodes:
-                console.print(f"  [dim]No episodes found for {agent_name}, skipping.[/dim]")
+            console.print(
+                f"  情节记忆: {result['episodes_total']} "
+                f"(已结算 {result['episodes_resolved']}, 待验证 {result['episodes_pending']})"
+            )
+            if result["episodes_total"] == 0:
+                console.print("  [dim]无情节记忆，跳过。[/dim]")
                 continue
-
-            console.print(f"  Found {len(all_episodes)} episode(s)")
-
-            if dry_run:
-                console.print(f"  [yellow]Dry-run mode — no review generated.[/yellow]")
-                # Show recent episodes
-                for ep in all_episodes[-3:]:
-                    ep_id = ep.get("id", "?")
-                    outcome = ep.get("outcome", "unknown")
-                    console.print(f"    - {ep_id}: {outcome}")
+            console.print(Panel(result["summary"], title="复盘总结", border_style="green"))
+            console.print(Panel(result["suggestions"], title="改进建议", border_style="yellow"))
+            if result.get("draft"):
+                console.print("[green]策略草稿已生成，等待人工审核（draft-review list 查看）。[/green]")
             else:
-                console.print(f"  [green]Review would be written to:[/green] {learnings_dir / agent_name}")
-                # TODO: Wire up LLM and run ReviewEngine when needed
-                console.print(f"  [dim]LLM review not yet wired in CLI — use backend for full review.[/dim]")
-
+                console.print("[dim]未生成草稿（无现有策略或无可改进建议）。[/dim]")
         except Exception as e:
             console.print(f"  [red]Error: {e}[/red]")
 
-    console.print("\n[green]Evolve complete.[/green]")
+    console.print("\n[green]Evolve complete. 用 `ai-stock draft-review list` 查看待审核草稿。[/green]")
+
+
+# ── 策略草稿人工审核 ────────────────────────────────────────
+draft_app = typer.Typer(help="策略草稿人工审核：草稿生成后必须人工批准才会应用。")
+app.add_typer(draft_app, name="draft-review")
+
+
+@draft_app.command("list")
+def draft_list(
+    agent: str = typer.Option("", help="只列出指定 Agent 的草稿。"),
+):
+    """列出待审核草稿。"""
+    from ai_stock.evolution import review_service
+
+    drafts = review_service.list_drafts(DEFAULT_CONFIG, agent_name=agent or None)
+    if not drafts:
+        console.print("[dim]暂无待审核草稿。运行 `ai-stock evolve --no-dry-run` 生成。[/dim]")
+        return
+    table = Table(title="待审核策略草稿", box=box.ROUNDED)
+    table.add_column("Agent")
+    table.add_column("文件名")
+    table.add_column("生成时间")
+    table.add_column("大小")
+    for d in drafts:
+        table.add_row(d["agent"], d["filename"], d["created_at"], f"{d['size']}B")
+    console.print(table)
+    console.print("[dim]查看全文: ai-stock draft-review show <agent> <filename>[/dim]")
+
+
+@draft_app.command("show")
+def draft_show(agent: str, filename: str):
+    """查看草稿全文。"""
+    from ai_stock.evolution import review_service
+
+    try:
+        draft = review_service.get_draft(DEFAULT_CONFIG, agent, filename)
+    except (ValueError, FileNotFoundError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(Panel(draft["content"], title=f"{agent}/{filename}", border_style="yellow"))
+
+
+@draft_app.command("approve")
+def draft_approve(agent: str, filename: str):
+    """批准草稿并应用（原策略自动备份）。"""
+    from ai_stock.evolution import review_service
+
+    try:
+        result = review_service.approve_draft(DEFAULT_CONFIG, agent, filename)
+    except (ValueError, FileNotFoundError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]{result['detail']}[/green]")
+
+
+@draft_app.command("reject")
+def draft_reject(agent: str, filename: str):
+    """拒绝并删除草稿。"""
+    from ai_stock.evolution import review_service
+
+    try:
+        result = review_service.reject_draft(DEFAULT_CONFIG, agent, filename)
+    except (ValueError, FileNotFoundError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[yellow]{result['detail']}[/yellow]")
 
 
 @app.command()

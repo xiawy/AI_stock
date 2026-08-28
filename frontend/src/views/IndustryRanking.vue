@@ -76,12 +76,22 @@
             <div v-if="leaders.length" class="board-scroll">
               <div v-for="s in leaders" :key="s.code" class="stock-row">
                 <div class="stock-main">
-                  <span class="stock-name">{{ s.name }}</span>
+                  <span class="stock-name">
+                    {{ s.name }}
+                    <el-tag
+                      v-if="s.leader_label"
+                      size="small"
+                      effect="plain"
+                      :type="s.leader_label === '领涨' ? 'danger' : 'warning'"
+                    >
+                      {{ s.leader_label }}
+                    </el-tag>
+                  </span>
                   <span class="stock-code">{{ s.code }}</span>
                 </div>
                 <div class="stock-side">
                   <span :class="pctClass(s.change_pct)">{{ pctText(s.change_pct) }}</span>
-                  <span class="cap">{{ capText(s.market_cap) }}</span>
+                  <span class="cap">换手 {{ turnoverText(s.turnover_rate) }}</span>
                   <el-button
                     size="small"
                     type="primary"
@@ -273,10 +283,10 @@ function flowClass(v) {
   return v >= 0 ? 'up' : 'down'
 }
 
-/** 总市值：元 → 亿元 */
-function capText(v) {
-  if (v == null) return ''
-  return `${(v / 1e8).toFixed(0)}亿`
+/** 换手率：% */
+function turnoverText(v) {
+  if (v == null) return '—'
+  return `${v.toFixed(1)}%`
 }
 
 function ratingType(r) {

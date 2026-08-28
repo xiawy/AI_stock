@@ -377,3 +377,204 @@ class TestInitialStateIndustryContext:
         state = Propagator().create_initial_state("300750", "2026-08-16")
         assert state["industry_heatmap"] == ""
         assert state["hot_sector_stocks"] == ""
+
+
+@pytest.mark.unit
+class TestIndustryHeatmapTopStockPct:
+    def test_top_stock_pct_propagated(self):
+        news = [_news(8.0, primary="电子")]
+        flows = [{
+            "name": "电子", "code": "BK1033", "main_net_inflow": 5e9,
+            "change_pct": 2.0, "top_stock_name": "中兴通讯",
+            "top_stock_code": "000063", "top_stock_pct": 5.1,
+        }]
+        result = calculate_industry_heatmap(news, flows)
+        assert result[0]["top_stock_pct"] == 5.1
+        assert result[0]["top_stock_code"] == "000063"
+
+
+@pytest.mark.unit
+class TestIndustryLeaderComposite:
+    """龙头口径 = 领涨 + 板块最相关 + 弹性最大（不再按市值）。"""
+
+    @staticmethod
+    def _stock(code, name, change, turnover=1.0, vol_ratio=1.0, inflow=0.0):
+        return {
+            "code": code, "name": name, "change_pct": change,
+            "turnover_rate": turnover, "volume_ratio": vol_ratio,
+            "market_cap": 0.0, "main_net_inflow": inflow,
+        }
+
+    def test_gain_dominates(self):
+        from ai_stock.dataflows.pipeline_data import _rank_board_leaders
+        stocks = [
+            self._stock("600001", "低涨幅", 6.0),
+            self._stock("600002", "高涨幅", 8.0),
+        ]
+        leaders = _rank_board_leaders(stocks, 2.0, "", 5)
+        assert [s["code"] for s in leaders] == ["600002", "600001"]
+        assert leaders[0]["leader_label"] == "龙头"
+
+    def test_board_top_gainer_labeled_lizhang(self):
+        from ai_stock.dataflows.pipeline_data import _rank_board_leaders
+        stocks = [
+            self._stock("600001", "普通股", 5.0),
+            self._stock("600002", "官方领涨", 5.5),
+        ]
+        leaders = _rank_board_leaders(stocks, 1.0, "600002", 5)
+        assert leaders[0]["code"] == "600002"
+        assert leaders[0]["leader_label"] == "领涨"
+        assert leaders[1]["leader_label"] == "龙头"
+
+    def test_limit_up_relevance_boost(self):
+        from ai_stock.dataflows.pipeline_data import _rank_board_leaders
+        # 9.8% 涨停（相关加成 +3）压过 9.5% 未涨停但换手活跃的股票
+        stocks = [
+            self._stock("600001", "未涨停高换手", 9.5, turnover=20.0, vol_ratio=3.0),
+            self._stock("600002", "涨停", 9.8, turnover=2.0, vol_ratio=1.0),
+        ]
+        leaders = _rank_board_leaders(stocks, 3.0, "", 5)
+        assert leaders[0]["code"] == "600002"
+
+    def test_elasticity_volume_ratio_tiebreak(self):
+        from ai_stock.dataflows.pipeline_data import _rank_board_leaders
+        stocks = [
+            self._stock("600001", "缩量", 7.0, vol_ratio=0.8),
+            self._stock("600002", "放量", 7.0, vol_ratio=2.5),
+        ]
+        leaders = _rank_board_leaders(stocks, 1.0, "", 5)
+        assert leaders[0]["code"] == "600002"
+
+    def test_fetch_parses_fields_and_ranks(self, monkeypatch):
+        from ai_stock.dataflows import pipeline_data as pd
+
+        payload = {"data": {"diff": [
+            {"f12": "000063", "f14": "中兴通讯", "f3": 5.1, "f8": 3.2,
+             "f10": 1.8, "f20": 1.5e11, "f62": 2.0e8},
+            {"f12": "002396", "f14": "星网锐捷", "f3": 4.0, "f8": 5.0,
+             "f10": 2.0, "f20": 3e10, "f62": 5.0e7},
+        ]}}
+        response = type("R", (), {"json": lambda self: payload})()
+        monkeypatch.setattr(pd, "_push2_get", lambda path, params: response)
+
+        leaders = pd.get_industry_leader_stocks(
+            "BK1033", top_n=5, board_change_pct=2.0, top_stock_code="000063",
+        )
+        assert [s["code"] for s in leaders] == ["000063", "002396"]
+        first = leaders[0]
+        assert first["leader_label"] == "领涨"
+        assert first["turnover_rate"] == 3.2
+        assert first["volume_ratio"] == 1.8
+        assert first["main_net_inflow"] == 2.0e8
+        assert first["market_cap"] == 1.5e11
+        assert leaders[1]["leader_label"] == "龙头"
+
+    def test_fetch_failure_returns_empty(self, monkeypatch):
+        from ai_stock.dataflows import pipeline_data as pd
+
+        def boom(path, params):
+            raise RuntimeError("rate limited")
+
+        monkeypatch.setattr(pd, "_push2_get", boom)
+        assert pd.get_industry_leader_stocks("BK1033") == []
+
+@pytest.mark.unit
+class TestBuildIndustryRankingLeaders:
+    """每个上榜行业都挂龙头（方案 A）；候选池注入仍只取 Top-3。"""
+
+    @staticmethod
+    def _news(score, industry):
+        return {
+            "composite_score": score, "bull_bear_bias": "bullish",
+            "primary_industry": industry, "secondary_industry": "",
+        }
+
+    @staticmethod
+    def _flow(name, code, inflow, change, top_code, top_name, top_pct):
+        return {
+            "name": name, "code": code, "main_net_inflow": inflow,
+            "change_pct": change, "top_stock_code": top_code,
+            "top_stock_name": top_name, "top_stock_pct": top_pct,
+            "board_level": "industry",
+        }
+
+    def test_leaders_attached_to_every_ranked_board(self, monkeypatch):
+        from ai_stock.pipeline import pipeline as pipe
+        from ai_stock.dataflows import pipeline_data as pd
+
+        news = [
+            self._news(9.0, "电子"), self._news(8.0, "半导体"),
+            self._news(7.0, "存储芯片"), self._news(6.0, "机器人"),
+            self._news(5.0, "光伏"),
+        ]
+        flows = [
+            self._flow("电子元件", "BK1033", 5e9, 2.0, "000063", "中兴通讯", 5.1),
+            self._flow("半导体", "BK1036", 4e9, 1.5, "688981", "中芯国际", 4.2),
+            self._flow("存储芯片", "BK1137", 3e9, 3.1, "603986", "兆易创新", 6.0),
+            self._flow("机器人概念", "BK1108", 2e9, 1.0, "002747", "埃斯顿", 3.3),
+            self._flow("光伏设备", "BK1031", 1e9, 0.5, "601012", "隆基绿能", 2.0),
+        ]
+        monkeypatch.setattr(pd, "get_all_board_fund_flow", lambda: flows)
+        monkeypatch.setattr(
+            pd, "get_industry_leader_stocks",
+            lambda board_code, top_n=5, board_change_pct=None, top_stock_code="":
+            [{"code": f"{board_code}01", "name": f"{board_code}龙头",
+              "change_pct": 5.0, "turnover_rate": 1.0, "volume_ratio": 1.0,
+              "market_cap": 0.0, "main_net_inflow": 0.0, "leader_label": "龙头"}],
+        )
+
+        rankings, industry_leaders = pipe._build_industry_ranking(news, None, top_n=5)
+
+        assert len(rankings) == 5
+        for row in rankings:
+            assert row["leader_stocks"], f"rank {row['rank']} 缺龙头数据"
+            assert row["leader_stocks"][0]["leader_label"] == "龙头"
+        # 候选池注入只保留 Top-3 行业，且每个行业去重后各 1 条
+        assert {li["industry"] for li in industry_leaders} == {
+            "电子", "半导体", "存储芯片",
+        }
+        assert len(industry_leaders) == 3
+
+    def test_fallback_top_gainer_when_fetch_fails(self, monkeypatch):
+        from ai_stock.pipeline import pipeline as pipe
+        from ai_stock.dataflows import pipeline_data as pd
+
+        news = [self._news(9.0, "电子")]
+        flows = [self._flow("电子元件", "BK1033", 5e9, 2.0, "000063", "中兴通讯", 5.1)]
+        monkeypatch.setattr(pd, "get_all_board_fund_flow", lambda: flows)
+        monkeypatch.setattr(pd, "get_industry_leader_stocks", lambda *a, **k: [])
+
+        rankings, industry_leaders = pipe._build_industry_ranking(news, None, top_n=5)
+
+        assert len(rankings) == 1
+        leaders = rankings[0]["leader_stocks"]
+        assert leaders and leaders[0]["code"] == "000063"
+        assert leaders[0]["leader_label"] == "领涨"
+        # 兜底用的是领涨股自身涨幅，而非板块涨幅
+        assert leaders[0]["change_pct"] == 5.1
+        # 兜底股仍可进入候选池（rank 1 ≤ 3）
+        assert len(industry_leaders) == 1
+
+    def test_no_board_code_skips_fetch_uses_top_gainer(self, monkeypatch):
+        from ai_stock.pipeline import pipeline as pipe
+        from ai_stock.dataflows import pipeline_data as pd
+
+        news = [self._news(9.0, "电子")]
+        # 无匹配板块 → industry_code 为空，get_industry_leader_stocks 不应被调用
+        monkeypatch.setattr(pd, "get_all_board_fund_flow", lambda: [])
+        called = []
+
+        def spy(board_code, top_n=5, board_change_pct=None, top_stock_code=""):
+            called.append(board_code)
+            return [{"code": "000001", "name": "不该出现", "change_pct": 1.0,
+                     "leader_label": "龙头"}]
+
+        monkeypatch.setattr(pd, "get_industry_leader_stocks", spy)
+
+        rankings, _ = pipe._build_industry_ranking(news, None, top_n=5)
+
+        assert len(rankings) == 1
+        assert rankings[0]["industry_code"] == ""
+        assert called == []  # 无板块代码时不发多余请求
+        # 无兜底可用 → 龙头列表为空而非报错
+        assert rankings[0]["leader_stocks"] == []

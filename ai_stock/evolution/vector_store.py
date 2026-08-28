@@ -13,6 +13,10 @@ from typing import List
 
 logger = logging.getLogger(__name__)
 
+# Warn about a missing chromadb exactly once per process — the message is the
+# same for every agent, and agent_status() touches all 12 agents on each call.
+_chromadb_warned = False
+
 
 class EpisodicVectorStore:
     """Per-agent Chroma collection for episodic memory."""
@@ -30,10 +34,20 @@ class EpisodicVectorStore:
             try:
                 import chromadb
             except ImportError:
-                raise ImportError(
-                    "chromadb is required for the evolution system. "
-                    "Install it with: pip install 'chromadb>=0.5.0'"
-                )
+                # Graceful degradation: without chromadb the vector index is
+                # unavailable, but JSON episodes are still recorded and the
+                # human review flow keeps working (B11-style explicit notice).
+                global _chromadb_warned
+                if not _chromadb_warned:
+                    _chromadb_warned = True
+                    logger.warning(
+                        "chromadb is not installed — vector retrieval disabled "
+                        "(JSON episodes are still recorded). Install with: "
+                        "pip install 'chromadb>=0.5.0'",
+                    )
+                self._client = None
+                self.collection = None
+                return
             self._client = chromadb.PersistentClient(path=str(self._persist_dir))
 
         self.collection = self._client.get_or_create_collection(
@@ -54,6 +68,9 @@ class EpisodicVectorStore:
             outcome (optional, default "pending"), rating (optional).
         """
         doc_id = episode.get("id") or f"{episode['ticker']}_{episode['date']}_{episode['agent']}"
+        if self.collection is None:
+            # chromadb unavailable — JSON storage is the source of truth.
+            return
         # Dedup: skip if this exact id already exists in the collection
         existing = self.collection.get(ids=[doc_id])
         if existing and existing.get("ids"):
@@ -77,7 +94,7 @@ class EpisodicVectorStore:
 
     def retrieve(self, query: str, n_results: int = 5) -> List[dict]:
         """Retrieve the most similar episodes for a given query string."""
-        if self.collection.count() == 0:
+        if self.collection is None or self.collection.count() == 0:
             return []
 
         # Clamp n_results to the number of available documents

@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import (
     analysis,
     auth,
+    evolution,
     history,
     impact,
     industry,
@@ -144,8 +145,47 @@ async def lifespan(_: FastAPI):
             "Pipeline service init failed (non-fatal): %s", exc,
         )
 
+    # Start the evolution review scheduler. It only generates learning
+    # summaries + strategy *drafts* on schedule — nothing is applied without
+    # explicit human approval on the 进化审核 page / CLI.
+    evo_scheduler = None
+    try:
+        from ai_stock.default_config import DEFAULT_CONFIG
+        from ai_stock.evolution import review_service as evo_review
+        from ai_stock.evolution.scheduler import EvolutionScheduler
+        from app.services.evolution_service import get_evolution_service
+
+        if DEFAULT_CONFIG.get("evolution_enabled", True):
+            # The volatility trigger needs a market-data callback; keep the
+            # periodic review job only for now (schedule lives in config).
+            sched_cfg = {**DEFAULT_CONFIG, "review_volatility_trigger": False}
+            evo_svc = get_evolution_service()
+            evo_scheduler = EvolutionScheduler(
+                agents=evo_review.AGENTS,
+                config=sched_cfg,
+                review_fn=lambda agent: evo_review.run_review_for_agent(
+                    agent,
+                    DEFAULT_CONFIG,
+                    llm=evo_svc.get_llm(),
+                    generate_draft=True,
+                ),
+                volatility_fn=None,
+            )
+            evo_scheduler.start()
+        else:
+            logger.info("Evolution disabled via config — review scheduler not started")
+    except Exception as exc:
+        evo_scheduler = None
+        logger.warning("Evolution scheduler init failed (non-fatal): %s", exc)
+
     yield
 
+    # Shutdown evolution scheduler first (its review_fn shares the LLM)
+    try:
+        if evo_scheduler is not None:
+            evo_scheduler.stop()
+    except Exception:
+        pass
     # Shutdown pipeline scheduler + cleanup scheduler
     try:
         from app.services.pipeline_service import get_pipeline_service
@@ -190,3 +230,4 @@ app.include_router(watchlist.router, prefix="/api")
 app.include_router(impact.router, prefix="/api")
 app.include_router(industry.router, prefix="/api")
 app.include_router(recommendation.router, prefix="/api")
+app.include_router(evolution.router, prefix="/api")

@@ -33,9 +33,11 @@
 - **三层记忆**：语义记忆（custom_strategies/*.md）、情节记忆（Chroma 向量存储 + JSON）、工作记忆（会话临时）
 - **复盘引擎**：定期读取 episodes，LLM 生成改进建议，写入 learnings/
 - **本地进化器**：生成策略修改草稿，进入审核队列，**不自动应用**
+- **人工审核链**：复盘 → 草稿（`{evolution_base_dir}/review_queue/{agent}/draft_*.md`）→ Web「进化审核」页 / CLI `ai-stock draft-review`（list/show/approve/reject）→ 批准后应用（原策略自动备份）
 - **全局协同层**：MarketRegimeDetector（CSI 300 市场状态分类）→ WeightAllocator（按状态调整 Agent 权重）→ GlobalCoordinator（跨 Agent 冲突检测 + 全局报告）
 - **可选依赖**：`pip install -e '.[evolution]'`（chromadb）。不装则 `evolution_enabled=False` 自动降级
-- **CLI**：`ai-stock evolve [--agent market] [--dry-run/--no-dry-run]`
+- **CLI**：`ai-stock evolve [--agent market] [--dry-run/--no-dry-run]`；`ai-stock draft-review list|show|approve|reject`
+- **Web**：`/evolution`（进化审核页：Agent 状态 / 触发复盘 / 草稿审核）
 
 ### 关键路径
 - `ai_stock/dataflows/a_stock.py` — A 股数据 vendor，所有数据获取入口

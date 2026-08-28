@@ -36,26 +36,50 @@ class ReviewEngine:
     def run_review(self) -> dict:
         """Generate personal summary and improvement suggestions.
 
-        Returns a dict with ``summary`` (str) and ``suggestions`` (str).
-        Also writes the summary to the learnings directory.
+        Returns a dict with ``summary`` (str), ``suggestions`` (str) and
+        episode statistics (total/resolved/pending/successes/failures).
+        Also writes the summary to the learnings directory when there is
+        anything to review.
+
+        Episodes with ``outcome == "pending"`` have not been verified against
+        the market outcome yet. If no verified episodes exist, the review
+        degrades to analysing the pending (unverified) episodes so the flow
+        still produces actionable suggestions instead of a dead end.
         """
         episodes = self.memory.episodic.load_all()
         resolved = [e for e in episodes if e.get("outcome") != "pending"]
+        pending = [e for e in episodes if e.get("outcome") == "pending"]
 
-        if not resolved:
-            msg = f"No resolved episodes for agent '{self.agent_name}'. Skipping review."
+        stats = {
+            "episodes_total": len(episodes),
+            "episodes_resolved": len(resolved),
+            "episodes_pending": len(pending),
+        }
+
+        if not episodes:
+            msg = f"No episodes for agent '{self.agent_name}'. Skipping review."
             logger.info(msg)
-            return {"summary": msg, "suggestions": ""}
+            return {"summary": msg, "suggestions": "", **stats, "successes": 0, "failures": 0}
 
-        successes = [e for e in resolved if self._is_success(e)]
-        failures = [e for e in resolved if not self._is_success(e)]
+        # 结局未回填时（全部 pending），退化为对全部情节做模式复盘，
+        # 保证人工审核流程在没有 outcome 数据时也能产出可用建议。
+        pool = resolved or pending
+        successes = [e for e in pool if self._is_success(e)]
+        failures = [e for e in pool if not self._is_success(e)]
+        unverified = not bool(resolved)
 
-        summary = self._generate_summary(successes, failures)
-        suggestions = self._generate_suggestions(failures)
+        summary = self._generate_summary(successes, failures, unverified=unverified)
+        suggestions = self._generate_suggestions(failures, unverified=unverified)
 
         self._write_summary(summary, suggestions)
 
-        return {"summary": summary, "suggestions": suggestions}
+        return {
+            "summary": summary,
+            "suggestions": suggestions,
+            **stats,
+            "successes": len(successes),
+            "failures": len(failures),
+        }
 
     @staticmethod
     def _is_success(episode: dict) -> bool:
@@ -75,10 +99,18 @@ class ReviewEngine:
             return True
         return False
 
-    def _generate_summary(self, successes: List[dict], failures: List[dict]) -> str:
+    def _generate_summary(self, successes: List[dict], failures: List[dict], unverified: bool = False) -> str:
         """Ask LLM to generate a review summary."""
         success_briefs = [self._brief(e) for e in successes[:10]]
         failure_briefs = [self._brief(e) for e in failures[:10]]
+
+        note = ""
+        if unverified:
+            note = (
+                "\n\nNote: these episodes have not yet been verified against actual "
+                "market outcomes (outcome=pending). Treat the observed patterns as "
+                "hypotheses to verify, not confirmed results."
+            )
 
         prompt = f"""You are reviewing the past performance of the "{self.agent_name}" agent in an A-share stock analysis system.
 
@@ -86,7 +118,7 @@ class ReviewEngine:
 {chr(10).join(success_briefs) or "(none)"}
 
 **Failed analyses** ({len(failures)} total, showing up to 10):
-{chr(10).join(failure_briefs) or "(none)"}
+{chr(10).join(failure_briefs) or "(none)"}{note}
 
 Generate a concise review summary (in Chinese) covering:
 1. Overall hit rate and pattern observations
@@ -103,16 +135,23 @@ Keep it under 500 words."""
             logger.warning("LLM summary generation failed for '%s'", self.agent_name, exc_info=True)
             return f"(Summary generation failed for {self.agent_name})"
 
-    def _generate_suggestions(self, failures: List[dict]) -> str:
+    def _generate_suggestions(self, failures: List[dict], unverified: bool = False) -> str:
         """Generate improvement suggestions based on failures."""
         if not failures:
             return "No failures to learn from."
 
         failure_briefs = [self._brief(e) for e in failures[:10]]
+        note = ""
+        if unverified:
+            note = (
+                "\n\nNote: these episodes have not yet been verified against actual "
+                "market outcomes (outcome=pending); still, highlight the most common "
+                "weaknesses as candidate improvements."
+            )
         prompt = f"""You are improving the "{self.agent_name}" agent in an A-share stock analysis system.
 
 **Recent failed analyses** (showing up to 10):
-{chr(10).join(failure_briefs)}
+{chr(10).join(failure_briefs)}{note}
 
 Based on these failures, suggest up to 5 concrete, actionable improvements to the agent's analysis strategy (in Chinese). Each suggestion should be a single sentence.
 

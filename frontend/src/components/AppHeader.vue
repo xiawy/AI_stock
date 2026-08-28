@@ -12,6 +12,7 @@
         <router-link to="/industry">行业榜</router-link>
         <router-link to="/recommendation">热股榜</router-link>
         <router-link to="/diagnosis">诊股</router-link>
+        <router-link to="/evolution">进化审核</router-link>
       </nav>
 
       <el-dropdown v-if="auth.user" @command="onCommand">

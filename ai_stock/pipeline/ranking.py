@@ -412,6 +412,7 @@ def calculate_industry_heatmap(
             "rating": rating,
             "top_stock_name": flow.get("top_stock_name", "") if flow else "",
             "top_stock_code": flow.get("top_stock_code", "") if flow else "",
+            "top_stock_pct": flow.get("top_stock_pct") if flow else None,
         })
 
     ranked.sort(key=lambda r: r["heat_score"], reverse=True)
