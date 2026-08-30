@@ -1,8 +1,9 @@
-"""Tests for the ranking schedule (00:00/08:30/12:30/14:30 + 23:30 backup).
+"""Tests for the ranking backup schedule (23:30 daily).
 
 Covers:
-- PIPELINE_SCHEDULE / BACKUP_DAILY_AT constants and slot parsing
-- Scheduler job registration (pipeline slots + daily backup job)
+- BACKUP_DAILY_AT constant
+- Scheduler job registration (daily backup job only; the heavy impact
+  pipeline was removed — the news board is written by the selection flow)
 - Startup compensation for a missed backup slot (ensure_today_backup)
 - backup_today_data idempotency / empty-data skip / payload shape
 - cleanup_old_backups retention window
@@ -16,8 +17,8 @@ import pytest
 
 from ai_stock.pipeline import backup as backup_mod
 from ai_stock.pipeline import scheduler as scheduler_mod
-from ai_stock.pipeline.config import BACKUP_DAILY_AT, PIPELINE_SCHEDULE
-from ai_stock.pipeline.scheduler import PipelineScheduler, parse_schedule
+from ai_stock.pipeline.config import BACKUP_DAILY_AT
+from ai_stock.pipeline.scheduler import PipelineScheduler
 
 
 # ---------------------------------------------------------------------------
@@ -25,20 +26,8 @@ from ai_stock.pipeline.scheduler import PipelineScheduler, parse_schedule
 # ---------------------------------------------------------------------------
 
 
-def test_pipeline_schedule_matches_required_slots():
-    assert PIPELINE_SCHEDULE == ["00:00", "08:30", "12:30", "14:30"]
+def test_backup_daily_at_constant():
     assert BACKUP_DAILY_AT == (23, 30)
-
-
-def test_parse_schedule_handles_new_slots():
-    assert parse_schedule(PIPELINE_SCHEDULE) == [
-        (0, 0), (8, 30), (12, 30), (14, 30),
-    ]
-
-
-def test_scheduler_slots_default():
-    sched = PipelineScheduler({})
-    assert sched.schedule_slots == [(0, 0), (8, 30), (12, 30), (14, 30)]
 
 
 # ---------------------------------------------------------------------------
@@ -53,9 +42,7 @@ def test_scheduler_registers_backup_job():
     sched.start()
     try:
         jobs = {job.id: job for job in sched._scheduler.get_jobs()}
-        for slot in ((0, 0), (8, 30), (12, 30), (14, 30)):
-            assert f"pipeline_{slot[0]:02d}{slot[1]:02d}" in jobs
-        assert "pipeline_backup" in jobs
+        assert list(jobs) == ["pipeline_backup"]
     finally:
         sched.stop()
 

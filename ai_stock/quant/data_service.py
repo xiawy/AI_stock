@@ -283,19 +283,19 @@ class DataService:
             code = code.removeprefix(prefix)
 
         def _fetch() -> Optional[dict]:
-            from ai_stock.dataflows.a_stock import _em_get
+            # 主域被网络环境断连时自动回退延迟域 (与板块资金流同一机制)
+            from ai_stock.dataflows.a_stock import _push2_get
 
             market = "1" if code.startswith(("6", "9", "5")) else "0"
             if code.startswith(("4", "8", "92")):
                 market = "0"
-            url = "https://push2.eastmoney.com/api/qt/stock/get"
             params = {
                 "secid": f"{market}.{code}",
                 "fields": "f43,f44,f45,f46,f57,f58,f60,f107,f116,f117",
                 "fltt": "2",
                 "invt": "2",
             }
-            r = _em_get(url, params=params, timeout=10)
+            r = _push2_get("/api/qt/stock/get", params=params, timeout=10)
             d = (r.json() or {}).get("data") or {}
             price = _to_float(d.get("f43"))
             prev_close = _to_float(d.get("f60"))

@@ -4,20 +4,35 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="bug修复">
-      <change afterPath="$PROJECT_DIR$/ai_stock/dataflows/multi_source.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/tests/test_multi_source.py" afterDir="false" />
+    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="合并数据库">
+      <change beforePath="$PROJECT_DIR$/.idea/dataSources.local.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources.local.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/CLAUDE.md" beforeDir="false" afterPath="$PROJECT_DIR$/CLAUDE.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README_en.md" beforeDir="false" afterPath="$PROJECT_DIR$/README_en.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ai_stock/dataflows/a_stock.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/dataflows/a_stock.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ai_stock/dataflows/pipeline_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/dataflows/pipeline_data.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/__init__.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/cache.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/db_models.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/db_models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/db_ops.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/db_ops.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/debate.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/evolution.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/llm_judge.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/pipeline.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/ranking.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/scheduler.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/scheduler.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/scoring.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/supply_demand.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/quant/agents/macro_event.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/quant/agents/macro_event.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/quant/cache_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/quant/cache_manager.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/quant/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/quant/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/quant/data_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/quant/data_service.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ai_stock/quant/scheduler.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/quant/scheduler.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/app/services/cleanup.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/cleanup.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/backend/tests/test_cleanup_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/tests/test_cleanup_service.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_memory_log.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_memory_log.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_pipeline_collector.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_pipeline_collector.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backend/app/services/pipeline_service.py" beforeDir="false" afterPath="$PROJECT_DIR$/backend/app/services/pipeline_service.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/backup_datasource_changes.patch" beforeDir="false" afterPath="$PROJECT_DIR$/backup_datasource_changes.patch" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_pipeline_scoring.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_ranking_schedule_backup.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_ranking_schedule_backup.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_selection_agents.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_selection_agents.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -127,7 +142,7 @@
       <workItem from="1787840781977" duration="39608000" />
       <workItem from="1788052725091" duration="2843000" />
       <workItem from="1788055714015" duration="3824000" />
-      <workItem from="1788061326653" duration="12065000" />
+      <workItem from="1788061326653" duration="19453000" />
     </task>
     <task id="LOCAL-00001" summary="迁移项目为web项目">
       <option name="closed" value="true" />
@@ -313,7 +328,15 @@
       <option name="project" value="LOCAL" />
       <updated>1788067780772</updated>
     </task>
-    <option name="localTasksCounter" value="24" />
+    <task id="LOCAL-00024" summary="合并数据库">
+      <option name="closed" value="true" />
+      <created>1788097239146</created>
+      <option name="number" value="00024" />
+      <option name="presentableId" value="LOCAL-00024" />
+      <option name="project" value="LOCAL" />
+      <updated>1788097239146</updated>
+    </task>
+    <option name="localTasksCounter" value="25" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -337,9 +360,10 @@
     <MESSAGE value="新增量化功能" />
     <MESSAGE value="实现优化" />
     <MESSAGE value="bug修复" />
-    <option name="LAST_COMMIT_MESSAGE" value="bug修复" />
+    <MESSAGE value="合并数据库" />
+    <option name="LAST_COMMIT_MESSAGE" value="合并数据库" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
-    <SUITE FILE_PATH="coverage/AI_stock$ai_stock_backend.coverage" NAME="ai_stock backend Coverage Results" MODIFIED="1788091736385" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="D:\code\AI_stock\backend" />
+    <SUITE FILE_PATH="coverage/AI_stock$ai_stock_backend.coverage" NAME="ai_stock backend Coverage Results" MODIFIED="1788104062636" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="D:\code\AI_stock\backend" />
   </component>
 </project>

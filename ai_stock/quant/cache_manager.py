@@ -15,7 +15,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from .config import (
@@ -243,22 +243,50 @@ def get_cache_manager(redis_cache=None) -> CacheManager:
 
 
 def _restore_breaker_state(breaker: CircuitBreaker, source_name: str) -> None:
-    """首次访问时从 SQLite 恢复持久化熔断状态 (进程重启后熔断不丢失)."""
+    """首次访问时从 SQLite 恢复持久化熔断状态 (进程重启后熔断不丢失).
+
+    窗口按持久化的墙钟 opened_at 计算剩余时间: 旧实现恢复后从进程启动时刻
+    重新计满整个窗口, 导致短命进程 (CLI/一次性任务) 每次重启都重新等 300s,
+    数据源早已恢复却始终降级陈旧缓存, 永远等不到 half-open 试探.
+    """
     try:
         row = db_ops.circuit_get(source_name)
     except Exception as exc:
         logger.debug("Circuit state restore failed for %s: %s", source_name, exc)
         return
-    if row.get("state") == "open":
-        breaker._state = "open"
-        breaker._failure_count = int(row.get("failure_count") or 0)
-        # monotonic 时钟与墙钟不可直接换算, 恢复后从此刻起重新计熔断窗口
-        breaker._opened_at = time.monotonic()
-        logger.warning(
-            "Circuit %s restored OPEN from persistence (failures=%d), "
-            "%ds 后 half-open 试探",
-            source_name, breaker._failure_count, breaker.open_seconds,
+    if row.get("state") != "open":
+        return
+    failure_count = int(row.get("failure_count") or 0)
+    remaining = breaker.open_seconds
+    opened_at = row.get("opened_at")
+    if opened_at:
+        try:
+            opened_dt = datetime.fromisoformat(opened_at)
+            if opened_dt.tzinfo is None:
+                opened_dt = opened_dt.replace(tzinfo=timezone.utc)
+            elapsed = (datetime.now(timezone.utc) - opened_dt).total_seconds()
+            remaining = breaker.open_seconds - elapsed
+        except (ValueError, TypeError) as exc:
+            logger.debug("Circuit opened_at parse failed for %s: %s", source_name, exc)
+    if remaining <= 0:
+        # 窗口在进程停机期间已过期: 直接恢复关闭, 下次请求正常回源试探,
+        # 避免每个新进程都白白降级一整个窗口期.
+        logger.info(
+            "Circuit %s restored from persistence: window already expired, "
+            "re-closing (failures=%d)", source_name, failure_count,
         )
+        db_ops.circuit_set(source_name, "closed", 0)
+        return
+    breaker._state = "open"
+    breaker._failure_count = failure_count
+    # monotonic 时钟与墙钟不可直接换算, 用剩余窗口时长作为计时起点偏移:
+    # state 判定式 (now - opened_at >= open_seconds) 下等价于还剩 remaining 秒.
+    breaker._opened_at = time.monotonic() - (breaker.open_seconds - remaining)
+    logger.warning(
+        "Circuit %s restored OPEN from persistence (failures=%d), "
+        "%.0fs 后 half-open 试探",
+        source_name, breaker._failure_count, remaining,
+    )
 
 
 def get_breaker(source_name: str) -> CircuitBreaker:

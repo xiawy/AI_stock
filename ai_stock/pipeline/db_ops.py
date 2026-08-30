@@ -33,9 +33,21 @@ def _get_session():
     except ImportError:
         pass
 
-    # Standalone fallback: create an in-memory session
-    logger.warning("No database session available; using null operations")
-    return None
+    # Standalone fallback (quant 选股流程等非后端进程): 复用 quant 统一引擎,
+    # 与 backend 指向同一个 backend/data/aistock.db。
+    try:
+        from sqlalchemy.orm import sessionmaker
+
+        from ai_stock.quant.db import get_engine
+
+        factory = sessionmaker(
+            bind=get_engine(), autoflush=False, autocommit=False,
+            expire_on_commit=False,
+        )
+        return factory()
+    except Exception as exc:
+        logger.warning("No database session available (%s); using null operations", exc)
+        return None
 
 
 def create_snapshot(
@@ -243,31 +255,6 @@ def get_latest_snapshot() -> Optional[dict]:
     except Exception as exc:
         logger.error("Failed to get latest snapshot: %s", exc)
         return None
-    finally:
-        session.close()
-
-
-def snapshot_exists_for_date(date_str: str) -> bool:
-    """Return True if a completed snapshot exists for the given date (YYYY-MM-DD)."""
-    from ai_stock.pipeline.db_models import ImpactSnapshot
-
-    session = _get_session()
-    if session is None:
-        return False
-
-    try:
-        day_start = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        row = (
-            session.query(ImpactSnapshot.id)
-            .filter(ImpactSnapshot.status == "completed")
-            .filter(ImpactSnapshot.snapshot_time >= day_start)
-            .filter(ImpactSnapshot.snapshot_time < day_start + timedelta(days=1))
-            .first()
-        )
-        return row is not None
-    except Exception as exc:
-        logger.error("Failed to check snapshot for %s: %s", date_str, exc)
-        return False
     finally:
         session.close()
 

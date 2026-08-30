@@ -53,7 +53,7 @@ def _shifted_time(hour: int, minute: int, delta_minutes: int = 0) -> dtime:
 # ---------------------------------------------------------------------------
 
 def trigger_selection(now: Optional[datetime] = None, force: bool = False) -> Optional[str]:
-    """挑选自选触发 (每日 8:00/12:00/14:00): 入队 selection_start."""
+    """挑选自选触发 (每日 7:00/12:00/18:00): 入队 selection_start."""
     now = now or datetime.now()
     if not force and not is_trading_day(now):
         return None

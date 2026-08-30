@@ -66,6 +66,15 @@ class MacroEventAgent(BaseAgent):
             self.report(flow_type, flow_id, step, result)
             return result
 
+        # 新闻榜落库: 直接取本步抓到的新闻前 20 (政策优先+时间倒序),
+        # best-effort, 失败只告警不阻断选股流程.
+        try:
+            from ai_stock.pipeline.news_board import save_news_board
+
+            save_news_board(news)
+        except Exception as exc:
+            logger.warning("News board save skipped: %s", exc)
+
         events, kb_hits = self._extract_events(news)
         result = {
             "decision": "ok" if events else "empty",

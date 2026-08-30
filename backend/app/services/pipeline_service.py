@@ -1,32 +1,29 @@
-"""Pipeline service — bridges FastAPI lifecycle with the impact pipeline.
+"""Pipeline service — bridges FastAPI lifecycle with the ranking services.
 
-Manages:
-- LLM client creation for the pipeline
-- APScheduler lifecycle (start/stop with FastAPI lifespan)
-- Manual trigger endpoint support
+重型新闻影响力评估流程已移除: 新闻榜改由 quant 选股流程 (MacroEventAgent)
+抓完新闻后直接落库 (ai_stock.pipeline.news_board)。本服务只管理:
+- APScheduler 生命周期 (每日榜单备份, 随 FastAPI lifespan 启停)
+- 三榜 (新闻榜/行业榜/热股榜) 的读取入口
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
 class PipelineService:
-    """Service layer wrapping the impact pipeline for the backend."""
+    """Service layer wrapping the ranking read/backup layer for the backend."""
 
     def __init__(self) -> None:
-        self._llm_quick: Optional[Any] = None
-        self._llm_deep: Optional[Any] = None
         self._scheduler = None
         self._initialized = False
 
     def initialize(self, config: dict) -> None:
-        """Create LLM clients and start the scheduler.
+        """Start the ranking backup scheduler.
 
         Called during FastAPI lifespan startup.
         """
@@ -34,37 +31,12 @@ class PipelineService:
             return
 
         try:
-            from ai_stock.llm_clients.factory import create_llm_client
-
-            provider = config.get("llm_provider", "openai")
-            quick_model = config.get("quick_think_llm", "gpt-5.4-mini")
-            deep_model = config.get("deep_think_llm", "gpt-5.4")
-            base_url = config.get("backend_url")
-
-            llm_kwargs = {}
-            max_tokens = config.get("max_tokens")
-            if max_tokens:
-                llm_kwargs["max_tokens"] = max_tokens
-
-            quick_client = create_llm_client(
-                provider=provider, model=quick_model,
-                base_url=base_url, **llm_kwargs,
-            )
-            deep_client = create_llm_client(
-                provider=provider, model=deep_model,
-                base_url=base_url, **llm_kwargs,
-            )
-
-            self._llm_quick = quick_client.get_llm()
-            self._llm_deep = deep_client.get_llm()
-
-            # Start scheduler
             from ai_stock.pipeline.scheduler import create_scheduler
-            self._scheduler = create_scheduler(config, self._llm_quick, self._llm_deep)
+            self._scheduler = create_scheduler(config)
             self._scheduler.start()
 
             self._initialized = True
-            logger.info("Pipeline service initialized (provider=%s)", provider)
+            logger.info("Pipeline service initialized (backup scheduler)")
 
         except Exception as exc:
             logger.error("Pipeline service initialization failed: %s", exc)
@@ -76,70 +48,6 @@ class PipelineService:
             self._scheduler = None
         self._initialized = False
         logger.info("Pipeline service shut down")
-
-    def run_pipeline(self) -> dict:
-        """Manually trigger a pipeline run.
-
-        Routes through the scheduler so manual and scheduled runs share the
-        same re-entry lock and failure tracking.
-        """
-        if not self._initialized or self._llm_quick is None:
-            return {"status": "failed", "error": "Pipeline not initialized"}
-
-        if self._scheduler is None:
-            from ai_stock.pipeline.pipeline import run_full_pipeline
-            from ai_stock.default_config import DEFAULT_CONFIG
-            return run_full_pipeline(DEFAULT_CONFIG, self._llm_quick, self._llm_deep)
-
-        return self._scheduler.trigger_manual()
-
-    def ensure_today_data(self) -> None:
-        """Kick off a pipeline run if today's ranking is missing.
-
-        - Before the first scheduled slot (00:00 local) the previous day's
-          snapshot is served as today's ranking, so no run is started.
-        - From the first slot onwards, a missing snapshot (e.g. the backend
-          started after the scheduled run) triggers an immediate background
-          run — this also compensates for slots missed while the backend was
-          down.
-        """
-        if not self._initialized or self._llm_quick is None:
-            return
-        if self.is_running:
-            return
-
-        now = datetime.now()
-        slots = self._scheduler.schedule_slots if self._scheduler else []
-        first_slot = min(slots) if slots else (0, 0)
-        if (now.hour, now.minute) < first_slot:
-            logger.info(
-                "Before first pipeline slot %02d:%02d; serving previous day's ranking",
-                first_slot[0], first_slot[1],
-            )
-            return
-
-        today = now.strftime("%Y-%m-%d")
-        try:
-            from ai_stock.pipeline.db_ops import snapshot_exists_for_date
-            if snapshot_exists_for_date(today):
-                return
-        except Exception as exc:
-            logger.warning("Snapshot check failed (%s); triggering run anyway", exc)
-
-        logger.info("No snapshot for today %s; starting bootstrap pipeline run", today)
-        threading.Thread(
-            target=self._run_bootstrap, name="pipeline-bootstrap", daemon=True,
-        ).start()
-
-    def _run_bootstrap(self) -> None:
-        """Run the pipeline in a background thread (startup bootstrap)."""
-        try:
-            result = self.run_pipeline()
-            logger.info(
-                "Bootstrap pipeline run finished: status=%s", result.get("status"),
-            )
-        except Exception as exc:
-            logger.error("Bootstrap pipeline run failed: %s", exc)
 
     def ensure_today_backup(self) -> None:
         """Compensate for a missed 23:30 backup slot on startup.
@@ -221,11 +129,6 @@ class PipelineService:
             },
             "recommendations": stocks,
         }
-
-    @property
-    def is_running(self) -> bool:
-        """True while a pipeline run is executing (shared with the scheduler)."""
-        return self._scheduler.is_running if self._scheduler else False
 
 
 # Module-level singleton

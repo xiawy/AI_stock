@@ -33,8 +33,8 @@ ALL_QUEUES = (
 # logic (see 设计文档 §5.1).  All times are local (A-share) time.
 # ---------------------------------------------------------------------------
 
-# 挑选自选: 每日 8:00 / 12:00 / 14:00
-SELECTION_SCHEDULE = ["08:00", "12:00", "14:00"]
+# 挑选自选: 每日 7:00 / 12:00 / 18:00 (盘前事件扫描 / 午间修订 / 盘后复盘)
+SELECTION_SCHEDULE = ["07:00", "12:00", "18:00"]
 
 # 自选买入: 开盘期间每 30 分钟 (guarded by trading-session check)
 BUY_SCAN_INTERVAL_MINUTES = 30

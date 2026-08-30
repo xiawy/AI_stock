@@ -28,11 +28,15 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 # Lazy import to avoid circular dependency — the Base is defined in the
 # backend's database module.  Support both project-root and backend-root
-# sys.path configurations.
+# sys.path configurations. 独立进程 (如 quant 选股流程落库新闻榜) 两者都
+# 不可导入时退回 quant 子系统的 Base — 双侧指向同一个统一 SQLite 文件。
 try:
     from app.core.database import Base
 except ImportError:
-    from backend.app.core.database import Base
+    try:
+        from backend.app.core.database import Base
+    except ImportError:
+        from ai_stock.quant.db import QuantBase as Base
 
 
 class ImpactSnapshot(Base):

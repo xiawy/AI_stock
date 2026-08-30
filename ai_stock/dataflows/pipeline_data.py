@@ -25,6 +25,9 @@ _UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
 )
 
+# 新闻分页上限: 快讯密度下 4 页即可覆盖 72h 宏观窗口 (单源故障时提前终止)
+_NEWS_MAX_PAGES = 4
+
 
 def _em_get(url, **kwargs):
     """Thin wrapper: import the real rate-limited _em_get from a_stock at call time."""
@@ -74,6 +77,10 @@ def get_impact_news(
     Sources: Eastmoney 7x24, 同花顺新闻推送, 新浪 7x24.
     Deduplication is by title hash.
 
+    各源分页拉取 (东财 sortEnd 游标 / 新浪、同花顺 page 参数), 直到覆盖 *hours*
+    窗口或页数上限; 宏观事件解析 (72h 窗口) 依赖分页, 单页仅覆盖数小时.
+    单页响应解析失败即停止翻页, 保持原「单源故障不阻断」语义.
+
     财联社 telegraphList 子源已下线(实测 404), 于 2026-08 移除;
     百度股市通 getbannernews 子源已下线(实测返回空 HTML), 于 2026-08 替换为同花顺 + 新浪.
     """
@@ -81,108 +88,153 @@ def get_impact_news(
     all_items: list[dict] = []
     seen_hashes: set[str] = set()
 
-    # --- Source 1: Eastmoney 7x24 ---
+    # --- Source 1: Eastmoney 7x24 (sortEnd 游标分页) ---
     try:
         em_url = "https://np-weblist.eastmoney.com/comm/web/getFastNewsList"
-        em_params = {
-            "client": "web", "biz": "web_724", "fastColumn": "102",
-            "sortEnd": "", "pageSize": "80", "req_trace": str(uuid.uuid4()),
-        }
         em_headers = {"User-Agent": _UA, "Referer": "https://kuaixun.eastmoney.com/"}
-        r = _em_get(em_url, params=em_params, headers=em_headers, timeout=10)
-        for item in r.json().get("data", {}).get("fastNewsList", []):
-            title = item.get("title", "")
-            if not title:
-                continue
-            content = item.get("summary", "")[:300]
-            pub_time = item.get("showTime", "")
-            if pub_time:
-                try:
-                    pt = datetime.strptime(pub_time[:16], "%Y-%m-%d %H:%M")
+        sort_end = ""
+        for _ in range(_NEWS_MAX_PAGES):
+            em_params = {
+                "client": "web", "biz": "web_724", "fastColumn": "102",
+                "sortEnd": sort_end, "pageSize": "80",
+                "req_trace": str(uuid.uuid4()),
+            }
+            r = _em_get(em_url, params=em_params, headers=em_headers, timeout=10)
+            data = r.json().get("data") or {}
+            items = data.get("fastNewsList", [])
+            if not items:
+                break
+            oldest_pt = None
+            for item in items:
+                title = item.get("title", "")
+                if not title:
+                    continue
+                pub_time = item.get("showTime", "")
+                pt = None
+                if pub_time:
+                    try:
+                        pt = datetime.strptime(pub_time[:16], "%Y-%m-%d %H:%M")
+                    except ValueError:
+                        pt = None
+                if pt is not None:
+                    if oldest_pt is None or pt < oldest_pt:
+                        oldest_pt = pt
                     if pt < cutoff:
                         continue
-                except ValueError:
-                    pass
-            h = title_hash(title)
-            if h in seen_hashes:
-                continue
-            seen_hashes.add(h)
-            all_items.append({
-                "title": title,
-                "content": content,
-                "source": "东方财富",
-                "time": pub_time,
-                "url": "",
-                "category": classify_news(title, content),
-                "title_hash": h,
-            })
+                h = title_hash(title)
+                if h in seen_hashes:
+                    continue
+                seen_hashes.add(h)
+                all_items.append({
+                    "title": title,
+                    "content": item.get("summary", "")[:300],
+                    "source": "东方财富",
+                    "time": pub_time,
+                    "url": "",
+                    "category": classify_news(title, item.get("summary", "")),
+                    "title_hash": h,
+                })
+            next_cursor = str(data.get("sortEnd") or "")
+            # 游标无推进 (防死循环) 或已翻过窗口起点 → 停止
+            if not next_cursor or next_cursor == sort_end:
+                break
+            sort_end = next_cursor
+            if oldest_pt is not None and oldest_pt < cutoff:
+                break
     except Exception as e:
         logger.warning("Eastmoney impact news fetch failed: %s", e)
 
-    # --- Source 2: 同花顺新闻推送 (替代已下线的百度股市通) ---
+    # --- Source 2: 同花顺新闻推送 (替代已下线的百度股市通, page 分页) ---
     try:
         ths_url = "https://news.10jqka.com.cn/tapp/news/push/stock/"
-        ths_params = {"page": "1", "tag": "", "track": "website", "pagesize": "50"}
-        r = _requests.get(ths_url, params=ths_params, headers={"User-Agent": _UA}, timeout=10)
-        for item in r.json().get("data", {}).get("list", []) or []:
-            title = item.get("title", "")
-            if not title:
-                continue
-            content = item.get("digest", "")[:300]
-            try:
-                pub_time = datetime.fromtimestamp(
-                    int(item.get("ctime", 0))
-                ).strftime("%Y-%m-%d %H:%M")
-            except (TypeError, ValueError):
-                pub_time = ""
-            h = title_hash(title)
-            if h in seen_hashes:
-                continue
-            seen_hashes.add(h)
-            all_items.append({
-                "title": title,
-                "content": content,
-                "source": "同花顺",
-                "time": pub_time,
-                "url": item.get("url", ""),
-                "category": classify_news(title, content),
-                "title_hash": h,
-            })
+        for page in range(1, _NEWS_MAX_PAGES + 1):
+            ths_params = {
+                "page": str(page), "tag": "", "track": "website", "pagesize": "50",
+            }
+            r = _requests.get(
+                ths_url, params=ths_params, headers={"User-Agent": _UA}, timeout=10,
+            )
+            items = r.json().get("data", {}).get("list", []) or []
+            if not items:
+                break
+            oldest_pt = None
+            for item in items:
+                title = item.get("title", "")
+                if not title:
+                    continue
+                content = item.get("digest", "")[:300]
+                pt = None
+                try:
+                    pt = datetime.fromtimestamp(int(item.get("ctime", 0)))
+                except (TypeError, ValueError):
+                    pt = None
+                pub_time = pt.strftime("%Y-%m-%d %H:%M") if pt else ""
+                if pt is not None:
+                    if oldest_pt is None or pt < oldest_pt:
+                        oldest_pt = pt
+                    if pt < cutoff:
+                        continue
+                h = title_hash(title)
+                if h in seen_hashes:
+                    continue
+                seen_hashes.add(h)
+                all_items.append({
+                    "title": title,
+                    "content": content,
+                    "source": "同花顺",
+                    "time": pub_time,
+                    "url": item.get("url", ""),
+                    "category": classify_news(title, content),
+                    "title_hash": h,
+                })
+            if oldest_pt is not None and oldest_pt < cutoff:
+                break
     except Exception as e:
         logger.warning("THS impact news fetch failed: %s", e)
 
-    # --- Source 3: 新浪 7x24 快讯 ---
+    # --- Source 3: 新浪 7x24 快讯 (page 分页) ---
     try:
         sina_url = "https://zhibo.sina.com.cn/api/zhibo/feed"
-        sina_params = {"page": "1", "page_size": "50", "zhibo_id": "152", "tag_id": "0"}
         sina_headers = {"User-Agent": _UA, "Referer": "https://finance.sina.com.cn/7x24/"}
-        r = _requests.get(sina_url, params=sina_params, headers=sina_headers, timeout=10)
-        for item in r.json().get("result", {}).get("data", {}).get("feed", {}).get("list", []) or []:
-            rich_text = (item.get("rich_text") or "").strip()
-            if not rich_text:
-                continue
-            title = rich_text[:120]
-            pub_time = item.get("create_time", "")
-            if pub_time:
-                try:
-                    pt = datetime.strptime(pub_time[:16], "%Y-%m-%d %H:%M")
-                    if pt < cutoff:
-                        continue
-                except ValueError:
-                    pass
-            h = title_hash(title)
-            if h in seen_hashes:
-                continue
-            seen_hashes.add(h)
-            all_items.append({
-                "title": title,
-                "content": rich_text[:300],
-                "source": "新浪财经",
-                "time": pub_time,
-                "url": item.get("docurl", ""),
-                "category": classify_news(title, rich_text),
-                "title_hash": h,
-            })
+        for page in range(1, _NEWS_MAX_PAGES + 1):
+            sina_params = {
+                "page": str(page), "page_size": "50", "zhibo_id": "152", "tag_id": "0",
+            }
+            r = _requests.get(sina_url, params=sina_params, headers=sina_headers, timeout=10)
+            items = r.json().get("result", {}).get("data", {}).get("feed", {}).get("list", []) or []
+            if not items:
+                break
+            oldest_pt = None
+            for item in items:
+                rich_text = (item.get("rich_text") or "").strip()
+                if not rich_text:
+                    continue
+                title = rich_text[:120]
+                pub_time = item.get("create_time", "")
+                if pub_time:
+                    try:
+                        pt = datetime.strptime(pub_time[:16], "%Y-%m-%d %H:%M")
+                        if oldest_pt is None or pt < oldest_pt:
+                            oldest_pt = pt
+                        if pt < cutoff:
+                            continue
+                    except ValueError:
+                        pass
+                h = title_hash(title)
+                if h in seen_hashes:
+                    continue
+                seen_hashes.add(h)
+                all_items.append({
+                    "title": title,
+                    "content": rich_text[:300],
+                    "source": "新浪财经",
+                    "time": pub_time,
+                    "url": item.get("docurl", ""),
+                    "category": classify_news(title, rich_text),
+                    "title_hash": h,
+                })
+            if oldest_pt is not None and oldest_pt < cutoff:
+                break
     except Exception as e:
         logger.warning("Sina impact news fetch failed: %s", e)
 

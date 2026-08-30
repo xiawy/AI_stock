@@ -66,14 +66,12 @@ def _reap_orphaned_tasks() -> None:
 
 
 def _reap_orphaned_snapshots() -> None:
-    """Mark impact-pipeline snapshots left ``running`` by a previous process
+    """Mark news-board snapshots left ``running`` by a previous process
     as ``failed``.
 
-    Pipeline runs execute in daemon threads; a backend restart mid-run kills
-    the thread and freezes the snapshot in ``running`` forever. Those rows are
-    invisible to ``get_latest_snapshot`` (completed only) but keep today's
-    ``ensure_today_data`` bootstrap from ever being considered done, so the
-    rankings would stay empty until the next scheduled slot.
+    新闻榜落库 (选股流程 MacroEventAgent 步) 先建 ``running`` 快照再写条目;
+    进程在写入中途退出会把快照永远冻结在 ``running``。这些行对
+    ``get_latest_snapshot`` (只读 completed) 不可见, 启动时统一标为 ``failed``。
     """
     from sqlalchemy import update
 
@@ -126,17 +124,13 @@ async def lifespan(_: FastAPI):
     except Exception as exc:
         logger.warning("Cleanup scheduler init failed (non-fatal): %s", exc)
 
-    # Initialize the impact pipeline service (scheduler + LLM clients).
+    # Initialize the ranking service (新闻榜由选股流程落库; 这里只管备份调度).
     try:
         from ai_stock.default_config import DEFAULT_CONFIG
         from app.services.pipeline_service import get_pipeline_service
 
         svc = get_pipeline_service()
         svc.initialize(DEFAULT_CONFIG)
-        # If today's ranking is missing (backend started after the scheduled
-        # slot), kick off an immediate background run. Before the first slot
-        # the previous day's snapshot is served as today's ranking.
-        svc.ensure_today_data()
         # Compensate for a missed 23:30 ranking backup (backend was down at
         # the slot): back up now if it is already past the slot and today's
         # backup file is absent.

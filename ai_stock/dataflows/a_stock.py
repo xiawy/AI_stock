@@ -597,6 +597,26 @@ def _em_get(url, params=None, headers=None, timeout=15, **kwargs):
             _em_last_call[0] = time.time()
 
 
+# 部分网络环境（公司代理/区域风控）会直接断连 push2 主域及数字镜像，
+# 但延迟行情域 push2delay 始终可达。个股级 push2 接口与板块资金流一样
+# 按序尝试两个域，首个可达主机生效（行情延迟分钟级，选股口径完全够用）。
+_EM_PUSH2_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
+
+
+def _push2_get(path, params=None, timeout=15, **kwargs):
+    """push2 域 GET：主域不可达时自动回退延迟域 push2delay。"""
+    last_exc = None
+    for host in _EM_PUSH2_HOSTS:
+        try:
+            return _em_get(
+                f"https://{host}{path}", params=params, timeout=timeout, **kwargs
+            )
+        except Exception as exc:
+            last_exc = exc
+            logger.warning("push2 host %s failed for %s: %s", host, path, exc)
+    raise last_exc
+
+
 def _eastmoney_datacenter(
     report_name: str,
     columns: str = "ALL",
@@ -1101,14 +1121,13 @@ def get_fundamentals(
         # --- Eastmoney push2: basic stock info (direct HTTP) ---
         try:
             market_code = 1 if code.startswith("6") else 0
-            _info_url = "https://push2.eastmoney.com/api/qt/stock/get"
             _info_params = {
                 "fltt": "2",
                 "invt": "2",
                 "fields": "f57,f58,f84,f85,f127,f116,f117,f189,f43",
                 "secid": f"{market_code}.{code}",
             }
-            r = _em_get(_info_url, params=_info_params, timeout=10)
+            r = _push2_get("/api/qt/stock/get", params=_info_params, timeout=10)
             d = r.json().get("data", {})
             if d:
                 if d.get("f127"):

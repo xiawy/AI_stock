@@ -1,15 +1,8 @@
-"""News impact assessment & smart stock recommendation pipeline.
+"""榜单层 (新闻榜/行业榜/热股榜) 的存储、读取与备份.
 
-Two core features built on top of the existing agent framework:
-
-1. **News/Policy Impact Assessment** — collect 12h of news, score with 4
-   parallel agents, quantify supply-demand gaps, run bull/bear debates,
-   and rank the Top 20 most impactful events.
-
-2. **Smart Stock Recommendation** — combine Top 5 bullish events with
-   recent limit-up stocks, score candidates on fundamentals / technicals
-   / event-matching, run per-stock debates, and output Top 10 buys.
-
-Scheduled at 00:00 / 08:30 / 12:30 / 14:30 daily via APScheduler; the
-day's rankings are backed up at 23:30 (see ai_stock.pipeline.backup).
+- **新闻榜** — 直接取 quant 选股流程第一步 (MacroEventAgent) 抓取的新闻前 20 条,
+  政策优先 + 时间倒序, 落库到 ImpactSnapshot/NewsItem (见 news_board.py)。
+  重型多 Agent 评分/辩论流程已移除。
+- **行业榜/热股榜** — quant 选股流程产出 (ai_stock.quant.db_ops)。
+- **备份** — 每日 23:30 导出三榜到日期 JSON 文件 (见 backup.py)。
 """
