@@ -49,12 +49,17 @@ EVENT_DEDUPE_MAX_ENTRIES = 4096
 
 FLOW_DEFINITIONS: dict[str, dict] = {
     "selection": {
-        "description": "选股流程: 行业扫描 → 涨停潮监控 → 个股精选 → 深度分析",
+        "description": (
+            "选股流程: 宏观事件解析 → 涨停潮监控 → 行业生命周期定位 → "
+            "个股精选+深度分析(合并, 直接入自选池)"
+        ),
         "steps": (
-            {"step": "industry_scan", "queue": SELECTION_QUEUE, "task_type": "industry_scan"},
+            {"step": "macro_event", "queue": SELECTION_QUEUE, "task_type": "macro_event"},
+            # 涨停潮监控前置: 其 waves 结果供 industry_scan 阶段修正/排序引用 (§7.1.1)
             {"step": "limit_up_monitor", "queue": SELECTION_QUEUE, "task_type": "limit_up_monitor"},
+            {"step": "industry_scan", "queue": SELECTION_QUEUE, "task_type": "industry_scan"},
+            # 优化点 1: 深度分析合并入选股步, 无独立 deep_analysis 步
             {"step": "stock_selection", "queue": SELECTION_QUEUE, "task_type": "stock_selection"},
-            {"step": "deep_analysis", "queue": SELECTION_QUEUE, "task_type": "deep_analysis"},
         ),
     },
     "buy": {

@@ -133,12 +133,16 @@ def isolated_backup(monkeypatch, tmp_path):
     return tmp_path
 
 
-def _stub_db(monkeypatch, core=None, industry=None):
+def _stub_db(monkeypatch, core=None, industry=None, hot_stocks=None):
     from ai_stock.pipeline import db_ops
+    from ai_stock.quant import db_ops as quant_db_ops
 
     monkeypatch.setattr(db_ops, "get_snapshot_by_date", lambda d: core)
     monkeypatch.setattr(
-        db_ops, "get_industry_rankings_by_date", lambda d: industry,
+        quant_db_ops, "get_industry_board_by_date", lambda d: industry,
+    )
+    monkeypatch.setattr(
+        quant_db_ops, "get_optional_pool_as_of", lambda d: hot_stocks or [],
     )
 
 
@@ -146,10 +150,10 @@ def test_backup_writes_three_boards(monkeypatch, isolated_backup):
     core = {
         "snapshot": {"id": 7},
         "news_items": [{"title": "news-1"}],
-        "recommendations": [{"ticker": "600519"}],
     }
-    industry = {"snapshot": {"id": 7}, "rankings": [{"industry": "白酒"}]}
-    _stub_db(monkeypatch, core=core, industry=industry)
+    industry = {"rank_date": "2026-08-17", "rankings": [{"industry": "白酒"}]}
+    hot_stocks = [{"symbol": "600519", "name": "贵州茅台"}]
+    _stub_db(monkeypatch, core=core, industry=industry, hot_stocks=hot_stocks)
 
     result = backup_mod.backup_today_data("2026-08-17")
     assert result["status"] == "completed"
@@ -159,12 +163,12 @@ def test_backup_writes_three_boards(monkeypatch, isolated_backup):
     )
     assert payload["date"] == "2026-08-17"
     assert payload["news_items"] == [{"title": "news-1"}]  # 新闻榜
-    assert payload["industry_rankings"] == [{"industry": "白酒"}]  # 行业榜
-    assert payload["recommendations"] == [{"ticker": "600519"}]  # 热股榜
+    assert payload["industry_rankings"] == [{"industry": "白酒"}]  # 行业榜 (quant)
+    assert payload["recommendations"] == hot_stocks  # 热股榜 = 自选池快照
 
 
 def test_backup_is_idempotent(monkeypatch, isolated_backup):
-    _stub_db(monkeypatch, core={"snapshot": {}, "news_items": [], "recommendations": []})
+    _stub_db(monkeypatch, core={"snapshot": {}, "news_items": []})
     assert backup_mod.backup_today_data("2026-08-17")["status"] == "completed"
     assert backup_mod.backup_today_data("2026-08-17")["status"] == "skipped"
 

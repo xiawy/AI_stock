@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from pydantic import BaseModel
@@ -28,7 +28,7 @@ from ..broker import (
     get_broker,
     round_lot,
 )
-from ..calendar_utils import trading_days_between
+from ..calendar_utils import count_trading_days
 from ..config import (
     BUY_POSITION_RATIO,
     SINGLE_POSITION_MAX_PCT,
@@ -127,10 +127,11 @@ class TrendTrackingAgent(BaseAgent):
         atr = indicators.get("atr") or 0.0
         atr_ratio = (atr / current_close) if current_close else 1.0
 
-        # 持有交易日数 (严格交易日计数, §5.2)
+        # 持有交易日数 (严格交易日计数, §5.2; 买入日之后的交易日数,
+        # 对应 §2.3 "买入后五个交易日无大行情直接清仓")
         buy_dt = _parse_dt(context.get("buy_time"))
         holding_trading_days = (
-            trading_days_between(buy_dt.date(), datetime.now().date())
+            count_trading_days(buy_dt.date() + timedelta(days=1), datetime.now().date())
             if buy_dt else 0
         )
 

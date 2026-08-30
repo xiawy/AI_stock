@@ -1,8 +1,8 @@
 """Tests for app.services.cleanup — data-retention policy.
 
 诊股 records (analysis_tasks rows + on-disk reports + resumable-task index)
-are removed after 20 days; ranking snapshots (news items + recommendations)
-are removed after 70 days, cascading to their children.
+are removed after 20 days; ranking snapshots (news items) are removed after
+70 days, cascading to their children.
 """
 
 from __future__ import annotations
@@ -14,7 +14,8 @@ import pytest
 
 import app.core.database as core_db
 import web.history as web_history
-from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem, StockRecommendation
+from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem
+from ai_stock.quant import db_ops as quant_db_ops
 from app.models.analysis_task import AnalysisTask
 from app.models.user import User
 from app.services import cleanup
@@ -37,6 +38,8 @@ class _SessionCtx:
 @pytest.fixture()
 def cleanup_db(db_session, monkeypatch):
     monkeypatch.setattr(core_db, "SessionLocal", lambda: _SessionCtx(db_session))
+    # run_all_cleanup 还会调 quant 行业榜清理 — 隔离掉, 不碰真实库.
+    monkeypatch.setattr(quant_db_ops, "cleanup_industry_board", lambda days=70: 0)
     return db_session
 
 
@@ -144,7 +147,6 @@ def test_ranking_snapshots_retention(cleanup_db):
         created_at=_days_ago(80),
     )
     old_snap.news_items.append(NewsItem(title_hash="h1", title="old news"))
-    old_snap.recommendations.append(StockRecommendation(ticker="600519"))
 
     new_snap = ImpactSnapshot(
         period="PM",
@@ -153,7 +155,6 @@ def test_ranking_snapshots_retention(cleanup_db):
         created_at=_days_ago(10),
     )
     new_snap.news_items.append(NewsItem(title_hash="h2", title="new news"))
-    new_snap.recommendations.append(StockRecommendation(ticker="000001"))
 
     db.add_all([old_snap, new_snap])
     db.commit()
@@ -166,7 +167,6 @@ def test_ranking_snapshots_retention(cleanup_db):
     assert {s.id for s in db.query(ImpactSnapshot).all()} == {remaining_id}
     # ORM cascade removed the old snapshot's children only
     assert {n.title for n in db.query(NewsItem).all()} == {"new news"}
-    assert {r.ticker for r in db.query(StockRecommendation).all()} == {"000001"}
 
 
 def test_run_all_cleanup_is_fault_tolerant(cleanup_db, results_dir, monkeypatch):

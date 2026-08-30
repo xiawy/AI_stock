@@ -1,8 +1,8 @@
 """Database CRUD operations for the pipeline.
 
-Provides functions to create/read snapshots, news items, and recommendations.
-Handles the fallback logic: if the current pipeline run fails, the previous
-snapshot is used for stock recommendation.
+Provides functions to create/read snapshots and news items (新闻影响力榜).
+行业榜/热股榜已迁移到 quant 子系统 (ai_stock.quant.db_ops), 本模块不再
+读写 industry_rankings / stock_recommendations。
 """
 
 from __future__ import annotations
@@ -151,112 +151,29 @@ def save_news_items(snapshot_id: int, news_items: list[dict]) -> int:
     return count
 
 
-def save_recommendations(snapshot_id: int, recommendations: list[dict]) -> int:
-    """Save a batch of StockRecommendation records. Returns count saved."""
-    from ai_stock.pipeline.db_models import StockRecommendation
+def get_news_by_industry_ranking(board_id: int) -> Optional[dict]:
+    """Get the news items related to an industry-board row (行业榜→新闻).
 
-    session = _get_session()
-    if session is None:
-        return 0
-
-    count = 0
-    try:
-        for rec in recommendations:
-            sr = StockRecommendation(
-                snapshot_id=snapshot_id,
-                ticker=rec.get("ticker", ""),
-                stock_name=rec.get("stock_name", ""),
-                industry=rec.get("industry", ""),
-                trigger_event=rec.get("trigger_event", ""),
-                buy_logic=rec.get("buy_logic", ""),
-                fundamentals_score=rec.get("fundamentals_score", 0.0),
-                technical_score=rec.get("technical_score", 0.0),
-                event_match_score=rec.get("event_match_score", 0.0),
-                debate_score=rec.get("debate_score", 0.0),
-                final_score=rec.get("final_score", 0.0),
-                target_price=rec.get("target_price", 0.0),
-                expected_gain_low=rec.get("expected_gain_low", 0.0),
-                expected_gain_high=rec.get("expected_gain_high", 0.0),
-                stop_loss_price=rec.get("stop_loss_price", 0.0),
-                holding_period=rec.get("holding_period", ""),
-                risk_level=rec.get("risk_level", ""),
-                bull_bear_summary=rec.get("bull_bear_summary", ""),
-                rank=rec.get("rank", 0),
-                is_alternate=rec.get("is_alternate", False),
-            )
-            session.add(sr)
-            count += 1
-        session.commit()
-    except Exception as exc:
-        logger.error("Failed to save recommendations: %s", exc)
-        session.rollback()
-        count = 0
-    finally:
-        session.close()
-    return count
-
-
-def save_industry_rankings(snapshot_id: int, rankings: list[dict]) -> int:
-    """Save a batch of IndustryRanking records. Returns count saved."""
-    from ai_stock.pipeline.db_models import IndustryRanking
-
-    session = _get_session()
-    if session is None:
-        return 0
-
-    count = 0
-    try:
-        for item in rankings:
-            ir = IndustryRanking(
-                snapshot_id=snapshot_id,
-                industry=item.get("industry", ""),
-                industry_code=item.get("industry_code", ""),
-                board_name=item.get("board_name", ""),
-                industry_level=item.get("industry_level", ""),
-                heat_score=item.get("heat_score", 0.0),
-                news_count=item.get("news_count", 0),
-                fund_flow_net=item.get("fund_flow_net"),
-                change_pct=item.get("change_pct"),
-                resonance=item.get("resonance", "none"),
-                rating=item.get("rating", "C"),
-                leader_stocks_json=json.dumps(
-                    item.get("leader_stocks", []), ensure_ascii=False,
-                ),
-                rank=item.get("rank", 0),
-            )
-            session.add(ir)
-            count += 1
-        session.commit()
-    except Exception as exc:
-        logger.error("Failed to save industry rankings: %s", exc)
-        session.rollback()
-        count = 0
-    finally:
-        session.close()
-    return count
-
-
-def _load_industry_rows(snapshot_id: int, session) -> list:
-    """Load IndustryRanking rows for a snapshot, ordered by rank."""
-    from ai_stock.pipeline.db_models import IndustryRanking
-
-    return (
-        session.query(IndustryRanking)
-        .filter(IndustryRanking.snapshot_id == snapshot_id)
-        .order_by(IndustryRanking.rank.asc())
-        .all()
-    )
-
-
-def get_latest_industry_rankings() -> Optional[dict]:
-    """Get the latest completed snapshot with its industry rankings."""
-    from ai_stock.pipeline.db_models import ImpactSnapshot
+    行业榜本身由 quant 选股流程产出 (quant_industry_board); 这里用榜行的行业名,
+    在最新一份完成的新闻影响力快照中匹配主/副行业 (``industries_json``)
+    包含该名称的新闻, 供前端「行业榜→相关新闻」联动展示。
+    无快照或无匹配新闻时返回空列表。
+    """
+    from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem
+    from ai_stock.quant import db_ops as quant_db_ops
 
     session = _get_session()
     if session is None:
         return None
 
     try:
+        board = quant_db_ops.get_industry_board_row(board_id)
+        if board is None:
+            return None
+        industry = board.get("industry", "")
+        if not industry:
+            return {"industry": "", "snapshot_id": None, "news_items": []}
+
         snapshot = (
             session.query(ImpactSnapshot)
             .filter(ImpactSnapshot.status == "completed")
@@ -264,85 +181,12 @@ def get_latest_industry_rankings() -> Optional[dict]:
             .first()
         )
         if snapshot is None:
-            return None
-        rows = _load_industry_rows(snapshot.id, session)
-        return {
-            "snapshot": snapshot.to_dict(),
-            "rankings": [r.to_dict() for r in rows],
-        }
-    except Exception as exc:
-        logger.error("Failed to get latest industry rankings: %s", exc)
-        return None
-    finally:
-        session.close()
-
-
-def get_industry_rankings_by_date(date_str: str) -> Optional[dict]:
-    """Get the latest industry rankings snapshot for a date (YYYY-MM-DD)."""
-    from ai_stock.pipeline.db_models import ImpactSnapshot
-
-    session = _get_session()
-    if session is None:
-        return None
-
-    try:
-        snapshots = (
-            session.query(ImpactSnapshot)
-            .filter(ImpactSnapshot.status == "completed")
-            .filter(
-                ImpactSnapshot.snapshot_time
-                >= datetime.strptime(date_str, "%Y-%m-%d").replace(
-                    tzinfo=timezone.utc
-                )
-            )
-            .filter(
-                ImpactSnapshot.snapshot_time
-                < datetime.strptime(date_str, "%Y-%m-%d").replace(
-                    tzinfo=timezone.utc
-                )
-                + timedelta(days=1)
-            )
-            .order_by(ImpactSnapshot.snapshot_time.desc())
-            .all()
-        )
-        if not snapshots:
-            return None
-        snapshot = snapshots[0]
-        rows = _load_industry_rows(snapshot.id, session)
-        return {
-            "snapshot": snapshot.to_dict(),
-            "rankings": [r.to_dict() for r in rows],
-        }
-    except Exception as exc:
-        logger.error("Failed to get industry rankings for %s: %s", date_str, exc)
-        return None
-    finally:
-        session.close()
-
-
-def get_news_by_industry_ranking(ranking_id: int) -> Optional[dict]:
-    """Get the news items behind an industry-ranking row (行业榜→新闻).
-
-    Loads the IndustryRanking row, then returns the same snapshot's news
-    items whose primary/secondary industry list (``industries_json``)
-    contains the ranking's industry name — i.e. exactly the news that fed
-    the row's heat score. Ordered by composite score, best first.
-    """
-    from ai_stock.pipeline.db_models import IndustryRanking, NewsItem
-
-    session = _get_session()
-    if session is None:
-        return None
-
-    try:
-        ranking = session.get(IndustryRanking, ranking_id)
-        if ranking is None:
-            return None
+            return {"industry": industry, "snapshot_id": None, "news_items": []}
 
         # Escape LIKE wildcards inside the industry name (defense in depth;
         # board names are Chinese and normally contain none).
         escaped = (
-            ranking.industry
+            industry
             .replace("\\", "\\\\")
             .replace("%", "\\%")
             .replace("_", "\\_")
@@ -350,18 +194,18 @@ def get_news_by_industry_ranking(ranking_id: int) -> Optional[dict]:
         needle = f'%"{escaped}"%'
         rows = (
             session.query(NewsItem)
-            .filter(NewsItem.snapshot_id == ranking.snapshot_id)
+            .filter(NewsItem.snapshot_id == snapshot.id)
             .filter(NewsItem.industries_json.like(needle, escape="\\"))
             .order_by(NewsItem.composite_score.desc())
             .all()
         )
         return {
-            "industry": ranking.industry,
-            "snapshot_id": ranking.snapshot_id,
+            "industry": industry,
+            "snapshot_id": snapshot.id,
             "news_items": [r.to_dict() for r in rows],
         }
     except Exception as exc:
-        logger.error("Failed to get news for ranking %s: %s", ranking_id, exc)
+        logger.error("Failed to get news for board %s: %s", board_id, exc)
         return None
     finally:
         session.close()
@@ -369,7 +213,7 @@ def get_news_by_industry_ranking(ranking_id: int) -> Optional[dict]:
 
 def get_latest_snapshot() -> Optional[dict]:
     """Get the latest completed snapshot with its data."""
-    from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem, StockRecommendation
+    from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem
 
     session = _get_session()
     if session is None:
@@ -392,17 +236,9 @@ def get_latest_snapshot() -> Optional[dict]:
             .all()
         )
 
-        recommendations = (
-            session.query(StockRecommendation)
-            .filter(StockRecommendation.snapshot_id == snapshot.id)
-            .order_by(StockRecommendation.rank.asc())
-            .all()
-        )
-
         return {
             "snapshot": snapshot.to_dict(),
             "news_items": [n.to_dict() for n in news_items],
-            "recommendations": [r.to_dict() for r in recommendations],
         }
     except Exception as exc:
         logger.error("Failed to get latest snapshot: %s", exc)
@@ -438,7 +274,7 @@ def snapshot_exists_for_date(date_str: str) -> bool:
 
 def get_snapshot_by_date(date_str: str) -> Optional[dict]:
     """Get snapshots for a specific date (YYYY-MM-DD)."""
-    from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem, StockRecommendation
+    from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem
 
     session = _get_session()
     if session is None:
@@ -470,17 +306,10 @@ def get_snapshot_by_date(date_str: str) -> Optional[dict]:
             .order_by(NewsItem.rank.asc())
             .all()
         )
-        recommendations = (
-            session.query(StockRecommendation)
-            .filter(StockRecommendation.snapshot_id == snapshot.id)
-            .order_by(StockRecommendation.rank.asc())
-            .all()
-        )
 
         return {
             "snapshot": snapshot.to_dict(),
             "news_items": [n.to_dict() for n in news_items],
-            "recommendations": [r.to_dict() for r in recommendations],
         }
     except Exception as exc:
         logger.error("Failed to get snapshot for %s: %s", date_str, exc)

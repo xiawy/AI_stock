@@ -3,9 +3,9 @@
 Retention policy (see docs/README "功能" section):
 - 诊股 (diagnosis) records — DB task rows + on-disk reports + resumable-task
   index — are kept for 20 days.
-- 热股榜 / 新闻榜 / 行业榜 (ranking) snapshots — impact snapshots with their
-  news items, industry rankings and recommendations — are kept for 70 days,
-  together with their daily JSON backup files (backups/ next to the DB).
+- 新闻榜 (impact snapshots with their news items), quant 行业榜
+  (quant_industry_board) 与热股榜备份 — are kept for 70 days, together
+  with their daily JSON backup files (backups/ next to the DB).
 
 One pass runs at backend startup (background thread, non-blocking) and the
 job repeats daily at 03:30 local time via APScheduler (between ranking
@@ -80,8 +80,7 @@ def cleanup_ranking_snapshots(
 ) -> int:
     """Delete ranking snapshots older than the retention window.
 
-    ORM-level cascade removes each snapshot's news items, industry
-    rankings (行业榜) and stock recommendations along with it.
+    ORM-level cascade removes each snapshot's news items along with it.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
 
@@ -117,6 +116,13 @@ def run_all_cleanup() -> dict:
     except Exception as exc:
         logger.error("Ranking cleanup failed: %s", exc)
         stats["rankings"] = "error"
+    try:
+        from ai_stock.quant.db_ops import cleanup_industry_board
+
+        stats["industry_board"] = cleanup_industry_board(RANKING_RETENTION_DAYS)
+    except Exception as exc:
+        logger.error("Industry board cleanup failed: %s", exc)
+        stats["industry_board"] = "error"
     try:
         from ai_stock.pipeline.backup import cleanup_old_backups
 

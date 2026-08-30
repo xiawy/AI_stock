@@ -28,35 +28,6 @@ TOP_N_IMPACT = 20
 NEWS_DEBATE_MAX_ROUNDS = 2
 
 # ---------------------------------------------------------------------------
-# Stock recommendation
-# ---------------------------------------------------------------------------
-
-# Number of top bullish events used for candidate pool generation
-TOP_N_EVENTS_FOR_CANDIDATES = 5
-
-# Candidate pool size limits
-MIN_CANDIDATES = 30
-MAX_CANDIDATES = 50
-
-# Scoring weights for the initial composite score
-FUNDAMENTALS_WEIGHT = 0.35
-TECHNICAL_WEIGHT = 0.35
-EVENT_MATCH_WEIGHT = 0.30
-
-# Final scoring weights (after debate)
-FINAL_FUNDAMENTALS_WEIGHT = 0.35
-FINAL_TECHNICAL_WEIGHT = 0.35
-FINAL_EVENT_MATCH_WEIGHT = 0.15
-FINAL_DEBATE_WEIGHT = 0.15
-
-# Number of stocks in the final recommendation
-TOP_N_RECOMMENDED = 10
-TOP_N_ALTERNATES = 3
-
-# Max debate rounds per stock
-STOCK_DEBATE_MAX_ROUNDS = 2
-
-# ---------------------------------------------------------------------------
 # Scheduling
 # ---------------------------------------------------------------------------
 
@@ -71,15 +42,12 @@ STOCK_DEBATE_MAX_ROUNDS = 2
 PIPELINE_SCHEDULE = ["00:00", "08:30", "12:30", "14:30"]
 
 # Daily ranking backup slot (local time). After this point the day's
-# rankings (新闻榜/行业榜/热股榜) are exported to a dated JSON file; see
-# ai_stock.pipeline.backup. Keep it before the 03:30 cleanup pass.
+# rankings (新闻榜 + quant 行业榜/热股榜) are exported to a dated JSON file;
+# see ai_stock.pipeline.backup. Keep it before the 03:30 cleanup pass.
 BACKUP_DAILY_AT = (23, 30)
 
 # News collection window (hours)
 NEWS_WINDOW_HOURS = 12
-
-# Limit-up look-back window (trading days)
-LIMIT_UP_DAYS = 7
 
 # ---------------------------------------------------------------------------
 # Retry & resilience

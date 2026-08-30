@@ -22,6 +22,7 @@ from .db_models import (
     NewsVectorMeta,
     QuantCacheData,
     QuantFlowState,
+    QuantIndustryBoard,
     QuantTask,
     RuleTestCase,
     StockPoolHolding,
@@ -121,6 +122,36 @@ def get_optional_stock(symbol: str) -> Optional[dict]:
         return row.to_dict() if row else None
 
 
+def get_optional_pool_as_of(date_str: str) -> list[dict]:
+    """指定日期 (YYYY-MM-DD) 当日处于观察中的自选池快照 (热股榜历史视图).
+
+    判定: add_time <= 当日末 且 (未移出 或 remove_time >= 当日起点)。
+    存储的 UTC 时间按日期边界换算本地日。
+    """
+    try:
+        day_start = datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        return []
+    # 本地日 → UTC 边界 (与写入侧 _now() 的 UTC 口径对齐, 取保守宽窗口)
+    start_utc = day_start.replace(hour=0, minute=0, tzinfo=timezone.utc) - timedelta(hours=14)
+    end_utc = start_utc + timedelta(days=1)
+    with session_scope() as s:
+        rows = (
+            s.query(StockPoolOptional)
+            .filter(StockPoolOptional.add_time <= end_utc)
+            .all()
+        )
+        out = []
+        for r in rows:
+            removed = r.remove_time is not None and (
+                r.remove_time.replace(tzinfo=timezone.utc)
+                if r.remove_time.tzinfo is None else r.remove_time
+            ) < start_utc
+            if not removed:
+                out.append(r.to_dict())
+        return out
+
+
 def update_optional_status(
     symbol: str,
     status: str,
@@ -140,16 +171,112 @@ def update_optional_status(
 
 
 def expire_stale_optional(today: datetime | None = None) -> int:
-    """观察期到期 → status=expired (每日报告前跑一次)."""
+    """观察期到期 → status=expired (每日报告前跑一次).
+
+    observe_expire 存的是交易日 date: 必须按"日期"比较 (过期日当天仍可观察,
+    次日起才到期), 用 aware datetime 直接比会在过期日零点就提前出池, 观察期少一天.
+    """
     now = today or _now()
+    expire_before = now.date() if isinstance(now, datetime) else now
     with session_scope() as s:
         result = s.execute(
             update(StockPoolOptional)
             .where(
                 StockPoolOptional.status == "active",
-                StockPoolOptional.observe_expire < now,
+                StockPoolOptional.observe_expire < expire_before,
             )
             .values(status="expired", remove_reason="观察期到期", remove_time=now)
+        )
+        s.commit()
+        return result.rowcount or 0
+
+
+# ---------------------------------------------------------------------------
+# quant_industry_board (行业榜: 选股流程产出)
+# ---------------------------------------------------------------------------
+
+def save_industry_board(rank_date: str, rows: list[dict]) -> int:
+    """覆盖写入指定日期的行业榜 (先删当日旧数据再插入)."""
+    if not rank_date or not rows:
+        return 0
+    try:
+        with session_scope() as s:
+            s.execute(
+                delete(QuantIndustryBoard).where(
+                    QuantIndustryBoard.rank_date == rank_date
+                )
+            )
+            for row in rows:
+                s.add(QuantIndustryBoard(
+                    rank_date=rank_date,
+                    rank=int(row.get("rank", 0)),
+                    industry=row.get("industry", ""),
+                    industry_code=row.get("industry_code", ""),
+                    industry_level=row.get("industry_level", ""),
+                    stage=row.get("stage", ""),
+                    event_tag=row.get("event_tag", ""),
+                    heat_score=float(row.get("heat_score", 0.0) or 0.0),
+                    change_pct=row.get("change_pct"),
+                    main_net_inflow=row.get("main_net_inflow"),
+                    leader_stocks_json=json.dumps(
+                        row.get("leader_stocks", []), ensure_ascii=False,
+                    ),
+                ))
+            s.commit()
+        return len(rows)
+    except Exception as exc:
+        logger.error("Failed to save industry board for %s: %s", rank_date, exc)
+        return 0
+
+
+def get_latest_industry_board() -> Optional[dict]:
+    """最新一期行业榜 (最近一个有数据的日期)."""
+    with session_scope() as s:
+        latest_date = (
+            s.query(QuantIndustryBoard.rank_date)
+            .order_by(QuantIndustryBoard.rank_date.desc())
+            .limit(1)
+            .scalar()
+        )
+    if not latest_date:
+        return None
+    return get_industry_board_by_date(latest_date)
+
+
+def get_industry_board_by_date(date_str: str) -> Optional[dict]:
+    """按日期查行业榜; 无数据返回 None."""
+    with session_scope() as s:
+        rows = (
+            s.query(QuantIndustryBoard)
+            .filter(QuantIndustryBoard.rank_date == date_str)
+            .order_by(QuantIndustryBoard.rank.asc())
+            .all()
+        )
+        if not rows:
+            return None
+        return {
+            "rank_date": date_str,
+            "created_at": (
+                rows[0].created_at.isoformat() if rows[0].created_at else None
+            ),
+            "rankings": [r.to_dict() for r in rows],
+        }
+
+
+def get_industry_board_row(row_id: int) -> Optional[dict]:
+    with session_scope() as s:
+        row = s.get(QuantIndustryBoard, row_id)
+        return row.to_dict() if row else None
+
+
+def cleanup_industry_board(days: int = 70) -> int:
+    """保留窗口清理: 删除 N 天前的行业榜数据."""
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    with session_scope() as s:
+        result = s.execute(
+            delete(QuantIndustryBoard).where(
+                QuantIndustryBoard.rank_date < cutoff
+            )
         )
         s.commit()
         return result.rowcount or 0

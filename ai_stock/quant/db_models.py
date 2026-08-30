@@ -15,6 +15,7 @@
 - ``data_source_circuit``     — 数据源熔断状态
 - ``system_config``           — 全局配置 (global_trade_enable 等)
 - ``quant_task``              — SQLite 降级消息队列
+- ``quant_industry_board``    — 行业榜 (选股流程生命周期排序产出, 含龙头股)
 """
 
 from __future__ import annotations
@@ -482,5 +483,53 @@ class QuantTask(QuantBase):
             "max_attempts": self.max_attempts,
             "last_error": self.last_error,
             "consumer_id": self.consumer_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class QuantIndustryBoard(QuantBase):
+    """行业榜 — 选股流程产出 (§7.1).
+
+    数据源 = 筛选自选时生命周期定位排序后的前 ``INDUSTRY_BOARD_SIZE`` 个
+    行业; 每行业附带前 ``LEADER_STOCKS_PER_BOARD`` 只龙头股 (存 JSON)。
+    按 ``rank_date`` 每日覆盖写入, 天然支持按日期回查历史。
+    """
+
+    __tablename__ = "quant_industry_board"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    rank_date: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    industry: Mapped[str] = mapped_column(String(64), default="")
+    industry_code: Mapped[str] = mapped_column(String(16), default="")
+    industry_level: Mapped[str] = mapped_column(String(16), default="")  # industry|concept
+    stage: Mapped[str] = mapped_column(String(16), default="")          # 生命周期阶段
+    event_tag: Mapped[str] = mapped_column(String(64), default="")      # 关联宏观事件标签
+    heat_score: Mapped[float] = mapped_column(Float, default=0.0)       # 阶段优选级 (含涨停潮加分)
+    change_pct: Mapped[float] = mapped_column(Float, nullable=True)     # 板块当日涨跌幅
+    main_net_inflow: Mapped[float] = mapped_column(Float, nullable=True)  # 主力净流入 (元)
+    leader_stocks_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        UniqueConstraint("rank_date", "rank", name="uq_board_date_rank"),
+    )
+
+    def to_dict(self) -> dict:
+        import json
+
+        return {
+            "id": self.id,
+            "rank_date": self.rank_date,
+            "rank": self.rank,
+            "industry": self.industry,
+            "industry_code": self.industry_code,
+            "industry_level": self.industry_level,
+            "stage": self.stage,
+            "event_tag": self.event_tag,
+            "heat_score": self.heat_score,
+            "change_pct": self.change_pct,
+            "main_net_inflow": self.main_net_inflow,
+            "leader_stocks": json.loads(self.leader_stocks_json or "[]"),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

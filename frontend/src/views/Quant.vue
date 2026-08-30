@@ -61,13 +61,27 @@
             <el-table-column label="利好" min-width="190">
               <template #default="{ row }">
                 <div class="factor-list">
-                  <el-tag
+                  <el-tooltip
                     v-for="(f, i) in (row.bull_factors || []).slice(0, 3)"
                     :key="i"
-                    size="small"
-                    type="danger"
-                    effect="plain"
-                  >{{ f }}</el-tag>
+                    :content="f"
+                    placement="top"
+                    :show-after="300"
+                  >
+                    <el-tag size="small" type="danger" effect="plain" class="factor-tag">{{ f }}</el-tag>
+                  </el-tooltip>
+                  <span v-if="(row.bull_factors || []).length > 3" class="more-count dim">
+                    <el-tooltip placement="top" :show-after="300" popper-class="factor-popper">
+                      <template #content>
+                        <div
+                          v-for="(f, i) in (row.bull_factors || []).slice(3)"
+                          :key="'rest' + i"
+                          class="popper-item"
+                        >{{ f }}</div>
+                      </template>
+                      <el-tag size="small" type="danger" effect="plain" class="factor-tag">+{{ row.bull_factors.length - 3 }}</el-tag>
+                    </el-tooltip>
+                  </span>
                   <span v-if="!(row.bull_factors || []).length" class="dim">—</span>
                 </div>
               </template>
@@ -75,20 +89,45 @@
             <el-table-column label="利空" min-width="190">
               <template #default="{ row }">
                 <div class="factor-list">
-                  <el-tag
+                  <el-tooltip
                     v-for="(f, i) in (row.bear_factors || []).slice(0, 3)"
                     :key="i"
-                    size="small"
-                    type="success"
-                    effect="plain"
-                  >{{ f }}</el-tag>
+                    :content="f"
+                    placement="top"
+                    :show-after="300"
+                  >
+                    <el-tag size="small" type="success" effect="plain" class="factor-tag">{{ f }}</el-tag>
+                  </el-tooltip>
+                  <span v-if="(row.bear_factors || []).length > 3" class="more-count dim">
+                    <el-tooltip placement="top" :show-after="300" popper-class="factor-popper">
+                      <template #content>
+                        <div
+                          v-for="(f, i) in (row.bear_factors || []).slice(3)"
+                          :key="'rest' + i"
+                          class="popper-item"
+                        >{{ f }}</div>
+                      </template>
+                      <el-tag size="small" type="success" effect="plain" class="factor-tag">+{{ row.bear_factors.length - 3 }}</el-tag>
+                    </el-tooltip>
+                  </span>
                   <span v-if="!(row.bear_factors || []).length" class="dim">—</span>
                 </div>
               </template>
             </el-table-column>
             <el-table-column label="入选理由" min-width="220">
               <template #default="{ row }">
-                <span class="cell-text">{{ row.reason || '—' }}</span>
+                <el-tooltip
+                  v-if="row.reason"
+                  placement="top"
+                  :show-after="300"
+                  popper-class="reason-popper"
+                >
+                  <template #content>
+                    <div class="popper-text">{{ row.reason }}</div>
+                  </template>
+                  <span class="cell-text">{{ row.reason }}</span>
+                </el-tooltip>
+                <span v-else class="dim">—</span>
               </template>
             </el-table-column>
             <el-table-column label="操作" width="150" fixed="right">
@@ -149,7 +188,16 @@
             </el-table-column>
             <el-table-column label="交易计划" min-width="190">
               <template #default="{ row }">
-                <span class="cell-text">{{ planText(row.plan) }}</span>
+                <el-tooltip
+                  v-if="planText(row.plan) !== '—'"
+                  :content="planText(row.plan)"
+                  placement="top"
+                  :show-after="300"
+                  popper-class="reason-popper"
+                >
+                  <span class="cell-text">{{ planText(row.plan) }}</span>
+                </el-tooltip>
+                <span v-else class="dim">—</span>
               </template>
             </el-table-column>
             <el-table-column label="操作" width="150" fixed="right">
@@ -543,6 +591,13 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: 4px;
 }
+.factor-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
+}
 .cell-text {
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -551,6 +606,7 @@ onMounted(() => {
   color: var(--text-dim);
   font-size: 0.85rem;
   line-height: 1.5;
+  cursor: help;
 }
 .dim {
   color: var(--text-dim);
@@ -570,5 +626,21 @@ onMounted(() => {
   margin-left: 10px;
   color: var(--text-dim);
   font-size: 0.85rem;
+}
+</style>
+
+<!-- popper 内容 teleport 到 body, 需非 scoped 样式; 限定 popper-class 避免污染全局 -->
+<style>
+.factor-popper,
+.reason-popper {
+  max-width: 420px;
+  line-height: 1.6;
+}
+.factor-popper .popper-item {
+  padding: 2px 0;
+}
+.reason-popper .popper-text {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>

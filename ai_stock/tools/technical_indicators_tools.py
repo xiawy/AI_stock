@@ -2,6 +2,23 @@ from langchain_core.tools import tool
 from typing import Annotated
 from ai_stock.dataflows.interface import route_to_vendor
 
+
+def fetch_indicators(symbol: str, indicator: str, curr_date: str, look_back_days: int = 30) -> str:
+    """纯函数内核: 按逗号拆分逐个指标取数, 供程序化调用.
+
+    LLMs sometimes pass multiple indicators as a comma-separated string;
+    split and process each individually.
+    """
+    indicators = [i.strip().lower() for i in indicator.split(",") if i.strip()]
+    results = []
+    for ind in indicators:
+        try:
+            results.append(route_to_vendor("get_indicators", symbol, ind, curr_date, look_back_days))
+        except ValueError as e:
+            results.append(str(e))
+    return "\n\n".join(results)
+
+
 @tool
 def get_indicators(
     symbol: Annotated[str, "6-digit A-stock code (e.g. 600379). Must be numeric, NOT company name or Chinese text"],
@@ -20,13 +37,4 @@ def get_indicators(
     Returns:
         str: A formatted dataframe containing the technical indicators for the specified stock code and indicator.
     """
-    # LLMs sometimes pass multiple indicators as a comma-separated string;
-    # split and process each individually.
-    indicators = [i.strip().lower() for i in indicator.split(",") if i.strip()]
-    results = []
-    for ind in indicators:
-        try:
-            results.append(route_to_vendor("get_indicators", symbol, ind, curr_date, look_back_days))
-        except ValueError as e:
-            results.append(str(e))
-    return "\n\n".join(results)
+    return fetch_indicators(symbol, indicator, curr_date, look_back_days)

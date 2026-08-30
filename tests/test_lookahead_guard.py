@@ -172,7 +172,7 @@ def test_every_date_aware_tool_forwards_its_date():
     """凡是数据层按 curr_date 做时点处理的工具，@tool 都必须暴露并转发它。"""
     import inspect
 
-    from ai_stock.agents.utils import signal_data_tools
+    from ai_stock.tools import signal_data_tools
 
     src = inspect.getsource(signal_data_tools)
     for name in ("get_profit_forecast", "get_fund_flow"):

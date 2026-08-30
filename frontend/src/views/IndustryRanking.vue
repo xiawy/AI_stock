@@ -18,9 +18,9 @@
       </div>
 
       <div v-if="snapshot" class="snapshot-info">
-        <el-tag>{{ snapshot.period === 'AM' ? '上午盘' : '下午盘' }}</el-tag>
-        <span>快照时间：{{ formatTime(snapshot.snapshot_time) }}</span>
-        <span class="funnel-hint">宏观情绪（行业榜）→ 中观行业（龙头/热股）→ 微观个股（深度诊股）</span>
+        <el-tag>榜单日期 {{ snapshot.rank_date }}</el-tag>
+        <span v-if="snapshot.created_at">生成时间：{{ formatTime(snapshot.created_at) }}</span>
+        <span class="funnel-hint">宏观行业榜（量化选股生命周期优选）→ 中观行业（龙头/热股）→ 微观个股（深度诊股）</span>
       </div>
 
       <div v-loading="loading" class="tri-board">
@@ -38,7 +38,7 @@
               <div class="rank-badge">{{ row.rank }}</div>
               <div class="industry-main">
                 <div class="industry-name">
-                  {{ row.board_name || row.industry }}
+                  {{ row.industry }}
                   <el-tag
                     v-if="row.industry_level"
                     size="small"
@@ -48,30 +48,27 @@
                   >
                     {{ levelLabel(row.industry_level) }}
                   </el-tag>
-                  <el-tag size="small" :type="ratingType(row.rating)" class="rating-tag">
-                    {{ row.rating }}
+                  <el-tag v-if="row.stage" size="small" effect="plain" type="success">
+                    {{ row.stage }}
                   </el-tag>
                 </div>
                 <div class="industry-meta">
-                  <span class="heat">热度 {{ row.heat_score?.toFixed(1) }}</span>
+                  <span class="heat">优选级 {{ row.heat_score?.toFixed(1) }}</span>
                   <a class="news-link" title="查看该行业相关新闻" @click.stop="openNews(row)">
-                    {{ row.news_count }} 条新闻 ↗
+                    相关新闻 ↗
                   </a>
                   <span :class="pctClass(row.change_pct)">{{ pctText(row.change_pct) }}</span>
-                  <span :class="flowClass(row.fund_flow_net)">{{ flowText(row.fund_flow_net) }}</span>
+                  <span :class="flowClass(row.main_net_inflow)">{{ flowText(row.main_net_inflow) }}</span>
                 </div>
-                <el-tag size="small" :type="resType(row.resonance)">
-                  {{ resLabel(row.resonance) }}
-                </el-tag>
               </div>
             </div>
           </div>
-          <el-empty v-else-if="!loading" description="暂无行业榜数据，榜单由服务端定时更新" :image-size="60" />
+          <el-empty v-else-if="!loading" description="暂无行业榜数据，榜单由量化选股流程生成" :image-size="60" />
         </div>
 
         <!-- 第二栏：行业龙头股（联动） -->
         <div class="board">
-          <h3>{{ selected ? `${selected.board_name || selected.industry} · 龙头股` : '行业龙头' }}</h3>
+          <h3>{{ selected ? `${selected.industry} · 龙头股` : '行业龙头' }}</h3>
           <template v-if="selected">
             <div v-if="leaders.length" class="board-scroll">
               <div v-for="s in leaders" :key="s.code" class="stock-row">
@@ -109,32 +106,33 @@
           <el-empty v-else description="点击左侧行业，查看领涨龙头" :image-size="60" />
         </div>
 
-        <!-- 第三栏：热股榜 -->
+        <!-- 第三栏：热股榜（自选池） -->
         <div class="board">
-          <h3>热股榜 Top {{ primary.length }}</h3>
-          <div v-if="primary.length" class="board-scroll">
-            <div v-for="stock in primary" :key="stock.ticker" class="stock-row rec-row">
-              <div class="rank-badge">{{ stock.rank }}</div>
+          <h3>热股榜 Top {{ recommendations.length }}</h3>
+          <div v-if="recommendations.length" class="board-scroll">
+            <div v-for="(stock, idx) in recommendations" :key="stock.symbol" class="stock-row rec-row">
+              <div class="rank-badge">{{ idx + 1 }}</div>
               <div class="rec-main">
                 <div class="rec-title">
-                  <span class="stock-name">{{ stock.stock_name }}</span>
-                  <span class="stock-code">{{ stock.ticker }}</span>
-                  <span class="score">{{ stock.final_score?.toFixed(1) }}</span>
+                  <span class="stock-name">{{ stock.name }}</span>
+                  <span class="stock-code">{{ stock.symbol }}</span>
+                  <el-tag v-if="stock.industry" size="small" effect="plain">{{ stock.industry }}</el-tag>
+                  <span class="score">置信 {{ confidenceText(stock.confidence) }}</span>
                 </div>
-                <p class="rec-logic">{{ stock.buy_logic || stock.trigger_event }}</p>
+                <p class="rec-logic">{{ stock.reason || stock.stage_judgement }}</p>
               </div>
               <el-button
                 size="small"
                 type="primary"
                 plain
-                :loading="diagnosing === stock.ticker"
-                @click="startDiagnosis(stock.ticker, stock.stock_name)"
+                :loading="diagnosing === stock.symbol"
+                @click="startDiagnosis(stock.symbol, stock.name)"
               >
                 诊股
               </el-button>
             </div>
           </div>
-          <el-empty v-else-if="!loading" description="暂无热股榜数据" :image-size="60" />
+          <el-empty v-else-if="!loading" description="暂无热股数据（自选池为空）" :image-size="60" />
         </div>
       </div>
 
@@ -195,7 +193,6 @@ const newsLoading = ref(false)
 const newsIndustry = ref('')
 const newsItems = ref([])
 
-const primary = computed(() => recommendations.value.filter((s) => !s.is_alternate))
 const leaders = computed(() => selected.value?.leader_stocks || [])
 
 async function loadData() {
@@ -208,7 +205,10 @@ async function loadData() {
     ])
     const indData = indRes.status === 'fulfilled' ? indRes.value.data : null
     const recData = recRes.status === 'fulfilled' ? recRes.value.data : null
-    snapshot.value = indData?.snapshot || recData?.snapshot || null
+    // 行业榜响应顶层即榜单元信息（rank_date / created_at），热股快照独立携带
+    snapshot.value = indData
+      ? { rank_date: indData.rank_date, created_at: indData.created_at }
+      : null
     rankings.value = indData?.rankings || []
     recommendations.value = recData?.recommendations || []
     selected.value = rankings.value[0] || null
@@ -240,7 +240,7 @@ async function startDiagnosis(code, name) {
 async function openNews(row) {
   if (!row?.id) return
   newsVisible.value = true
-  newsIndustry.value = row.board_name || row.industry
+  newsIndustry.value = row.industry
   newsItems.value = []
   newsLoading.value = true
   try {
@@ -289,18 +289,8 @@ function turnoverText(v) {
   return `${v.toFixed(1)}%`
 }
 
-function ratingType(r) {
-  return { A: 'danger', B: 'warning', C: 'info' }[r] || 'info'
-}
-
-function resType(r) {
-  return { strong: 'success', divergence: 'warning', quiet: 'primary', none: 'info' }[r] || 'info'
-}
-
-function resLabel(r) {
-  return (
-    { strong: '热度资金共振', divergence: '热度资金背离', quiet: '资金潜伏', none: '暂无资金数据' }[r] || r
-  )
+function confidenceText(v) {
+  return v == null ? '—' : v.toFixed(2)
 }
 
 function levelType(l) {
@@ -412,9 +402,6 @@ onMounted(loadData)
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.rating-tag {
-  font-weight: 700;
 }
 .industry-meta {
   display: flex;

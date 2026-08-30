@@ -1,7 +1,6 @@
-"""Tests for pipeline scoring, ranking, and candidate pool modules."""
+"""Tests for pipeline scoring, ranking, and cache modules."""
 
 import pytest
-from unittest.mock import MagicMock
 
 from ai_stock.pipeline.config import AGENT_WEIGHTS, MIN_COMPOSITE_SCORE
 from ai_stock.pipeline.llm_judge import (
@@ -16,7 +15,6 @@ from ai_stock.pipeline.supply_demand import (
     _derive_from_agent_signals,
     _GAP_MATRIX,
 )
-from ai_stock.pipeline.candidate_pool import generate_candidate_pool, _add_candidate
 from ai_stock.pipeline.cache import PipelineCache
 
 
@@ -133,28 +131,6 @@ class TestRanking:
         data = json.loads(result)
         assert len(data) == 1
         assert data[0]["rank"] == 1
-
-
-@pytest.mark.unit
-class TestCandidatePool:
-    def test_add_candidate_new(self):
-        pool = {}
-        _add_candidate(pool, "000001", name="测试", tier="P0",
-                       event_title="事件A", industries=["AI"])
-        assert "000001" in pool
-        assert pool["000001"]["source_tier"] == "P0"
-        assert pool["000001"]["event_match_count"] == 1
-
-    def test_add_candidate_upgrade(self):
-        pool = {}
-        _add_candidate(pool, "000001", tier="P2", event_title="事件A")
-        _add_candidate(pool, "000001", tier="P0", event_title="事件B")
-        assert pool["000001"]["source_tier"] == "P0"
-        assert pool["000001"]["event_match_count"] == 2
-
-    def test_generate_empty(self):
-        result = generate_candidate_pool([], [], MagicMock())
-        assert result == []
 
 
 @pytest.mark.unit

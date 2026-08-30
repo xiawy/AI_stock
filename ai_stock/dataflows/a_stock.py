@@ -1776,7 +1776,8 @@ def get_hot_stocks(
     import requests
 
     if not curr_date or curr_date.strip() == "":
-        curr_date = datetime.now().strftime("%Y-%m-%d")
+        # 按市场时区取"今天": 主机在西半球时本地日期会落后市场当天, 取错交易日.
+        curr_date = _market_today().isoformat()
 
     try:
         url = (

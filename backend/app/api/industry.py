@@ -1,11 +1,11 @@
 """Industry board (行业榜) API endpoints.
 
-GET /api/industry/latest   — Latest industry heat ranking
+GET /api/industry/latest   — Latest industry board
 GET /api/industry/history  — Historical query by date
 
-The industry board is produced by the same scheduled pipeline as the news
-ranking (00:00 / 08:30 / 12:30 / 14:30); rows cascade-delete with their
-snapshot after the 70-day retention window.
+The industry board is produced by the quant selection flow (生命周期排序
+前 10 行业, 每行业含龙头股), stored in quant_industry_board; rows older
+than the 70-day retention window are cleaned daily.
 """
 
 from __future__ import annotations
@@ -19,17 +19,17 @@ from app.services.pipeline_service import get_pipeline_service
 router = APIRouter(prefix="/industry", tags=["industry"])
 
 
-@router.get("/latest", summary="最新一期行业榜（新闻热度 × 资金共振）")
+@router.get("/latest", summary="最新一期行业榜（quant 选股生命周期排序）")
 def get_latest(
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Return the latest completed snapshot's industry rankings."""
+    """Return the latest industry board produced by the quant selection flow."""
     svc = get_pipeline_service()
     result = svc.get_industry_latest()
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="暂无行业榜数据，系统生成中，请稍后重试",
+            detail="暂无行业榜数据，选股流程运行后自动更新，请稍后重试",
         )
     return result
 
@@ -39,29 +39,25 @@ def get_history(
     date: str,
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Query industry rankings for a specific date (YYYY-MM-DD).
+    """Query the industry board for a specific date (YYYY-MM-DD).
 
     Returns empty data (not 404) when nothing exists for the date.
     """
     svc = get_pipeline_service()
     result = svc.get_industry_by_date(date)
     if result is None:
-        return {"snapshot": None, "rankings": []}
+        return {"rank_date": date, "rankings": []}
     return result
 
 
-@router.get("/{ranking_id}/news", summary="查看行业对应新闻")
+@router.get("/{board_id}/news", summary="查看行业对应新闻")
 def get_industry_news(
-    ranking_id: int,
+    board_id: int,
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """News items that fed one industry-ranking row's heat score.
-
-    Same snapshot, filtered by the row's industry in each news item's
-    industries list, ordered by composite score.
-    """
+    """News items related to one industry-board row (按行业名匹配最新新闻快照)."""
     svc = get_pipeline_service()
-    result = svc.get_industry_news(ranking_id)
+    result = svc.get_industry_news(board_id)
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

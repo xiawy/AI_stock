@@ -3,6 +3,11 @@ from typing import Annotated
 from ai_stock.dataflows.interface import route_to_vendor
 
 
+def fetch_stock_data(symbol: str, start_date: str, end_date: str):
+    """纯函数内核: 返回供应商原始结果 (OHLCV 文本), 供程序化调用."""
+    return route_to_vendor("get_stock_data", symbol, start_date, end_date)
+
+
 @tool
 def get_stock_data(
     symbol: Annotated[str, "6-digit A-stock code (e.g. 600379). Must be numeric, NOT company name or Chinese text"],
@@ -19,4 +24,4 @@ def get_stock_data(
     Returns:
         str: A formatted dataframe containing the stock price data for the specified stock code in the specified date range.
     """
-    return route_to_vendor("get_stock_data", symbol, start_date, end_date)
+    return fetch_stock_data(symbol, start_date, end_date)

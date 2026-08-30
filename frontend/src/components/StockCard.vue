@@ -1,60 +1,59 @@
 <template>
-  <el-card class="stock-card" :class="{ alternate: stock.is_alternate }" shadow="hover">
+  <el-card class="stock-card" shadow="hover">
     <div class="card-header">
-      <div class="rank-badge">#{{ stock.rank }}</div>
+      <div class="rank-badge">#{{ rank }}</div>
       <div class="stock-info">
-        <span class="stock-name">{{ stock.stock_name }}</span>
-        <span class="stock-code">{{ stock.ticker }}</span>
-        <el-tag size="small" :type="riskTagType">{{ stock.risk_level || '中' }}风险</el-tag>
-        <el-tag size="small" type="info">{{ stock.holding_period || '短线' }}</el-tag>
+        <span class="stock-name">{{ stock.name }}</span>
+        <span class="stock-code">{{ stock.symbol }}</span>
+        <el-tag v-if="stock.industry" size="small" type="info">{{ stock.industry }}</el-tag>
+        <el-tag size="small" :type="statusType">{{ statusLabel }}</el-tag>
       </div>
-      <div v-if="stock.is_alternate" class="alt-badge">备选</div>
+      <span class="confidence">置信 {{ confidenceText(stock.confidence) }}</span>
     </div>
 
     <div class="card-body">
-      <div class="score-row">
-        <span class="score-label">综合</span>
-        <span class="score-value primary">{{ stock.final_score?.toFixed(1) }}</span>
-        <span class="score-label">基本面</span>
-        <span class="score-value">{{ stock.fundamentals_score?.toFixed(0) }}</span>
-        <span class="score-label">技术面</span>
-        <span class="score-value">{{ stock.technical_score?.toFixed(0) }}</span>
-        <span class="score-label">事件</span>
-        <span class="score-value">{{ stock.event_match_score?.toFixed(0) }}</span>
-        <span class="score-label">辩论</span>
-        <span class="score-value">{{ stock.debate_score?.toFixed(0) }}</span>
+      <div v-if="stock.stage_judgement" class="field-line">
+        <span class="field-label">阶段研判：</span>{{ stock.stage_judgement }}
       </div>
 
-      <div class="industry">{{ stock.industry }}</div>
-
-      <div class="trigger" v-if="stock.trigger_event">
-        <span class="trigger-label">触发事件：</span>{{ stock.trigger_event }}
+      <div v-if="stock.reason" class="field-line reason">
+        <span class="field-label">入选理由：</span>{{ stock.reason }}
       </div>
 
-      <div class="buy-logic" v-if="stock.buy_logic">
-        <span class="logic-label">买入逻辑：</span>{{ stock.buy_logic }}
+      <div v-if="bullFactors.length" class="factors">
+        <span class="field-label">看多因素：</span>
+        <el-tag
+          v-for="(f, i) in bullFactors"
+          :key="`bull-${i}`"
+          size="small"
+          effect="plain"
+          class="factor-tag"
+        >
+          {{ f }}
+        </el-tag>
       </div>
 
-      <div class="price-row">
-        <div class="price-item" v-if="stock.target_price > 0">
-          <span class="price-label">目标价</span>
-          <span class="price-value">{{ stock.target_price?.toFixed(2) }}</span>
-        </div>
-        <div class="price-item" v-if="stock.expected_gain_high > 0">
-          <span class="price-label">预期涨幅</span>
-          <span class="price-value gain">
-            {{ stock.expected_gain_low?.toFixed(1) }}% ~ {{ stock.expected_gain_high?.toFixed(1) }}%
-          </span>
-        </div>
-        <div class="price-item" v-if="stock.stop_loss_price > 0">
-          <span class="price-label">止损价</span>
-          <span class="price-value loss">{{ stock.stop_loss_price?.toFixed(2) }}</span>
-        </div>
+      <div v-if="stock.rise_trigger" class="field-line">
+        <span class="field-label">上涨触发：</span>{{ stock.rise_trigger }}
       </div>
 
-      <el-collapse v-if="stock.bull_bear_summary" class="debate-collapse">
-        <el-collapse-item title="多空辩论摘要">
-          <p class="debate-text">{{ stock.bull_bear_summary }}</p>
+      <div v-if="riskTags.length" class="factors">
+        <span class="field-label">风险提示：</span>
+        <el-tag
+          v-for="(r, i) in riskTags"
+          :key="`risk-${i}`"
+          size="small"
+          type="danger"
+          effect="plain"
+          class="factor-tag"
+        >
+          {{ r }}
+        </el-tag>
+      </div>
+
+      <el-collapse v-if="stock.report" class="report-collapse">
+        <el-collapse-item title="选股报告">
+          <p class="report-text">{{ stock.report }}</p>
         </el-collapse-item>
       </el-collapse>
     </div>
@@ -66,24 +65,35 @@ import { computed } from 'vue'
 
 const props = defineProps({
   stock: { type: Object, required: true },
+  rank: { type: Number, default: 0 },
 })
 
-const riskTagType = computed(() => {
-  const r = props.stock.risk_level
-  if (r === '高') return 'danger'
-  if (r === '低') return 'success'
-  return 'warning'
+const bullFactors = computed(() => props.stock.bull_factors || [])
+const riskTags = computed(() => props.stock.risk_tags || [])
+
+const statusType = computed(() => {
+  const s = props.stock.status
+  if (s === 'active') return 'success'
+  if (s === 'removed') return 'danger'
+  return 'info'
 })
+
+const statusLabel = computed(
+  () =>
+    ({ active: '观察中', removed: '已移出', expired: '已过期', bought: '已买入' }[
+      props.stock.status
+    ] || props.stock.status || '观察中'),
+)
+
+function confidenceText(v) {
+  return v == null ? '—' : v.toFixed(2)
+}
 </script>
 
 <style scoped>
 .stock-card {
   margin-bottom: 16px;
   border-left: 3px solid var(--brand, #409eff);
-}
-.stock-card.alternate {
-  border-left-color: #909399;
-  opacity: 0.85;
 }
 .card-header {
   display: flex;
@@ -102,12 +112,14 @@ const riskTagType = computed(() => {
   justify-content: center;
   font-weight: 700;
   font-size: 0.85rem;
+  flex-shrink: 0;
 }
 .stock-info {
   display: flex;
   align-items: center;
   gap: 8px;
   flex: 1;
+  flex-wrap: wrap;
 }
 .stock-name {
   font-weight: 600;
@@ -117,82 +129,41 @@ const riskTagType = computed(() => {
   color: var(--text-dim);
   font-size: 0.85rem;
 }
-.alt-badge {
-  background: #909399;
-  color: #fff;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 0.75rem;
-}
-.score-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 8px;
-  flex-wrap: wrap;
-}
-.score-label {
-  color: var(--text-dim);
-  font-size: 0.8rem;
-}
-.score-value {
-  font-weight: 600;
-  font-size: 0.9rem;
-  margin-right: 8px;
-}
-.score-value.primary {
+.confidence {
   color: var(--brand, #409eff);
-  font-size: 1.1rem;
+  font-weight: 700;
+  font-size: 0.95rem;
+  flex-shrink: 0;
 }
-.industry {
-  color: var(--text-dim);
+.field-line {
   font-size: 0.85rem;
+  line-height: 1.6;
   margin-bottom: 6px;
 }
-.trigger {
-  font-size: 0.85rem;
-  margin-bottom: 6px;
-}
-.trigger-label {
-  color: var(--text-dim);
-}
-.buy-logic {
-  font-size: 0.85rem;
-  margin-bottom: 10px;
-  line-height: 1.5;
-}
-.logic-label {
-  color: var(--text-dim);
-}
-.price-row {
-  display: flex;
-  gap: 20px;
+.field-line.reason {
   margin-bottom: 10px;
 }
-.price-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-}
-.price-label {
-  font-size: 0.75rem;
+.field-label {
   color: var(--text-dim);
 }
-.price-value {
-  font-weight: 600;
+.factors {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.85rem;
+  margin-bottom: 8px;
 }
-.price-value.gain {
-  color: #f56c6c;
+.factor-tag {
+  margin: 0;
 }
-.price-value.loss {
-  color: #67c23a;
-}
-.debate-collapse {
+.report-collapse {
   margin-top: 8px;
 }
-.debate-text {
+.report-text {
   font-size: 0.85rem;
   line-height: 1.6;
   color: var(--text-dim);
+  white-space: pre-wrap;
 }
 </style>

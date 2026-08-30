@@ -1,4 +1,4 @@
-"""Full pipeline orchestration — Feature 1 → Feature 2 end-to-end.
+"""Full pipeline orchestration — news impact assessment end-to-end.
 
 Steps:
 1. Collect news → dedup + classify
@@ -7,40 +7,31 @@ Steps:
 4. Supply-demand quantification
 5. Composite score >= 6.0 filter
 6. Bull/bear debate → Top 20
-7. Rank Top 20
-8. Industry heatmap aggregation (行业榜: news heat × fund-flow resonance)
-   + leader stocks of every ranked industry (领涨+相关+弹性)
-9. Candidate pool generation (Top 5 events + limit-up + industry leaders)
-10. 3-dimensional scoring → top 20 advance
-11. Per-stock debate → final scoring → Top 10 + 3 alternates → write to DB
+7. Rank Top 20 → write to DB
+
+行业榜/热股榜不再由本 pipeline 产出: 行业榜 = quant 选股流程生命周期定位的
+前 10 行业 (含龙头股), 热股榜 = 自选池活跃标的 (见 ai_stock.quant)。
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from .cache import get_cache
 from .config import (
-    LIMIT_UP_DAYS,
     MAX_RETRIES,
     MIN_COMPOSITE_SCORE,
     NEWS_WINDOW_HOURS,
     RETRY_BASE_DELAY,
-    TOP_N_EVENTS_FOR_CANDIDATES,
     TOP_N_IMPACT,
 )
 from .scoring import ScoredNews, score_all_news
 from .supply_demand import quantify_supply_demand
-from .debate import debate_batch, DebateVerdict
-from .ranking import rank_top20, build_top20_json, calculate_industry_heatmap
-from .candidate_pool import generate_candidate_pool
-from .stock_scoring import score_all_candidates
-from .stock_debate import debate_batch_stocks
-from .recommendation import generate_recommendation
+from .debate import debate_batch
+from .ranking import rank_top20, build_top20_json
 from . import db_ops
 from . import evolution as pipeline_evolution
 
@@ -65,8 +56,6 @@ def run_full_pipeline(
         Dict with pipeline results:
         - snapshot_id: int
         - top20: list of news dicts
-        - industry_rankings: list of industry dicts (行业榜)
-        - recommendations: list of FinalRecommendation dicts
         - status: "completed" / "failed"
     """
     if curr_date is None:
@@ -95,7 +84,7 @@ def run_full_pipeline(
 
     try:
         # ── Step 1: Collect news ──
-        logger.info("[1/11] Collecting news...")
+        logger.info("[1/7] Collecting news...")
         news_items = _retry_call(
             _collect_news, curr_date, NEWS_WINDOW_HOURS,
         )
@@ -106,23 +95,23 @@ def run_full_pipeline(
             return _fallback_pipeline(snapshot_id, period)
 
         # ── Step 2: Pre-filter ──
-        logger.info("[2/11] Pre-filtering...")
+        logger.info("[2/7] Pre-filtering...")
         filtered = _prefilter_news(news_items)
         logger.info("After pre-filter: %d items", len(filtered))
 
         # ── Step 3: 4-agent parallel scoring ──
-        logger.info("[3/11] 4-agent scoring...")
+        logger.info("[3/7] 4-agent scoring...")
         scored = score_all_news(filtered, llm_quick, MIN_COMPOSITE_SCORE)
         logger.info("Scored: %d items pass threshold", len(scored))
 
         # ── Step 4: Filter by composite score (already done inside score_all_news,
         #   but kept explicit for clarity / future threshold changes) ──
-        logger.info("[4/11] Filtering by composite score...")
+        logger.info("[4/7] Filtering by composite score...")
         candidates = [sn for sn in scored if sn.composite >= MIN_COMPOSITE_SCORE]
         logger.info("Candidates after filter: %d", len(candidates))
 
         # ── Step 5: Supply-demand quantification (only for candidates that pass) ──
-        logger.info("[5/11] Supply-demand analysis...")
+        logger.info("[5/7] Supply-demand analysis...")
         for sn in candidates:
             try:
                 sd = quantify_supply_demand(
@@ -133,7 +122,7 @@ def run_full_pipeline(
                 logger.warning("Supply-demand failed for '%s': %s", sn.news.get("title", "")[:30], exc)
 
         # ── Step 6: Debate → Top 20 ──
-        logger.info("[6/11] News debate...")
+        logger.info("[6/7] News debate...")
         debate_input = [
             (sn.news, _scored_to_dict(sn))
             for sn in candidates
@@ -162,7 +151,7 @@ def run_full_pipeline(
                 news_dict["expected_gain_high"] = 0.0
 
         # ── Step 7: Rank Top 20 ──
-        logger.info("[7/11] Ranking Top %d...", TOP_N_IMPACT)
+        logger.info("[7/7] Ranking Top %d...", TOP_N_IMPACT)
         top20 = rank_top20(debated_news, TOP_N_IMPACT)
         top20_json = build_top20_json(top20)
 
@@ -173,62 +162,20 @@ def run_full_pipeline(
                 snapshot_id,
                 total_news=len(news_items),
                 top20_json=top20_json,
+                status="completed",
             )
-
-        # ── Step 8: Industry heatmap (行业榜) + leader stocks ──
-        logger.info("[8/11] Industry heatmap aggregation...")
-        industry_rankings, industry_leaders = _build_industry_ranking(
-            debated_news, snapshot_id,
-        )
-        logger.info(
-            "Industry board: %d industries, %d leader stocks for candidate pool",
-            len(industry_rankings), len(industry_leaders),
-        )
-
-        # ── Step 9: Candidate pool ──
-        logger.info("[9/11] Generating candidate pool...")
-        top_events = top20[:TOP_N_EVENTS_FOR_CANDIDATES]
-        limit_up = _retry_call(
-            _collect_limit_up, curr_date, LIMIT_UP_DAYS,
-        )
-        candidates_pool = generate_candidate_pool(
-            top_events, limit_up, llm_deep, industry_leaders=industry_leaders,
-        )
-        logger.info("Candidate pool: %d stocks", len(candidates_pool))
-
-        # ── Step 10: 3D scoring + debate ──
-        logger.info("[10/11] Stock scoring + debate...")
-        stock_scores = score_all_candidates(
-            candidates_pool, top_events, llm_quick, top_n=20,
-        )
-        debate_results = debate_batch_stocks(
-            stock_scores, top_events, llm_quick, llm_deep,
-        )
-
-        # ── Step 11: Final recommendation ──
-        logger.info("[11/11] Generating recommendations...")
-        recommendations = generate_recommendation(
-            stock_scores, debate_results, top_events, llm_deep,
-        )
-
-        # Save recommendations
-        if snapshot_id:
-            rec_dicts = [r.to_dict() for r in recommendations]
-            db_ops.save_recommendations(snapshot_id, rec_dicts)
-            db_ops.update_snapshot(snapshot_id, status="completed")
 
         logger.info("=" * 60)
         logger.info(
-            "Pipeline completed: Top %d news, %d industries, %d recommendations",
-            len(top20), len(industry_rankings), len(recommendations),
+            "Pipeline completed: Top %d news (industry/hot-stock boards are "
+            "produced by the quant selection flow)",
+            len(top20),
         )
         logger.info("=" * 60)
 
         return {
             "snapshot_id": snapshot_id,
             "top20": top20,
-            "industry_rankings": industry_rankings,
-            "recommendations": [r.to_dict() for r in recommendations],
             "status": "completed",
         }
 
@@ -239,8 +186,6 @@ def run_full_pipeline(
         return {
             "snapshot_id": snapshot_id,
             "top20": [],
-            "industry_rankings": [],
-            "recommendations": [],
             "status": "failed",
             "error": str(exc),
         }
@@ -255,100 +200,6 @@ def _collect_news(curr_date: str, hours: int) -> list[dict]:
     """Collect news via the data layer."""
     from ai_stock.dataflows.pipeline_data import get_impact_news
     return get_impact_news(curr_date, hours)
-
-
-def _collect_limit_up(curr_date: str, days: int) -> list[dict]:
-    """Collect limit-up stocks via the data layer."""
-    from ai_stock.dataflows.pipeline_data import get_limit_up_stocks
-    return get_limit_up_stocks(curr_date, days)
-
-
-def _build_industry_ranking(
-    debated_news: list[dict],
-    snapshot_id: int | None,
-    top_n: int = 10,
-) -> tuple[list[dict], list[dict]]:
-    """Build the industry heat ranking (行业榜) and its leader stocks (领涨+相关+弹性).
-
-    Returns (industry_rankings, industry_leaders):
-    - industry_rankings: dicts ready for ``db_ops.save_industry_rankings``
-      (with ``leader_stocks`` attached for every ranked industry —
-       leaders = 领涨 + 板块最相关 + 弹性最大, not market-cap)
-    - industry_leaders: flat, deduped list of the Top-3 industries' leader
-      stocks ({code, name, industry, rank}) for candidate-pool injection
-
-    Every failure degrades gracefully: no fund flow → news heat only;
-    no board code → leaders fall back to the board's realtime top stock;
-    DB unavailable → rankings still returned for the candidate pool.
-    """
-    from ai_stock.dataflows.pipeline_data import (
-        get_all_board_fund_flow,
-        get_industry_leader_stocks,
-    )
-
-    industry_flows = []
-    try:
-        industry_flows = get_all_board_fund_flow()
-    except Exception as exc:
-        logger.warning("Board fund-flow fetch failed; heat-only ranking: %s", exc)
-
-    rankings = calculate_industry_heatmap(debated_news, industry_flows, top_n=top_n)
-
-    # Attach leader stocks to every ranked board for the 行业榜联动展示.
-    # 龙头口径 = 领涨 + 板块最相关 + 弹性最大（见 get_industry_leader_stocks）,
-    # 不再是市值龙头。候选池注入仍只取 Top-3 热门行业（板块 β 更有意义）。
-    industry_leaders: list[dict] = []
-    seen_codes: set[str] = set()
-    for row in rankings[:top_n]:
-        leaders: list[dict] = []
-        board_code = row.get("industry_code", "")
-        if board_code:
-            try:
-                leaders = get_industry_leader_stocks(
-                    board_code,
-                    top_n=5,
-                    board_change_pct=row.get("change_pct"),
-                    top_stock_code=row.get("top_stock_code", ""),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Leader fetch failed for %s (%s): %s",
-                    row.get("industry"), board_code, exc,
-                )
-        # Fallback: the board's realtime top gainer from the flow payload.
-        if not leaders and row.get("top_stock_code"):
-            leaders = [{
-                "code": row["top_stock_code"],
-                "name": row.get("top_stock_name", ""),
-                "change_pct": row.get("top_stock_pct") or 0.0,
-                "turnover_rate": 0.0,
-                "volume_ratio": 0.0,
-                "market_cap": 0.0,
-                "main_net_inflow": 0.0,
-                "leader_label": "领涨",
-            }]
-        row["leader_stocks"] = leaders
-
-        # Candidate-pool injection stays Top-3 only (unchanged semantics).
-        if (row.get("rank") or 99) <= 3:
-            for stock in leaders:
-                code = stock.get("code", "")
-                if code and code not in seen_codes:
-                    seen_codes.add(code)
-                    industry_leaders.append({
-                        "code": code,
-                        "name": stock.get("name", ""),
-                        "industry": row.get("industry", ""),
-                        "rank": row.get("rank", 0),
-                    })
-
-    if snapshot_id and rankings:
-        try:
-            db_ops.save_industry_rankings(snapshot_id, rankings)
-        except Exception as exc:
-            logger.warning("Failed to persist industry rankings: %s", exc)
-
-    return rankings, industry_leaders
 
 
 def _prefilter_news(news_items: list[dict]) -> list[dict]:
@@ -416,20 +267,15 @@ def _retry_call(fn, *args, max_retries: int = MAX_RETRIES):
 
 
 def _fallback_pipeline(snapshot_id, period: str) -> dict:
-    """Fallback: use previous snapshot's data for recommendation."""
+    """Fallback: reuse the previous snapshot's Top-20 news list."""
     logger.warning("Using fallback: loading previous snapshot")
     prev = db_ops.get_latest_snapshot()
     if prev:
         if snapshot_id:
             db_ops.update_snapshot(snapshot_id, status="completed")
-        industry_prev = db_ops.get_latest_industry_rankings()
         return {
             "snapshot_id": snapshot_id,
             "top20": prev.get("news_items", []),
-            "industry_rankings": (
-                industry_prev.get("rankings", []) if industry_prev else []
-            ),
-            "recommendations": prev.get("recommendations", []),
             "status": "completed",
             "fallback": True,
         }
@@ -440,8 +286,6 @@ def _fallback_pipeline(snapshot_id, period: str) -> dict:
     return {
         "snapshot_id": snapshot_id,
         "top20": [],
-        "industry_rankings": [],
-        "recommendations": [],
         "status": "failed",
         "error": "No news collected and no previous snapshot available",
     }

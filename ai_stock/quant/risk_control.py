@@ -91,7 +91,11 @@ def pre_trade_check(order, snapshot: Optional[dict] = None) -> CheckResult:
     max_orders = int(db_ops.get_config_value("max_daily_orders", "50"))
     if db_ops.count_orders_today() >= max_orders:
         return CheckResult(False, f"超过单日最大委托笔数 {max_orders}", details)
-    quote = get_data_service().get_realtime_quote(order.symbol)
+    try:
+        quote = get_data_service().get_realtime_quote(order.symbol)
+    except Exception as exc:
+        logger.warning("pre_trade_check quote fetch failed for %s: %s", order.symbol, exc)
+        quote = None
     if not quote:
         return CheckResult(False, f"无法获取 {order.symbol} 行情, 拒绝下单", details)
     details["quote"] = quote

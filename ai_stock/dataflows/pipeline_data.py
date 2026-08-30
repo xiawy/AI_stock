@@ -409,112 +409,46 @@ def get_all_board_fund_flow() -> list[dict]:
     return boards
 
 
-# 龙头股口径：不是「市值最大」，而是「领涨 + 板块最相关 + 弹性最大」。
-# 打分维度（_leader_composite_score）：
-#   领涨    — 当日涨幅（主导因子）
-#   板块相关 — 涨停封板、板块官方领涨股、主力资金净流入
-#   弹性    — 跑赢板块的超额收益、换手率、量比
-_LEADER_QUOTE_FIELDS = "f12,f14,f3,f8,f10,f20,f62"
+# 成分股口径：按成交额/市值取流动性较好的个股 (选股候选池)
+_CONSTITUENT_FIELDS = "f12,f14,f2,f3,f6,f8,f10,f20,f62"
+_CONSTITUENT_SORT_FIELDS = {"amount": "f6", "market_cap": "f20"}
 
 
-def _limit_up_threshold(code: str) -> float:
-    """涨停近似阈值（主板 10% / 创业+科创 20% / 北交所 30%），留 0.2% 缓冲。"""
-    if code.startswith(("300", "301", "688", "689")):
-        return 19.8
-    if code.startswith(("4", "8", "92")):
-        return 29.8
-    return 9.8
-
-
-def _leader_composite_score(
-    stock: dict,
-    board_change_pct: float | None,
-    is_board_top: bool,
-) -> float:
-    """综合打分：领涨 × 板块相关 × 弹性，分越高越像该板块龙头。"""
-    change = stock.get("change_pct", 0.0)
-    excess = change - board_change_pct if board_change_pct is not None else 0.0
-    turnover = min(stock.get("turnover_rate") or 0.0, 30.0)
-    volume_ratio = min(stock.get("volume_ratio") or 0.0, 5.0)
-    inflow_yi = max(stock.get("main_net_inflow") or 0.0, 0.0) / 1e8
-
-    score = change * 3.0                       # 领涨（主导因子）
-    if change >= _limit_up_threshold(stock.get("code", "")):
-        score += 3.0                           # 涨停封板 = 主题核心（最相关）
-    if is_board_top:
-        score += 3.0                           # 板块官方领涨股 = 最相关
-    score += excess                            # 弹性：跑赢板块的超额收益
-    score += turnover * 0.08                   # 弹性：换手活跃度
-    score += volume_ratio * 0.5                # 弹性：放量确认
-    score += min(inflow_yi, 10.0) * 0.3        # 相关：主力资金主攻方向
-    return score
-
-
-def _rank_board_leaders(
-    stocks: list[dict],
-    board_change_pct: float | None,
-    top_stock_code: str,
-    top_n: int,
-) -> list[dict]:
-    """按 领涨×相关×弹性 打分排序，取前 top_n 并打上标签。"""
-    ranked = sorted(
-        stocks,
-        key=lambda s: _leader_composite_score(
-            s, board_change_pct, s["code"] == top_stock_code,
-        ),
-        reverse=True,
-    )
-    leaders = ranked[:top_n]
-    for s in leaders:
-        s["leader_label"] = "领涨" if s["code"] == top_stock_code else "龙头"
-    return leaders
-
-
-def get_industry_leader_stocks(
+def get_board_constituents(
     board_code: str,
-    top_n: int = 5,
-    board_change_pct: float | None = None,
-    top_stock_code: str = "",
+    top_n: int = 20,
+    sort_by: str = "amount",
 ) -> list[dict]:
-    """Fetch a board's leading stocks — 领涨 + 板块最相关 + 弹性最大, not market-cap.
-
-    Candidates are the board's biggest gainers (``fid=f3``), then re-ranked
-    by ``_leader_composite_score`` so the returned Top-N are the ones that
-    lead the board in gains, are most board-relevant (limit-up / official
-    top gainer / main-capital inflow), and have the highest elasticity
-    (excess return over the board, turnover, volume ratio).
+    """Fetch a board's constituent stocks sorted by liquidity or market cap.
 
     Args:
         board_code: Eastmoney board code, e.g. "BK1033".
-        top_n: number of leaders to return (default 5).
-        board_change_pct: the board's own change% — used to measure
-            excess return (弹性).
-        top_stock_code: the board's official top gainer code — the most
-            board-relevant stock, gets the 领涨 label.
+        top_n: number of stocks to return.
+        sort_by: "amount" (成交额, 流动性口径) or "market_cap" (总市值).
 
     Returns a list of dicts with keys:
-        code, name, change_pct, turnover_rate (%), volume_ratio,
-        market_cap (元), main_net_inflow (元), leader_label ("领涨"/"龙头").
+        code, name, price, change_pct, turnover_rate (%), volume_ratio,
+        market_cap (元), amount (成交额, 元), main_net_inflow (元).
 
     Empty list on failure.
     """
-    stocks: list[dict] = []
     if not board_code:
-        return stocks
+        return []
     try:
         params = {
             "pn": "1",
-            "pz": str(max(top_n, 1) * 6),
+            "pz": str(max(top_n, 1)),
             "po": "1",
             "np": "1",
             "fltt": "2",
             "invt": "2",
-            "fid": "f3",  # 先取板块内领涨候选（涨幅降序）
+            "fid": _CONSTITUENT_SORT_FIELDS.get(sort_by, "f6"),
             "fs": f"b:{board_code}",
-            "fields": _LEADER_QUOTE_FIELDS,
+            "fields": _CONSTITUENT_FIELDS,
         }
         r = _push2_get("/api/qt/clist/get", params)
         items = r.json().get("data", {}).get("diff", []) or []
+        stocks: list[dict] = []
         for item in items:
             code = str(item.get("f12", ""))
             if not code:
@@ -522,20 +456,18 @@ def get_industry_leader_stocks(
             stocks.append({
                 "code": code,
                 "name": str(item.get("f14", "")),
+                "price": _to_float(item.get("f2")),
                 "change_pct": _to_float(item.get("f3")),
+                "amount": _to_float(item.get("f6")),
                 "turnover_rate": _to_float(item.get("f8")),
                 "volume_ratio": _to_float(item.get("f10")),
                 "market_cap": _to_float(item.get("f20")),
                 "main_net_inflow": _to_float(item.get("f62")),
             })
-        if stocks:
-            stocks = _rank_board_leaders(
-                stocks, board_change_pct, top_stock_code, top_n,
-            )
+        return stocks
     except Exception as e:
-        logger.warning("Industry leader fetch failed for %s: %s", board_code, e)
+        logger.warning("Board constituents fetch failed for %s: %s", board_code, e)
         return []
-    return stocks
 
 
 def _to_float(value) -> float:

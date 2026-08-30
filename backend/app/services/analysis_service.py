@@ -157,13 +157,14 @@ class AnalysisTaskManager:
     def _build_industry_context() -> dict[str, str]:
         """Summarize the latest industry board (行业榜) for analyst prompts.
 
+        行业榜由 quant 选股流程产出 (生命周期排序前 10 行业, 含龙头股).
         Returns {"heatmap": str, "hot_sector_stocks": str}; both empty when
-        the industry ranking DB is unavailable or empty.
+        the industry board is unavailable or empty.
         """
         try:
-            from ai_stock.pipeline.db_ops import get_latest_industry_rankings
+            from ai_stock.quant.db_ops import get_latest_industry_board
 
-            data = get_latest_industry_rankings()
+            data = get_latest_industry_board()
         except Exception as exc:  # engine missing / table absent — degrade silently
             logging.getLogger(__name__).debug(
                 "industry context unavailable: %s", exc
@@ -174,18 +175,16 @@ class AnalysisTaskManager:
         if not rankings:
             return {"heatmap": "", "hot_sector_stocks": ""}
 
-        snapshot = (data or {}).get("snapshot") or {}
-        lines = [f"榜单时间：{snapshot.get('snapshot_time', '')}（{snapshot.get('period', '')}盘）"]
+        lines = [f"榜单日期：{data.get('rank_date', '')}（quant 选股生命周期排序）"]
         for row in rankings[:10]:
-            inflow = row.get("fund_flow_net")
+            inflow = row.get("main_net_inflow")
             inflow_txt = (
                 f"主力净流入{inflow / 1e8:+.1f}亿" if isinstance(inflow, (int, float))
                 else "资金数据缺失"
             )
-            display_name = row.get("board_name") or row.get("industry")
             lines.append(
-                f"{row.get('rank')}. {display_name} 热度{row.get('heat_score', 0)} "
-                f"{inflow_txt} 评级{row.get('rating', 'C')}"
+                f"{row.get('rank')}. {row.get('industry')} 阶段{row.get('stage', '')} "
+                f"优选级{row.get('heat_score', 0)} {inflow_txt}"
             )
 
         hot_stocks: list[str] = []
@@ -193,8 +192,7 @@ class AnalysisTaskManager:
             for stock in row.get("leader_stocks") or []:
                 name = stock.get("name") or stock.get("code")
                 if name:
-                    display_name = row.get("board_name") or row.get("industry")
-                    hot_stocks.append(f"{name}({display_name})")
+                    hot_stocks.append(f"{name}({row.get('industry')})")
 
         return {
             "heatmap": "\n".join(lines),

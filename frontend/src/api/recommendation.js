@@ -1,7 +1,7 @@
 import request from './request'
 
 export const recommendationApi = {
-  /** 最新一期 Top 10 + 3 备选 */
+  /** 最新热股（自选观察池活跃股票，按置信度降序） */
   latest() {
     return request.get('/recommendation/latest')
   },

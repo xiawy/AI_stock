@@ -102,6 +102,10 @@ class MQBackend:
         """回收 processing 超时任务 (锁已过期 = 消费者死亡), 返回回收列表."""
         raise NotImplementedError
 
+    def renew_lock(self, task_id: str, consumer_id: str = "", ttl: int = LOCK_TTL_SECONDS) -> bool:
+        """续期任务抢占锁 (长任务防误回收); SQLite 降级后端无锁返回 False."""
+        return False
+
     def depth(self, queue_name: str) -> int:
         raise NotImplementedError
 
@@ -230,6 +234,23 @@ class RedisMQBackend(MQBackend):
         pipe.delete(self._lock_key(task_id))
         pipe.zrem(REDIS_PROCESSING_KEY, task_id)
         pipe.execute()
+
+    def renew_lock(self, task_id, consumer_id="", ttl=LOCK_TTL_SECONDS):
+        """续期抢占锁: 仅锁仍归本消费者持有时续期, 防止 sweep_timeouts 把
+        仍在执行的长任务误判为死亡消费者而重新派发 (重复执行).
+        阻塞命令专用连接池上取连接, 避免与普通命令连接串用."""
+        conn = self._blocking.connection_pool.get_connection("renew")
+        try:
+            key = self._lock_key(task_id)
+            if consumer_id and conn.get(key) != consumer_id:
+                return False  # 锁已被 sweep 回收/被抢占, 不再续期 (任务已被重发)
+            conn.expire(key, ttl)
+            return True
+        except Exception as exc:
+            logger.debug("renew_lock failed for %s: %s", task_id, exc)
+            return False
+        finally:
+            self._blocking.connection_pool.release(conn)
 
     def fail(self, task_id, error, retry_base_delay=30):
         r = self._redis
@@ -505,6 +526,23 @@ class SQLiteMQBackend(MQBackend):
                 recovered.append({"task_id": row.task_id, "outcome": outcome})
             s.commit()
         return recovered
+
+    def renew_lock(self, task_id, consumer_id="", ttl=LOCK_TTL_SECONDS):
+        """SQLite 降级后端无独立锁: 把 processing_started_at 刷到当前时刻,
+        使 sweep_timeouts 的超时判定以最后续期时刻起算 (与 Redis 锁续期等效)."""
+        from .db import session_scope
+
+        with self._lock, session_scope() as s:
+            claimed = (
+                s.query(self._model())
+                .filter(
+                    self._model().task_id == task_id,
+                    self._model().status == PROCESSING,
+                )
+                .update({"processing_started_at": _now()})
+            )
+            s.commit()
+            return bool(claimed)
 
     def depth(self, queue_name):
         return db_ops.count_tasks(PENDING, queue_name) + db_ops.count_tasks(DELAYED, queue_name)

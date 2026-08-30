@@ -192,8 +192,13 @@ class SimulatedBroker(BrokerAdapter):
 
     # -- 状态重建 -----------------------------------------------------------
     def _ensure_state(self) -> None:
-        """从 trade_log 重建现金与持仓 (幂等; 每个交易日首次访问时重建)."""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        """从 trade_log 重建现金与持仓 (幂等; 每个交易日首次访问时重建).
+
+        available 按 T+1 回放: 买入日早于今天的份额计入可用, 当日买入冻结;
+        卖出按时间序冲减可用. 修复旧版回放后 available 恒为 0 导致当日加仓后
+        旧仓被整体冻结无法卖出的问题.
+        """
+        today = datetime.now().strftime("%Y-%m-%d")
         if self._cash is not None and self._today == today:
             return
         initial = float(db_ops.get_config_value("initial_cash", "1000000"))
@@ -213,6 +218,8 @@ class SimulatedBroker(BrokerAdapter):
                 pos["qty"] += t["quantity"]
                 pos["cost"] = total_cost / pos["qty"] if pos["qty"] else 0.0
                 pos["buy_date"] = trade_date
+                if trade_date and trade_date < today:
+                    pos["available"] += t["quantity"]  # 隔日买入已解冻
                 cash -= t["amount"] + t["fee"]
             elif t["side"] == "sell":
                 pos["qty"] = max(pos["qty"] - t["quantity"], 0)
@@ -227,12 +234,13 @@ class SimulatedBroker(BrokerAdapter):
         )
 
     def _refresh_available(self, symbol: str) -> None:
-        """T+1: 过了买入日, 冻结份额转为可用."""
+        """T+1: 过了最后一笔买入日, 冻结份额转为可用."""
         pos = self._positions.get(symbol)
         if not pos or not pos["buy_date"]:
             return
         today = datetime.now().strftime("%Y-%m-%d")
         if pos["buy_date"] < today:
+            # 最后一笔买入已隔日 → 剩余持仓全部可卖 (含当日部分减仓后的余量)
             pos["available"] = pos["qty"]
 
     # -- BrokerAdapter API ----------------------------------------------------

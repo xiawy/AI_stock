@@ -3,6 +3,56 @@ from typing import Annotated
 from ai_stock.dataflows.interface import route_to_vendor
 
 
+def fetch_profit_forecast(ticker: str, curr_date: str):
+    """纯函数内核: 返回供应商原始结果 (一致预期文本), 供程序化调用."""
+    return route_to_vendor("get_profit_forecast", ticker, curr_date)
+
+
+def fetch_hot_stocks(curr_date: str = ""):
+    """纯函数内核: 返回供应商原始结果 (强势股文本), 供程序化调用."""
+    return route_to_vendor("get_hot_stocks", curr_date)
+
+
+def fetch_northbound_flow(curr_date: str, include_history: bool = False):
+    """纯函数内核: 返回供应商原始结果 (北向资金文本), 供程序化调用."""
+    return route_to_vendor("get_northbound_flow", curr_date, include_history)
+
+
+def fetch_concept_blocks(ticker: str):
+    """纯函数内核: 返回供应商原始结果 (所属板块文本), 供程序化调用."""
+    return route_to_vendor("get_concept_blocks", ticker)
+
+
+def fetch_fund_flow(ticker: str, curr_date: str, include_history: bool = True):
+    """纯函数内核: 返回供应商原始结果 (个股资金流文本), 供程序化调用."""
+    return route_to_vendor("get_fund_flow", ticker, curr_date, include_history)
+
+
+def fetch_dragon_tiger_board(ticker: str, curr_date: str, look_back_days: int = 30):
+    """纯函数内核: 返回供应商原始结果 (龙虎榜文本), 供程序化调用."""
+    return route_to_vendor("get_dragon_tiger_board", ticker, curr_date, look_back_days)
+
+
+def fetch_lockup_expiry(ticker: str, curr_date: str, forward_days: int = 90):
+    """纯函数内核: 返回供应商原始结果 (限售解禁文本), 供程序化调用."""
+    return route_to_vendor("get_lockup_expiry", ticker, curr_date, forward_days)
+
+
+def fetch_industry_comparison(ticker: str, curr_date: str):
+    """纯函数内核: 返回供应商原始结果 (行业对比文本), 供程序化调用."""
+    return route_to_vendor("get_industry_comparison", ticker, curr_date)
+
+
+def fetch_impact_news(curr_date: str, hours: int = 12) -> list:
+    """纯函数内核: 返回结构化新闻 list (政策/资讯自动分类), 供程序化调用."""
+    return route_to_vendor("get_impact_news", curr_date, hours)
+
+
+def fetch_limit_up_stocks(curr_date: str, days: int = 7) -> list:
+    """纯函数内核: 返回结构化涨停股 list (含 reason_tags), 供程序化调用."""
+    return route_to_vendor("get_limit_up_stocks", curr_date, days)
+
+
 @tool
 def get_profit_forecast(
     ticker: Annotated[str, "A-stock code (e.g. 688017)"],
@@ -24,7 +74,7 @@ def get_profit_forecast(
     Returns:
         str: Consensus forecast report with valuation metrics
     """
-    return route_to_vendor("get_profit_forecast", ticker, curr_date)
+    return fetch_profit_forecast(ticker, curr_date)
 
 
 @tool
@@ -41,7 +91,7 @@ def get_hot_stocks(
     Returns:
         str: Hot stocks list with reason tags and theme frequency
     """
-    return route_to_vendor("get_hot_stocks", curr_date)
+    return fetch_hot_stocks(curr_date)
 
 
 @tool
@@ -62,7 +112,7 @@ def get_northbound_flow(
     Returns:
         str: Northbound capital flow report with bullish/bearish signal
     """
-    return route_to_vendor("get_northbound_flow", curr_date, include_history)
+    return fetch_northbound_flow(curr_date, include_history)
 
 
 @tool
@@ -79,7 +129,7 @@ def get_concept_blocks(
     Returns:
         str: Concept and sector block membership with daily changes
     """
-    return route_to_vendor("get_concept_blocks", ticker)
+    return fetch_concept_blocks(ticker)
 
 
 @tool
@@ -102,7 +152,7 @@ def get_fund_flow(
     Returns:
         str: Fund flow report with main force signal
     """
-    return route_to_vendor("get_fund_flow", ticker, curr_date, include_history)
+    return fetch_fund_flow(ticker, curr_date, include_history)
 
 
 @tool
@@ -122,7 +172,7 @@ def get_dragon_tiger_board(
     Returns:
         str: LHB appearances with seat details and institutional activity
     """
-    return route_to_vendor("get_dragon_tiger_board", ticker, curr_date, look_back_days)
+    return fetch_dragon_tiger_board(ticker, curr_date, look_back_days)
 
 
 @tool
@@ -142,7 +192,7 @@ def get_lockup_expiry(
     Returns:
         str: Lockup expiry schedule with impact assessment
     """
-    return route_to_vendor("get_lockup_expiry", ticker, curr_date, forward_days)
+    return fetch_lockup_expiry(ticker, curr_date, forward_days)
 
 
 @tool
@@ -160,7 +210,7 @@ def get_industry_comparison(
     Returns:
         str: Industry performance ranking with key metrics
     """
-    return route_to_vendor("get_industry_comparison", ticker, curr_date)
+    return fetch_industry_comparison(ticker, curr_date)
 
 
 @tool
@@ -178,7 +228,7 @@ def get_impact_news(
     Returns:
         str: Formatted news list with titles, sources, and categories
     """
-    result = route_to_vendor("get_impact_news", curr_date, hours)
+    result = fetch_impact_news(curr_date, hours)
     if isinstance(result, list):
         if not result:
             return f"No impactful news found for {curr_date} (past {hours}h)"
@@ -205,7 +255,7 @@ def get_limit_up_stocks(
     Returns:
         str: Formatted list of limit-up stocks with reason tags
     """
-    result = route_to_vendor("get_limit_up_stocks", curr_date, days)
+    result = fetch_limit_up_stocks(curr_date, days)
     if isinstance(result, list):
         if not result:
             return f"No limit-up stocks found for {curr_date} (past {days} trading days)"

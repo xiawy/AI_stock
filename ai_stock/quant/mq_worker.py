@@ -89,6 +89,16 @@ class TaskConsumer(threading.Thread):
             outcome = self.backend.fail(task_id, f"no handler for {task_type}")
             self._notify_dead(task, outcome)
             return
+        # 长任务锁续期: handler 时长可能超过 LOCK_TTL_SECONDS (选股深分析含多轮
+        # LLM 调用), 不续期会被 sweep_timeouts 误判为死亡消费者而重复派发.
+        renew_stop = threading.Event()
+        renew_thread = threading.Thread(
+            target=self._renew_loop,
+            args=(task_id, renew_stop),
+            name=f"lock-renew-{task_id[:24]}",
+            daemon=True,
+        )
+        renew_thread.start()
         try:
             result = handler(task) or {}
             self.backend.ack(task_id)
@@ -105,6 +115,17 @@ class TaskConsumer(threading.Thread):
             )
             outcome = self.backend.fail(task_id, str(exc), RETRY_BASE_DELAY)
             self._notify_dead(task, outcome)
+        finally:
+            renew_stop.set()
+
+    def _renew_loop(self, task_id: str, stop_event: threading.Event) -> None:
+        """每 LOCK_TTL/5 续期一次抢占锁, 直到任务结束."""
+        interval = max(LOCK_TTL_SECONDS // 5, 1)
+        while not stop_event.wait(interval):
+            try:
+                self.backend.renew_lock(task_id, self.consumer_id)
+            except Exception as exc:
+                logger.debug("Lock renew failed for %s: %s", task_id, exc)
 
     def _notify_dead(self, task: dict, outcome: str) -> None:
         if outcome in ("dead", DEAD) and self.on_dead_letter is not None:

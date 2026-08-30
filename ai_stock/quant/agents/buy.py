@@ -471,9 +471,15 @@ class SecondVerificationAgent(BaseAgent):
         tech = context.get("tech_signal") or {}
         catalyst = (context.get("catalyst_event") or {}).get("catalyst") or {}
 
-        news = self.data.get_stock_news(symbol, hours=72)
-        fundamentals = self.data.get_fundamentals_text(symbol)
-        quote = self.data.get_realtime_quote(symbol)
+        # 辅助数据获取容错: 新闻/基本面/行情任一数据源故障不阻断验证步骤,
+        # 降级为空数据继续 (避免任务重试进死信后 flow 挂起; LLM 关卡仍必经)
+        try:
+            news = self.data.get_stock_news(symbol, hours=72)
+            fundamentals = self.data.get_fundamentals_text(symbol)
+            quote = self.data.get_realtime_quote(symbol)
+        except Exception as exc:
+            logger.warning("Second verification data fetch degraded for %s: %s", symbol, exc)
+            news, fundamentals, quote = [], "", None
         news_digest = "\n".join(
             f"- [{n.get('time', '')}] {n.get('title', '')}" for n in news[:10]
         )
@@ -576,7 +582,11 @@ class PositionOpenAgent(BaseAgent):
         # 1) 计算买入金额: 可用资金 × 20% (§2.2)
         snapshot = account_snapshot()
         budget = snapshot.get("available_cash", 0.0) * BUY_POSITION_RATIO
-        quote = self.data.get_realtime_quote(symbol)
+        try:
+            quote = self.data.get_realtime_quote(symbol)
+        except Exception as exc:
+            logger.warning("Position open quote fetch failed for %s: %s", symbol, exc)
+            quote = None
         if not quote or budget <= 0:
             result = {
                 "decision": "rejected", "abort": True,

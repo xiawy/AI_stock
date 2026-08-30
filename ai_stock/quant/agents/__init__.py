@@ -32,8 +32,8 @@ from .hold import (
     handle_hold_scan,
 )
 from .risk import RiskScanAgent, handle_force_reduce
+from .macro_event import MacroEventAgent
 from .selection import (
-    DeepAnalysisAgent,
     IndustryScanAgent,
     LimitUpMonitorAgent,
     StockSelectionAgent,
@@ -42,10 +42,10 @@ from .selection import (
 
 __all__ = [
     "BaseAgent",
+    "MacroEventAgent",
     "IndustryScanAgent",
     "LimitUpMonitorAgent",
     "StockSelectionAgent",
-    "DeepAnalysisAgent",
     "LogicCollapseAgent",
     "TechSignalAgent",
     "CatalystAgent",
@@ -72,10 +72,11 @@ def build_handlers() -> dict[str, dict[str, Callable[[dict], dict]]]:
     from ..orchestrator import get_orchestrator
 
     selection_agents = {
+        "macro_event": MacroEventAgent().handle,
         "industry_scan": IndustryScanAgent().handle,
         "limit_up_monitor": LimitUpMonitorAgent().handle,
+        # 深度分析已合并入 stock_selection (优化点 1), 无独立 deep_analysis 步
         "stock_selection": StockSelectionAgent().handle,
-        "deep_analysis": DeepAnalysisAgent().handle,
     }
     buy_agents = {
         "logic_collapse_check": LogicCollapseAgent().handle,

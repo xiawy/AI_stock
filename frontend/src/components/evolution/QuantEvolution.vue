@@ -183,18 +183,19 @@ async function triggerEvolve() {
     ElMessage.warning('自选池暂无活跃标的，进化需要至少 1 个有 ≥60 根日K的标的')
     return
   }
+  evolving.value = true
   try {
     await quantApi.evolve({ symbols })
-    evolving.value = true
     ElMessage.success(`进化任务已启动（样本 ${symbols.length} 支，后台运行）`)
-    // 拉行情 + 三段回测需要时间，延迟两次自动刷新
+    // 拉行情 + 三段回测需要时间，延迟两次自动刷新 (携带当前状态过滤)
     refreshTimers.push(
-      setTimeout(() => { evolving.value = false; loadEvolutions() }, 10_000),
+      setTimeout(loadEvolutions, 10_000),
       setTimeout(loadEvolutions, 30_000),
     )
   } catch {
-    evolving.value = false
     /* 错误提示由 axios 拦截器统一处理 */
+  } finally {
+    evolving.value = false
   }
 }
 

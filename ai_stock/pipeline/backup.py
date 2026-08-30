@@ -4,9 +4,9 @@ Once the local time passes ``BACKUP_DAILY_AT`` (23:30), the day's latest
 completed snapshot is exported to ``<data-dir>/backups/rankings_<date>.json``
 containing:
 
-- 新闻榜 — news items of the snapshot
-- 行业榜 — industry rankings of the snapshot
-- 热股榜 — stock recommendations of the snapshot
+- 新闻榜 — news items of the pipeline snapshot
+- 行业榜 — quant 选股流程产出的行业榜 (quant_industry_board)
+- 热股榜 — 自选池当日快照 (quant_stock_pool_optional)
 
 The backup is idempotent (an existing file for the date is kept as-is), runs
 in its own thread via the pipeline scheduler, and doubles as the recovery
@@ -61,6 +61,7 @@ def backup_today_data(date_str: str | None = None) -> dict:
     scheduler job cannot spam tracebacks.
     """
     from . import db_ops
+    from ai_stock.quant import db_ops as quant_db_ops
 
     if date_str is None:
         date_str = datetime.now().strftime("%Y-%m-%d")
@@ -71,13 +72,14 @@ def backup_today_data(date_str: str | None = None) -> dict:
         return {"status": "skipped", "path": str(target)}
 
     try:
-        core = db_ops.get_snapshot_by_date(date_str)  # 新闻榜 + 热股榜
-        industry = db_ops.get_industry_rankings_by_date(date_str)  # 行业榜
+        core = db_ops.get_snapshot_by_date(date_str)  # 新闻榜
+        industry = quant_db_ops.get_industry_board_by_date(date_str)  # 行业榜
+        hot_stocks = quant_db_ops.get_optional_pool_as_of(date_str)  # 热股榜 (自选池)
     except Exception as exc:
         logger.error("Backup read failed for %s: %s", date_str, exc)
         return {"status": "failed", "error": str(exc)}
 
-    if core is None and industry is None:
+    if core is None and industry is None and not hot_stocks:
         logger.warning("No completed snapshot for %s; nothing to back up", date_str)
         return {"status": "skipped", "reason": "no data for date", "date": date_str}
 
@@ -86,7 +88,7 @@ def backup_today_data(date_str: str | None = None) -> dict:
         "created_at": datetime.now().isoformat(),
         "snapshot": (core or {}).get("snapshot"),
         "news_items": (core or {}).get("news_items", []),  # 新闻榜
-        "recommendations": (core or {}).get("recommendations", []),  # 热股榜
+        "recommendations": hot_stocks,  # 热股榜 = 自选池当日快照
         "industry_rankings": (industry or {}).get("rankings", []),  # 行业榜
     }
 
@@ -102,7 +104,7 @@ def backup_today_data(date_str: str | None = None) -> dict:
         return {"status": "failed", "error": str(exc)}
 
     logger.info(
-        "Ranking backup for %s written: %d news, %d industries, %d recommendations",
+        "Ranking backup for %s written: %d news, %d industries, %d hot stocks",
         date_str,
         len(payload["news_items"]),
         len(payload["industry_rankings"]),

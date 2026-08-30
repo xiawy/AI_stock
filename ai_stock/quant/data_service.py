@@ -1,8 +1,9 @@
 """Structured data service for quant agents (设计文档 §9.1).
 
-把现有 ``ai_stock.dataflows`` 的文本型接口适配成结构化数据, 统一经过
-熔断器 + 三级缓存:
-- 板块资金流 / 涨停股 / 板块龙头 — 直接复用 pipeline_data 的结构化函数
+取数统一走共享工具层 ``ai_stock.tools`` (fetch_* 纯函数内核), 本层负责适配成结构化数据,
+统一经过熔断器 + 三级缓存:
+- 涨停股 / 新闻 / 基本面 / 解禁 / 增减持 / 盈利预测 / 概念板块 — ai_stock.tools 内核
+- 板块资金流 / 板块成分股 — 直接复用 pipeline_data 的结构化函数
 - K 线 — 解析 get_stock_data 的 CSV 文本 → DataFrame → stockstats 本地算指标
 - 实时行情 — 东财 push2 单股接口 (复用 a_stock 的节流 _em_get)
 - 外部接口返回 None/异常时返回缓存兜底并打告警日志, 不直接上抛策略层.
@@ -11,7 +12,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from typing import Optional
 
@@ -19,6 +20,16 @@ from .cache_manager import get_breaker, get_cache_manager
 from .config import CACHE_TTL
 
 logger = logging.getLogger(__name__)
+
+# A 股市场时区。拼装"当前日期"必须按市场所在地算, 不能用主机本地时区——
+# 主机时区偏东/偏西会让本地日期超前/落后市场当天, 导致未来函数告警误报、
+# 涨停/新闻/解禁等按日期取数错过或错取交易日 (与 a_stock._market_today 同理).
+_MARKET_TZ = timezone(timedelta(hours=8))
+
+
+def _market_today() -> str:
+    """A 股市场当前日期 (YYYY-MM-DD), 与主机时区无关."""
+    return datetime.now(_MARKET_TZ).strftime("%Y-%m-%d")
 
 
 class DataService:
@@ -68,10 +79,10 @@ class DataService:
     def get_limit_up_stocks(self, days: int = 1) -> list[dict]:
         """近 N 个交易日涨停股 (含 reason_tags 行业归因)."""
         def _fetch() -> list[dict]:
-            from ai_stock.dataflows.pipeline_data import get_limit_up_stocks
+            from ai_stock.tools import fetch_limit_up_stocks
 
-            return get_limit_up_stocks(
-                datetime.now().strftime("%Y-%m-%d"), days=days,
+            return fetch_limit_up_stocks(
+                _market_today(), days=days,
             )
 
         return self.cache.get_or_fetch(
@@ -83,24 +94,42 @@ class DataService:
             allow_fallback_stale=True,
         ) or []
 
-    def get_board_leaders(self, board_code: str, top_n: int = 6) -> list[dict]:
-        """板块龙头股: 领涨+板块最相关+弹性最大 (code/name/change_pct/turnover_rate...)."""
-        if not board_code:
+    def get_all_industries(self) -> list[dict]:
+        """东财全部分类板块列表 (行业 + 概念, 含当日量价与主力资金)."""
+        return self.get_all_board_fund_flow()
+
+    def get_industry_detail(self, industry_code: str) -> Optional[dict]:
+        """单个板块的当日涨跌幅/主力净流入/领涨股等 (取自全板块资金流)."""
+        if not industry_code:
+            return None
+        for board in self.get_all_board_fund_flow():
+            if board.get("code") == industry_code:
+                return board
+        return None
+
+    def get_industry_stocks(
+        self,
+        industry_code: str,
+        top_n: int = 20,
+        sort_by: str = "amount",
+    ) -> list[dict]:
+        """板块成分股 (按成交额/市值降序, 取流动性较好的前 top_n 只)."""
+        if not industry_code:
             return []
 
         def _fetch() -> list[dict]:
-            from ai_stock.dataflows.pipeline_data import get_industry_leader_stocks
+            from ai_stock.dataflows.pipeline_data import get_board_constituents
 
-            return get_industry_leader_stocks(board_code, top_n=top_n)
+            return get_board_constituents(industry_code, top_n=top_n, sort_by=sort_by)
 
-        return self.cache.get_or_fetch(
-            f"board_leaders:{board_code}:{top_n}",
+        return (self.cache.get_or_fetch(
+            f"board_constituents:{industry_code}:{sort_by}:{top_n}",
             _fetch,
-            ttl=CACHE_TTL["realtime_quote"],
+            ttl=CACHE_TTL["fund_flow"],
             category="fund_flow",
-            breaker=get_breaker("board_leaders"),
+            breaker=get_breaker("board_constituents"),
             allow_fallback_stale=True,
-        ) or []
+        ) or [])[:top_n]
 
     # ------------------------------------------------------------------
     # 个股 K 线 + 技术指标 (本地 stockstats 计算)
@@ -110,8 +139,8 @@ class DataService:
         """个股日 K DataFrame (Date/Open/High/Low/Close/Volume), 解析自 get_stock_data."""
         import pandas as pd
 
-        end = datetime.now().strftime("%Y-%m-%d")
-        start = (datetime.now() - timedelta(days=int(lookback_days * 1.7) + 15)).strftime(
+        end = _market_today()
+        start = (datetime.now(_MARKET_TZ) - timedelta(days=int(lookback_days * 1.7) + 15)).strftime(
             "%Y-%m-%d",
         )
 
@@ -129,7 +158,11 @@ class DataService:
             for col in ("Open", "High", "Low", "Close"):
                 df[col] = df[col].astype(float)
             df["Volume"] = df["Volume"].astype(float)
-            return df.tail(lookback_days).reset_index(drop=True)
+            df = df.tail(lookback_days).reset_index(drop=True)
+            # 转 JSON 可序列化结构再入缓存 (DataFrame 直接存会被
+            # json.dumps(default=str) 压成字符串, 跨进程/重启后读回损坏)
+            df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
+            return df.to_dict(orient="list")
 
         cached = self.cache.get_or_fetch(
             f"ohlcv:{symbol}:{lookback_days}",
@@ -144,8 +177,14 @@ class DataService:
         try:
             import pandas as pd
 
+            if not isinstance(cached, dict):
+                # 历史脏数据 (旧版 DataFrame 被压成字符串), 丢弃待下次回源刷新
+                logger.warning("ohlcv cache payload not a dict for %s, refetch later", symbol)
+                return None
             df = pd.DataFrame(cached)
             df["Date"] = pd.to_datetime(df["Date"])
+            for col in ("Open", "High", "Low", "Close", "Volume"):
+                df[col] = df[col].astype(float)
             return df
         except Exception as exc:
             logger.warning("ohlcv cache decode failed for %s: %s", symbol, exc)
@@ -200,6 +239,40 @@ class DataService:
     # 实时行情 (东财 push2 单股)
     # ------------------------------------------------------------------
 
+    def _degraded_quote_from_ohlcv(self, code: str) -> Optional[dict]:
+        """实时行情完全不可用时的降级兜底 (§9.1): 用最近 K 线构造近似行情.
+        price=最新收盘, prev_close=前一交易日收盘; 涨跌停价按昨收 ±比例计算,
+        与真实行情语义一致 (末根确实收于涨/跌停时依然会触发风控拒买/拒卖)."""
+        try:
+            df = self.get_ohlcv(code, lookback_days=10)
+        except Exception:
+            return None
+        if df is None or len(df) == 0:
+            return None
+        price = float(df.iloc[-1]["Close"])
+        if price <= 0:
+            return None
+        prev_close = float(df.iloc[-2]["Close"]) if len(df) >= 2 else price
+        if prev_close <= 0:
+            prev_close = price
+        limit_ratio = 0.30 if code.startswith(("4", "8", "92")) else (
+            0.20 if code.startswith(("300", "301", "688", "689")) else 0.10
+        )
+        change_pct = (price / prev_close - 1.0) * 100 if prev_close else 0.0
+        return {
+            "symbol": code,
+            "name": "",
+            "price": price,
+            "prev_close": prev_close,
+            "change_pct": round(change_pct, 2),
+            "limit_up": round(prev_close * (1 + limit_ratio), 2),
+            "limit_down": round(prev_close * (1 - limit_ratio), 2),
+            "limit_ratio": limit_ratio,
+            "market_cap": 0.0,
+            "float_mcap": 0.0,
+            "degraded_from_ohlcv": True,
+        }
+
     def get_realtime_quote(self, symbol: str) -> Optional[dict]:
         """实时行情: {price, prev_close, change_pct, limit_up, limit_down, name}.
 
@@ -245,14 +318,25 @@ class DataService:
                 "float_mcap": _to_float(d.get("f117")),
             }
 
-        return self.cache.get_or_fetch(
-            f"quote:{code}",
-            _fetch,
-            ttl=CACHE_TTL["realtime_quote"],
-            category="realtime_quote",
-            breaker=get_breaker("realtime_quote"),
-            allow_fallback_stale=True,
-        )
+        try:
+            return self.cache.get_or_fetch(
+                f"quote:{code}",
+                _fetch,
+                ttl=CACHE_TTL["realtime_quote"],
+                category="realtime_quote",
+                breaker=get_breaker("realtime_quote"),
+                allow_fallback_stale=True,
+            )
+        except Exception:
+            # 熔断打开且无过期缓存可兜底时: 降级到最近 K 线收盘 (§9.1),
+            # 保证业务步骤给出确定性结论, 而不是任务重试进死信后 flow 挂起.
+            degraded = self._degraded_quote_from_ohlcv(code)
+            if degraded is not None:
+                logger.warning(
+                    "realtime quote unavailable for %s; degraded to last OHLCV close", code,
+                )
+                return degraded
+            raise
 
     def get_batch_quotes(self, symbols: list[str]) -> dict[str, dict]:
         """批量实时行情 (逐个调用, 走同一缓存)."""
@@ -270,10 +354,10 @@ class DataService:
     def get_stock_news(self, symbol: str, hours: int = 48) -> list[dict]:
         """个股相关新闻 (结构化 list, 来自 impact news 采集)."""
         def _fetch() -> list[dict]:
-            from ai_stock.dataflows.pipeline_data import get_impact_news
+            from ai_stock.tools import fetch_impact_news
 
-            items = get_impact_news(
-                datetime.now().strftime("%Y-%m-%d"), hours=hours,
+            items = fetch_impact_news(
+                _market_today(), hours=hours,
             )
             code = str(symbol).lower().removeprefix("sh").removeprefix("sz")
             name_hint = ""
@@ -302,9 +386,9 @@ class DataService:
     def get_global_news(self, hours: int = 24) -> list[dict]:
         """全球/宏观财经快讯."""
         def _fetch() -> list[dict]:
-            from ai_stock.dataflows.pipeline_data import get_impact_news
+            from ai_stock.tools import fetch_impact_news
 
-            return get_impact_news(datetime.now().strftime("%Y-%m-%d"), hours=hours)
+            return fetch_impact_news(_market_today(), hours=hours)
 
         return self.cache.get_or_fetch(
             f"global_news:{hours}h",
@@ -315,12 +399,30 @@ class DataService:
             allow_fallback_stale=True,
         ) or []
 
+    def get_hot_news(self, days: int = 3) -> list[dict]:
+        """近 N 日全市场热点新闻/政策快讯 (宏观事件解析用)."""
+        hours = int(days) * 24
+
+        def _fetch() -> list[dict]:
+            from ai_stock.tools import fetch_impact_news
+
+            return fetch_impact_news(_market_today(), hours=hours)
+
+        return self.cache.get_or_fetch(
+            f"hot_news:{days}d",
+            _fetch,
+            ttl=CACHE_TTL["news"],
+            category="news",
+            breaker=get_breaker("hot_news"),
+            allow_fallback_stale=True,
+        ) or []
+
     def get_fundamentals_text(self, symbol: str) -> str:
         """基本面综合文本 (估值/盈利/财务摘要, 给 LLM 消费)."""
         def _fetch() -> str:
-            from ai_stock.dataflows.a_stock import get_fundamentals
+            from ai_stock.tools import fetch_fundamentals
 
-            return get_fundamentals(symbol, datetime.now().strftime("%Y-%m-%d"))
+            return fetch_fundamentals(symbol, _market_today())
 
         return self.cache.get_or_fetch(
             f"fundamentals:{symbol}",
@@ -334,9 +436,9 @@ class DataService:
     def get_lockup_expiry_text(self, symbol: str) -> str:
         """限售解禁日程文本."""
         def _fetch() -> str:
-            from ai_stock.dataflows.a_stock import get_lockup_expiry
+            from ai_stock.tools import fetch_lockup_expiry
 
-            return get_lockup_expiry(symbol, datetime.now().strftime("%Y-%m-%d"))
+            return fetch_lockup_expiry(symbol, _market_today())
 
         return self.cache.get_or_fetch(
             f"lockup:{symbol}",
@@ -350,9 +452,9 @@ class DataService:
     def get_insider_text(self, symbol: str) -> str:
         """高管/大股东增减持文本."""
         def _fetch() -> str:
-            from ai_stock.dataflows.a_stock import get_insider_transactions
+            from ai_stock.tools import fetch_insider_transactions
 
-            return get_insider_transactions(symbol)
+            return fetch_insider_transactions(symbol)
 
         return self.cache.get_or_fetch(
             f"insider:{symbol}",
@@ -366,9 +468,11 @@ class DataService:
     def get_profit_forecast_text(self, symbol: str) -> str:
         """一致预期 EPS / 前瞻 PE / PEG 文本."""
         def _fetch() -> str:
-            from ai_stock.dataflows.a_stock import get_profit_forecast
+            from ai_stock.tools import fetch_profit_forecast
 
-            return get_profit_forecast(symbol)
+            # 传市场当前日期: 主机时区偏西时本地日期会落后市场当天,
+            # 被数据层 _is_historical 判成复盘, 预测文本会凭空多出未来函数告警.
+            return fetch_profit_forecast(symbol, _market_today())
 
         return self.cache.get_or_fetch(
             f"forecast:{symbol}",
@@ -382,9 +486,9 @@ class DataService:
     def get_concept_blocks(self, symbol: str) -> list[str]:
         """个股所属概念/行业板块名列表."""
         def _fetch() -> list[str]:
-            from ai_stock.dataflows.a_stock import get_concept_blocks
+            from ai_stock.tools import fetch_concept_blocks
 
-            text = get_concept_blocks(symbol) or ""
+            text = fetch_concept_blocks(symbol) or ""
             # 输出为格式化文本; 提取板块名行 (## xxx / - xxx)
             names = []
             for line in text.splitlines():
@@ -445,8 +549,9 @@ def compute_indicators(df) -> dict:
     try:
         out["volume_series"] = [round(float(v), 0) for v in df["Volume"].tail(5)]
         out["close_series"] = [round(float(v), 2) for v in df["Close"].tail(5)]
-        out["high_series"] = [round(float(v), 2) for v in df["High"].tail(10)]
-        out["low_series"] = [round(float(v), 2) for v in df["Low"].tail(10)]
+        # 高低序列给突破/缺口判断用, 需 ≥11 根 (AddPositionAgent 要求 >=11)
+        out["high_series"] = [round(float(v), 2) for v in df["High"].tail(21)]
+        out["low_series"] = [round(float(v), 2) for v in df["Low"].tail(21)]
     except Exception:
         pass
     return out

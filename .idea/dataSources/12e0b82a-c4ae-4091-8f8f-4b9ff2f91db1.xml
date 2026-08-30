@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<dataSource name="quant.db">
+<dataSource name="aistock.db">
   <database-model serializer="dbm" dbms="SQLITE" family-id="SQLITE" format-version="4.54">
     <root id="1">
       <ServerVersion>3.51.1</ServerVersion>
@@ -345,230 +345,230 @@
       <Deterministic>1</Deterministic>
       <Variadic>1</Variadic>
     </routine>
-    <routine id="121" parent="1" name="ceiling">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="122" parent="1" name="total_changes"/>
-    <routine id="123" parent="1" name="changes"/>
-    <routine id="124" parent="1" name="unistr_quote">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="125" parent="1" name="sqlite_version"/>
-    <routine id="126" parent="1" name="degrees">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="127" parent="1" name="floor">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="128" parent="1" name="glob">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="129" parent="1" name="zeroblob">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="130" parent="1" name="hex">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="131" parent="1" name="sqlite_source_id"/>
-    <routine id="132" parent="1" name="format">
+    <routine id="121" parent="1" name="concat">
       <Deterministic>1</Deterministic>
       <Variadic>1</Variadic>
     </routine>
-    <routine id="133" parent="1" name="datetime">
+    <routine id="122" parent="1" name="ceiling">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="123" parent="1" name="total_changes"/>
+    <routine id="124" parent="1" name="changes"/>
+    <routine id="125" parent="1" name="unistr_quote">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="126" parent="1" name="sqlite_version"/>
+    <routine id="127" parent="1" name="if">
       <Deterministic>1</Deterministic>
       <Variadic>1</Variadic>
     </routine>
-    <routine id="134" parent="1" name="cume_dist">
-      <FunctionType>window</FunctionType>
-    </routine>
-    <routine id="135" parent="1" name="ln">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="136" parent="1" name="instr">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="137" parent="1" name="json">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="138" parent="1" name="dense_rank">
-      <FunctionType>window</FunctionType>
-    </routine>
-    <routine id="139" parent="1" name="log">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="140" parent="1" name="log">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="141" parent="1" name="ifnull">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="142" parent="1" name="jsonb">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="143" parent="1" name="current_date"/>
-    <routine id="144" parent="1" name="current_time"/>
-    <routine id="145" parent="1" name="lag">
-      <FunctionType>window</FunctionType>
-    </routine>
-    <routine id="146" parent="1" name="lag">
-      <FunctionType>window</FunctionType>
-    </routine>
-    <routine id="147" parent="1" name="lag">
-      <FunctionType>window</FunctionType>
-    </routine>
-    <routine id="148" parent="1" name="mod">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="149" parent="1" name="log2">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="150" parent="1" name="like">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="151" parent="1" name="like">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="152" parent="1" name="max">
-      <FunctionType>window</FunctionType>
-    </routine>
-    <routine id="153" parent="1" name="min">
-      <FunctionType>window</FunctionType>
-    </routine>
-    <routine id="154" parent="1" name="lead">
-      <FunctionType>window</FunctionType>
-    </routine>
-    <routine id="155" parent="1" name="lead">
-      <FunctionType>window</FunctionType>
-    </routine>
-    <routine id="156" parent="1" name="lead">
-      <FunctionType>window</FunctionType>
-    </routine>
-    <routine id="157" parent="1" name="log10">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="158" parent="1" name="lower">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="159" parent="1" name="ltrim">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="160" parent="1" name="ltrim">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="161" parent="1" name="first_value">
-      <FunctionType>window</FunctionType>
-    </routine>
-    <routine id="162" parent="1" name="pi">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="163" parent="1" name="length">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="164" parent="1" name="likely">
-      <Deterministic>1</Deterministic>
-    </routine>
-    <routine id="165" parent="1" name="json_set">
+    <routine id="128" parent="1" name="coalesce">
       <Deterministic>1</Deterministic>
       <Variadic>1</Variadic>
     </routine>
-    <routine id="166" parent="1" name="upper_quartile">
+    <routine id="129" parent="1" name="degrees">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="130" parent="1" name="floor">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="131" parent="1" name="glob">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="132" parent="1" name="zeroblob">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="133" parent="1" name="hex">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="134" parent="1" name="iif">
+      <Deterministic>1</Deterministic>
+      <Variadic>1</Variadic>
+    </routine>
+    <routine id="135" parent="1" name="sqlite_source_id"/>
+    <routine id="136" parent="1" name="concat_ws">
+      <Deterministic>1</Deterministic>
+      <Variadic>1</Variadic>
+    </routine>
+    <routine id="137" parent="1" name="format">
+      <Deterministic>1</Deterministic>
+      <Variadic>1</Variadic>
+    </routine>
+    <routine id="138" parent="1" name="datetime">
+      <Deterministic>1</Deterministic>
+      <Variadic>1</Variadic>
+    </routine>
+    <routine id="139" parent="1" name="cume_dist">
+      <FunctionType>window</FunctionType>
+    </routine>
+    <routine id="140" parent="1" name="ln">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="141" parent="1" name="instr">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="142" parent="1" name="json">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="143" parent="1" name="dense_rank">
+      <FunctionType>window</FunctionType>
+    </routine>
+    <routine id="144" parent="1" name="log">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="145" parent="1" name="log">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="146" parent="1" name="ifnull">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="147" parent="1" name="jsonb">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="148" parent="1" name="current_date"/>
+    <routine id="149" parent="1" name="current_time"/>
+    <routine id="150" parent="1" name="lag">
+      <FunctionType>window</FunctionType>
+    </routine>
+    <routine id="151" parent="1" name="lag">
+      <FunctionType>window</FunctionType>
+    </routine>
+    <routine id="152" parent="1" name="lag">
+      <FunctionType>window</FunctionType>
+    </routine>
+    <routine id="153" parent="1" name="mod">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="154" parent="1" name="log2">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="155" parent="1" name="like">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="156" parent="1" name="like">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="157" parent="1" name="max">
+      <Deterministic>1</Deterministic>
+      <Variadic>1</Variadic>
+    </routine>
+    <routine id="158" parent="1" name="max">
+      <FunctionType>window</FunctionType>
+    </routine>
+    <routine id="159" parent="1" name="min">
+      <Deterministic>1</Deterministic>
+      <Variadic>1</Variadic>
+    </routine>
+    <routine id="160" parent="1" name="min">
+      <FunctionType>window</FunctionType>
+    </routine>
+    <routine id="161" parent="1" name="lead">
+      <FunctionType>window</FunctionType>
+    </routine>
+    <routine id="162" parent="1" name="lead">
+      <FunctionType>window</FunctionType>
+    </routine>
+    <routine id="163" parent="1" name="lead">
+      <FunctionType>window</FunctionType>
+    </routine>
+    <routine id="164" parent="1" name="log10">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="165" parent="1" name="lower">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="166" parent="1" name="ltrim">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="167" parent="1" name="ltrim">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="168" parent="1" name="first_value">
+      <FunctionType>window</FunctionType>
+    </routine>
+    <routine id="169" parent="1" name="pi">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="170" parent="1" name="length">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="171" parent="1" name="likely">
+      <Deterministic>1</Deterministic>
+    </routine>
+    <routine id="172" parent="1" name="json_set">
+      <Deterministic>1</Deterministic>
+      <Variadic>1</Variadic>
+    </routine>
+    <routine id="173" parent="1" name="upper_quartile">
       <FunctionType>aggregate</FunctionType>
     </routine>
-    <routine id="167" parent="1" name="lower_quartile">
+    <routine id="174" parent="1" name="lower_quartile">
       <FunctionType>aggregate</FunctionType>
     </routine>
-    <routine id="168" parent="1" name="mode">
+    <routine id="175" parent="1" name="mode">
       <FunctionType>aggregate</FunctionType>
     </routine>
-    <routine id="169" parent="1" name="variance">
+    <routine id="176" parent="1" name="variance">
       <FunctionType>aggregate</FunctionType>
     </routine>
-    <routine id="170" parent="1" name="stdev">
+    <routine id="177" parent="1" name="stdev">
       <FunctionType>aggregate</FunctionType>
     </routine>
-    <routine id="171" parent="1" name="strfilter"/>
-    <routine id="172" parent="1" name="offsets"/>
-    <routine id="173" parent="1" name="fts5_get_locale">
+    <routine id="178" parent="1" name="strfilter"/>
+    <routine id="179" parent="1" name="offsets"/>
+    <routine id="180" parent="1" name="fts5_get_locale">
       <Variadic>1</Variadic>
     </routine>
-    <routine id="174" parent="1" name="rtreedepth"/>
-    <routine id="175" parent="1" name="snippet">
+    <routine id="181" parent="1" name="rtreedepth"/>
+    <routine id="182" parent="1" name="snippet">
       <Variadic>1</Variadic>
     </routine>
-    <routine id="176" parent="1" name="fts3_tokenizer"/>
-    <routine id="177" parent="1" name="fts3_tokenizer"/>
-    <routine id="178" parent="1" name="charindex"/>
-    <routine id="179" parent="1" name="charindex"/>
-    <routine id="180" parent="1" name="match"/>
-    <routine id="181" parent="1" name="leftstr"/>
-    <routine id="182" parent="1" name="rightstr"/>
-    <routine id="183" parent="1" name="matchinfo"/>
-    <routine id="184" parent="1" name="matchinfo"/>
-    <routine id="185" parent="1" name="fts5"/>
-    <routine id="186" parent="1" name="padl"/>
-    <routine id="187" parent="1" name="atn2"/>
-    <routine id="188" parent="1" name="coth"/>
-    <routine id="189" parent="1" name="replicate"/>
-    <routine id="190" parent="1" name="median">
+    <routine id="183" parent="1" name="fts3_tokenizer"/>
+    <routine id="184" parent="1" name="fts3_tokenizer"/>
+    <routine id="185" parent="1" name="charindex"/>
+    <routine id="186" parent="1" name="charindex"/>
+    <routine id="187" parent="1" name="match"/>
+    <routine id="188" parent="1" name="leftstr"/>
+    <routine id="189" parent="1" name="rightstr"/>
+    <routine id="190" parent="1" name="matchinfo"/>
+    <routine id="191" parent="1" name="matchinfo"/>
+    <routine id="192" parent="1" name="fts5"/>
+    <routine id="193" parent="1" name="padl"/>
+    <routine id="194" parent="1" name="atn2"/>
+    <routine id="195" parent="1" name="coth"/>
+    <routine id="196" parent="1" name="replicate"/>
+    <routine id="197" parent="1" name="median">
       <FunctionType>aggregate</FunctionType>
     </routine>
-    <routine id="191" parent="1" name="fts5_source_id">
+    <routine id="198" parent="1" name="fts5_source_id">
       <Deterministic>1</Deterministic>
     </routine>
-    <routine id="192" parent="1" name="rtreenode"/>
-    <routine id="193" parent="1" name="fts5_insttoken"/>
-    <routine id="194" parent="1" name="rtreecheck">
+    <routine id="199" parent="1" name="rtreenode"/>
+    <routine id="200" parent="1" name="fts5_insttoken"/>
+    <routine id="201" parent="1" name="rtreecheck">
       <Variadic>1</Variadic>
     </routine>
-    <routine id="195" parent="1" name="fts5_locale"/>
-    <routine id="196" parent="1" name="optimize"/>
-    <routine id="197" parent="1" name="square"/>
-    <routine id="198" parent="1" name="regexp">
+    <routine id="202" parent="1" name="fts5_locale"/>
+    <routine id="203" parent="1" name="optimize"/>
+    <routine id="204" parent="1" name="square"/>
+    <routine id="205" parent="1" name="regexp">
       <Variadic>1</Variadic>
     </routine>
-    <routine id="199" parent="1" name="difference"/>
-    <routine id="200" parent="1" name="bm25">
+    <routine id="206" parent="1" name="difference"/>
+    <routine id="207" parent="1" name="bm25">
       <Variadic>1</Variadic>
     </routine>
-    <routine id="201" parent="1" name="cot"/>
-    <routine id="202" parent="1" name="reverse"/>
-    <routine id="203" parent="1" name="highlight">
+    <routine id="208" parent="1" name="cot"/>
+    <routine id="209" parent="1" name="reverse"/>
+    <routine id="210" parent="1" name="highlight">
       <Variadic>1</Variadic>
     </routine>
-    <routine id="204" parent="1" name="padc"/>
-    <routine id="205" parent="1" name="proper"/>
-    <routine id="206" parent="1" name="padr"/>
-    <routine id="207" parent="1" name="concat">
-      <Deterministic>1</Deterministic>
-      <Variadic>1</Variadic>
-    </routine>
-    <routine id="208" parent="1" name="if">
-      <Deterministic>1</Deterministic>
-      <Variadic>1</Variadic>
-    </routine>
-    <routine id="209" parent="1" name="coalesce">
-      <Deterministic>1</Deterministic>
-      <Variadic>1</Variadic>
-    </routine>
-    <routine id="210" parent="1" name="iif">
-      <Deterministic>1</Deterministic>
-      <Variadic>1</Variadic>
-    </routine>
-    <routine id="211" parent="1" name="concat_ws">
-      <Deterministic>1</Deterministic>
-      <Variadic>1</Variadic>
-    </routine>
-    <routine id="212" parent="1" name="max">
-      <Deterministic>1</Deterministic>
-      <Variadic>1</Variadic>
-    </routine>
-    <routine id="213" parent="1" name="min">
-      <Deterministic>1</Deterministic>
-      <Variadic>1</Variadic>
-    </routine>
+    <routine id="211" parent="1" name="padc"/>
+    <routine id="212" parent="1" name="proper"/>
+    <routine id="213" parent="1" name="padr"/>
     <schema id="214" parent="1" name="main">
       <Current>1</Current>
-      <LastIntrospectionLocalTimestamp>2026-08-30.01:20:12</LastIntrospectionLocalTimestamp>
+      <LastIntrospectionLocalTimestamp>2026-08-30.01:20:21</LastIntrospectionLocalTimestamp>
     </schema>
     <argument id="215" parent="14">
       <ArgumentDirection>R</ArgumentDirection>
@@ -1233,11 +1233,11 @@
     <argument id="435" parent="121">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="436" parent="121">
-      <Position>1</Position>
+    <argument id="436" parent="122">
+      <ArgumentDirection>R</ArgumentDirection>
     </argument>
     <argument id="437" parent="122">
-      <ArgumentDirection>R</ArgumentDirection>
+      <Position>1</Position>
     </argument>
     <argument id="438" parent="123">
       <ArgumentDirection>R</ArgumentDirection>
@@ -1245,53 +1245,53 @@
     <argument id="439" parent="124">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="440" parent="124">
-      <Position>1</Position>
+    <argument id="440" parent="125">
+      <ArgumentDirection>R</ArgumentDirection>
     </argument>
     <argument id="441" parent="125">
-      <ArgumentDirection>R</ArgumentDirection>
+      <Position>1</Position>
     </argument>
     <argument id="442" parent="126">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="443" parent="126">
-      <Position>1</Position>
-    </argument>
-    <argument id="444" parent="127">
+    <argument id="443" parent="127">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="445" parent="127">
-      <Position>1</Position>
-    </argument>
-    <argument id="446" parent="128">
+    <argument id="444" parent="128">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="447" parent="128">
+    <argument id="445" parent="129">
+      <ArgumentDirection>R</ArgumentDirection>
+    </argument>
+    <argument id="446" parent="129">
       <Position>1</Position>
     </argument>
-    <argument id="448" parent="128">
+    <argument id="447" parent="130">
+      <ArgumentDirection>R</ArgumentDirection>
+    </argument>
+    <argument id="448" parent="130">
+      <Position>1</Position>
+    </argument>
+    <argument id="449" parent="131">
+      <ArgumentDirection>R</ArgumentDirection>
+    </argument>
+    <argument id="450" parent="131">
+      <Position>1</Position>
+    </argument>
+    <argument id="451" parent="131">
       <Position>2</Position>
     </argument>
-    <argument id="449" parent="129">
+    <argument id="452" parent="132">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="450" parent="129">
+    <argument id="453" parent="132">
       <Position>1</Position>
     </argument>
-    <argument id="451" parent="130">
-      <ArgumentDirection>R</ArgumentDirection>
-    </argument>
-    <argument id="452" parent="130">
-      <Position>1</Position>
-    </argument>
-    <argument id="453" parent="131">
-      <ArgumentDirection>R</ArgumentDirection>
-    </argument>
-    <argument id="454" parent="132">
+    <argument id="454" parent="133">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
     <argument id="455" parent="133">
-      <ArgumentDirection>R</ArgumentDirection>
+      <Position>1</Position>
     </argument>
     <argument id="456" parent="134">
       <ArgumentDirection>R</ArgumentDirection>
@@ -1299,1426 +1299,1117 @@
     <argument id="457" parent="135">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="458" parent="135">
-      <Position>1</Position>
-    </argument>
-    <argument id="459" parent="136">
+    <argument id="458" parent="136">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="460" parent="136">
+    <argument id="459" parent="137">
+      <ArgumentDirection>R</ArgumentDirection>
+    </argument>
+    <argument id="460" parent="138">
+      <ArgumentDirection>R</ArgumentDirection>
+    </argument>
+    <argument id="461" parent="139">
+      <ArgumentDirection>R</ArgumentDirection>
+    </argument>
+    <argument id="462" parent="140">
+      <ArgumentDirection>R</ArgumentDirection>
+    </argument>
+    <argument id="463" parent="140">
       <Position>1</Position>
     </argument>
-    <argument id="461" parent="136">
+    <argument id="464" parent="141">
+      <ArgumentDirection>R</ArgumentDirection>
+    </argument>
+    <argument id="465" parent="141">
+      <Position>1</Position>
+    </argument>
+    <argument id="466" parent="141">
       <Position>2</Position>
     </argument>
-    <argument id="462" parent="137">
+    <argument id="467" parent="142">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="463" parent="137">
+    <argument id="468" parent="142">
       <Position>1</Position>
     </argument>
-    <argument id="464" parent="138">
+    <argument id="469" parent="143">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="465" parent="139">
+    <argument id="470" parent="144">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="466" parent="139">
+    <argument id="471" parent="144">
       <Position>1</Position>
     </argument>
-    <argument id="467" parent="140">
+    <argument id="472" parent="145">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="468" parent="140">
+    <argument id="473" parent="145">
       <Position>1</Position>
     </argument>
-    <argument id="469" parent="140">
+    <argument id="474" parent="145">
       <Position>2</Position>
     </argument>
-    <argument id="470" parent="141">
+    <argument id="475" parent="146">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="471" parent="141">
+    <argument id="476" parent="146">
       <Position>1</Position>
     </argument>
-    <argument id="472" parent="141">
+    <argument id="477" parent="146">
       <Position>2</Position>
     </argument>
-    <argument id="473" parent="142">
+    <argument id="478" parent="147">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="474" parent="142">
+    <argument id="479" parent="147">
       <Position>1</Position>
     </argument>
-    <argument id="475" parent="143">
+    <argument id="480" parent="148">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="476" parent="144">
+    <argument id="481" parent="149">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="477" parent="145">
+    <argument id="482" parent="150">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="478" parent="145">
+    <argument id="483" parent="150">
       <Position>1</Position>
     </argument>
-    <argument id="479" parent="146">
+    <argument id="484" parent="151">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="480" parent="146">
+    <argument id="485" parent="151">
       <Position>1</Position>
     </argument>
-    <argument id="481" parent="146">
+    <argument id="486" parent="151">
       <Position>2</Position>
     </argument>
-    <argument id="482" parent="146">
+    <argument id="487" parent="151">
       <Position>3</Position>
     </argument>
-    <argument id="483" parent="147">
+    <argument id="488" parent="152">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="484" parent="147">
+    <argument id="489" parent="152">
       <Position>1</Position>
     </argument>
-    <argument id="485" parent="147">
+    <argument id="490" parent="152">
       <Position>2</Position>
     </argument>
-    <argument id="486" parent="148">
+    <argument id="491" parent="153">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="487" parent="148">
+    <argument id="492" parent="153">
       <Position>1</Position>
     </argument>
-    <argument id="488" parent="148">
+    <argument id="493" parent="153">
       <Position>2</Position>
     </argument>
-    <argument id="489" parent="149">
+    <argument id="494" parent="154">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="490" parent="149">
+    <argument id="495" parent="154">
       <Position>1</Position>
     </argument>
-    <argument id="491" parent="150">
+    <argument id="496" parent="155">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="492" parent="150">
+    <argument id="497" parent="155">
       <Position>1</Position>
     </argument>
-    <argument id="493" parent="150">
+    <argument id="498" parent="155">
       <Position>2</Position>
     </argument>
-    <argument id="494" parent="151">
+    <argument id="499" parent="156">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="495" parent="151">
+    <argument id="500" parent="156">
       <Position>1</Position>
     </argument>
-    <argument id="496" parent="151">
+    <argument id="501" parent="156">
       <Position>2</Position>
     </argument>
-    <argument id="497" parent="151">
+    <argument id="502" parent="156">
       <Position>3</Position>
     </argument>
-    <argument id="498" parent="152">
+    <argument id="503" parent="157">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="499" parent="152">
-      <Position>1</Position>
-    </argument>
-    <argument id="500" parent="153">
+    <argument id="504" parent="158">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="501" parent="153">
+    <argument id="505" parent="158">
       <Position>1</Position>
     </argument>
-    <argument id="502" parent="154">
+    <argument id="506" parent="159">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="503" parent="154">
-      <Position>1</Position>
-    </argument>
-    <argument id="504" parent="155">
+    <argument id="507" parent="160">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="505" parent="155">
+    <argument id="508" parent="160">
       <Position>1</Position>
     </argument>
-    <argument id="506" parent="155">
+    <argument id="509" parent="161">
+      <ArgumentDirection>R</ArgumentDirection>
+    </argument>
+    <argument id="510" parent="161">
+      <Position>1</Position>
+    </argument>
+    <argument id="511" parent="162">
+      <ArgumentDirection>R</ArgumentDirection>
+    </argument>
+    <argument id="512" parent="162">
+      <Position>1</Position>
+    </argument>
+    <argument id="513" parent="162">
       <Position>2</Position>
     </argument>
-    <argument id="507" parent="155">
+    <argument id="514" parent="162">
       <Position>3</Position>
     </argument>
-    <argument id="508" parent="156">
+    <argument id="515" parent="163">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="509" parent="156">
+    <argument id="516" parent="163">
       <Position>1</Position>
     </argument>
-    <argument id="510" parent="156">
+    <argument id="517" parent="163">
       <Position>2</Position>
     </argument>
-    <argument id="511" parent="157">
+    <argument id="518" parent="164">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="512" parent="157">
+    <argument id="519" parent="164">
       <Position>1</Position>
     </argument>
-    <argument id="513" parent="158">
+    <argument id="520" parent="165">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="514" parent="158">
+    <argument id="521" parent="165">
       <Position>1</Position>
     </argument>
-    <argument id="515" parent="159">
+    <argument id="522" parent="166">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="516" parent="159">
+    <argument id="523" parent="166">
       <Position>1</Position>
     </argument>
-    <argument id="517" parent="160">
+    <argument id="524" parent="167">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="518" parent="160">
+    <argument id="525" parent="167">
       <Position>1</Position>
     </argument>
-    <argument id="519" parent="160">
+    <argument id="526" parent="167">
       <Position>2</Position>
     </argument>
-    <argument id="520" parent="161">
+    <argument id="527" parent="168">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="521" parent="161">
+    <argument id="528" parent="168">
       <Position>1</Position>
     </argument>
-    <argument id="522" parent="162">
+    <argument id="529" parent="169">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="523" parent="163">
+    <argument id="530" parent="170">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="524" parent="163">
+    <argument id="531" parent="170">
       <Position>1</Position>
     </argument>
-    <argument id="525" parent="164">
+    <argument id="532" parent="171">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="526" parent="164">
+    <argument id="533" parent="171">
       <Position>1</Position>
     </argument>
-    <argument id="527" parent="165">
+    <argument id="534" parent="172">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="528" parent="166">
+    <argument id="535" parent="173">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="529" parent="166">
+    <argument id="536" parent="173">
       <Position>1</Position>
     </argument>
-    <argument id="530" parent="167">
+    <argument id="537" parent="174">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="531" parent="167">
+    <argument id="538" parent="174">
       <Position>1</Position>
     </argument>
-    <argument id="532" parent="168">
+    <argument id="539" parent="175">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="533" parent="168">
+    <argument id="540" parent="175">
       <Position>1</Position>
     </argument>
-    <argument id="534" parent="169">
+    <argument id="541" parent="176">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="535" parent="169">
+    <argument id="542" parent="176">
       <Position>1</Position>
     </argument>
-    <argument id="536" parent="170">
+    <argument id="543" parent="177">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="537" parent="170">
+    <argument id="544" parent="177">
       <Position>1</Position>
     </argument>
-    <argument id="538" parent="171">
+    <argument id="545" parent="178">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="539" parent="171">
+    <argument id="546" parent="178">
       <Position>1</Position>
     </argument>
-    <argument id="540" parent="171">
+    <argument id="547" parent="178">
       <Position>2</Position>
     </argument>
-    <argument id="541" parent="172">
+    <argument id="548" parent="179">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="542" parent="172">
+    <argument id="549" parent="179">
       <Position>1</Position>
     </argument>
-    <argument id="543" parent="173">
+    <argument id="550" parent="180">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="544" parent="174">
+    <argument id="551" parent="181">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="545" parent="174">
+    <argument id="552" parent="181">
       <Position>1</Position>
     </argument>
-    <argument id="546" parent="175">
+    <argument id="553" parent="182">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="547" parent="176">
+    <argument id="554" parent="183">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="548" parent="176">
+    <argument id="555" parent="183">
       <Position>1</Position>
     </argument>
-    <argument id="549" parent="176">
+    <argument id="556" parent="183">
       <Position>2</Position>
     </argument>
-    <argument id="550" parent="177">
+    <argument id="557" parent="184">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="551" parent="177">
+    <argument id="558" parent="184">
       <Position>1</Position>
     </argument>
-    <argument id="552" parent="178">
+    <argument id="559" parent="185">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="553" parent="178">
+    <argument id="560" parent="185">
       <Position>1</Position>
     </argument>
-    <argument id="554" parent="178">
+    <argument id="561" parent="185">
       <Position>2</Position>
     </argument>
-    <argument id="555" parent="178">
+    <argument id="562" parent="185">
       <Position>3</Position>
     </argument>
-    <argument id="556" parent="179">
+    <argument id="563" parent="186">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="557" parent="179">
+    <argument id="564" parent="186">
       <Position>1</Position>
     </argument>
-    <argument id="558" parent="179">
+    <argument id="565" parent="186">
       <Position>2</Position>
     </argument>
-    <argument id="559" parent="180">
+    <argument id="566" parent="187">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="560" parent="180">
+    <argument id="567" parent="187">
       <Position>1</Position>
     </argument>
-    <argument id="561" parent="180">
+    <argument id="568" parent="187">
       <Position>2</Position>
     </argument>
-    <argument id="562" parent="181">
+    <argument id="569" parent="188">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="563" parent="181">
+    <argument id="570" parent="188">
       <Position>1</Position>
     </argument>
-    <argument id="564" parent="181">
+    <argument id="571" parent="188">
       <Position>2</Position>
     </argument>
-    <argument id="565" parent="182">
+    <argument id="572" parent="189">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="566" parent="182">
+    <argument id="573" parent="189">
       <Position>1</Position>
     </argument>
-    <argument id="567" parent="182">
+    <argument id="574" parent="189">
       <Position>2</Position>
     </argument>
-    <argument id="568" parent="183">
+    <argument id="575" parent="190">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="569" parent="183">
+    <argument id="576" parent="190">
       <Position>1</Position>
     </argument>
-    <argument id="570" parent="183">
+    <argument id="577" parent="190">
       <Position>2</Position>
     </argument>
-    <argument id="571" parent="184">
+    <argument id="578" parent="191">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="572" parent="184">
+    <argument id="579" parent="191">
       <Position>1</Position>
     </argument>
-    <argument id="573" parent="185">
+    <argument id="580" parent="192">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="574" parent="185">
+    <argument id="581" parent="192">
       <Position>1</Position>
     </argument>
-    <argument id="575" parent="186">
+    <argument id="582" parent="193">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="576" parent="186">
+    <argument id="583" parent="193">
       <Position>1</Position>
     </argument>
-    <argument id="577" parent="186">
+    <argument id="584" parent="193">
       <Position>2</Position>
     </argument>
-    <argument id="578" parent="187">
+    <argument id="585" parent="194">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="579" parent="187">
+    <argument id="586" parent="194">
       <Position>1</Position>
     </argument>
-    <argument id="580" parent="187">
+    <argument id="587" parent="194">
       <Position>2</Position>
     </argument>
-    <argument id="581" parent="188">
+    <argument id="588" parent="195">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="582" parent="188">
+    <argument id="589" parent="195">
       <Position>1</Position>
     </argument>
-    <argument id="583" parent="189">
+    <argument id="590" parent="196">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="584" parent="189">
+    <argument id="591" parent="196">
       <Position>1</Position>
     </argument>
-    <argument id="585" parent="189">
+    <argument id="592" parent="196">
       <Position>2</Position>
     </argument>
-    <argument id="586" parent="190">
+    <argument id="593" parent="197">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="587" parent="190">
+    <argument id="594" parent="197">
       <Position>1</Position>
     </argument>
-    <argument id="588" parent="191">
+    <argument id="595" parent="198">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="589" parent="192">
+    <argument id="596" parent="199">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="590" parent="192">
+    <argument id="597" parent="199">
       <Position>1</Position>
     </argument>
-    <argument id="591" parent="192">
+    <argument id="598" parent="199">
       <Position>2</Position>
     </argument>
-    <argument id="592" parent="193">
+    <argument id="599" parent="200">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="593" parent="193">
+    <argument id="600" parent="200">
       <Position>1</Position>
     </argument>
-    <argument id="594" parent="194">
+    <argument id="601" parent="201">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="595" parent="195">
+    <argument id="602" parent="202">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="596" parent="195">
+    <argument id="603" parent="202">
       <Position>1</Position>
     </argument>
-    <argument id="597" parent="195">
+    <argument id="604" parent="202">
       <Position>2</Position>
     </argument>
-    <argument id="598" parent="196">
+    <argument id="605" parent="203">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="599" parent="196">
+    <argument id="606" parent="203">
       <Position>1</Position>
     </argument>
-    <argument id="600" parent="197">
+    <argument id="607" parent="204">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="601" parent="197">
+    <argument id="608" parent="204">
       <Position>1</Position>
     </argument>
-    <argument id="602" parent="198">
+    <argument id="609" parent="205">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="603" parent="199">
+    <argument id="610" parent="206">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="604" parent="199">
+    <argument id="611" parent="206">
       <Position>1</Position>
     </argument>
-    <argument id="605" parent="199">
+    <argument id="612" parent="206">
       <Position>2</Position>
     </argument>
-    <argument id="606" parent="200">
+    <argument id="613" parent="207">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="607" parent="201">
+    <argument id="614" parent="208">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="608" parent="201">
+    <argument id="615" parent="208">
       <Position>1</Position>
     </argument>
-    <argument id="609" parent="202">
+    <argument id="616" parent="209">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="610" parent="202">
+    <argument id="617" parent="209">
       <Position>1</Position>
     </argument>
-    <argument id="611" parent="203">
+    <argument id="618" parent="210">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="612" parent="204">
+    <argument id="619" parent="211">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="613" parent="204">
+    <argument id="620" parent="211">
       <Position>1</Position>
     </argument>
-    <argument id="614" parent="204">
+    <argument id="621" parent="211">
       <Position>2</Position>
     </argument>
-    <argument id="615" parent="205">
+    <argument id="622" parent="212">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="616" parent="205">
+    <argument id="623" parent="212">
       <Position>1</Position>
     </argument>
-    <argument id="617" parent="206">
+    <argument id="624" parent="213">
       <ArgumentDirection>R</ArgumentDirection>
     </argument>
-    <argument id="618" parent="206">
+    <argument id="625" parent="213">
       <Position>1</Position>
-    </argument>
-    <argument id="619" parent="206">
-      <Position>2</Position>
-    </argument>
-    <argument id="620" parent="207">
-      <ArgumentDirection>R</ArgumentDirection>
-    </argument>
-    <argument id="621" parent="208">
-      <ArgumentDirection>R</ArgumentDirection>
-    </argument>
-    <argument id="622" parent="209">
-      <ArgumentDirection>R</ArgumentDirection>
-    </argument>
-    <argument id="623" parent="210">
-      <ArgumentDirection>R</ArgumentDirection>
-    </argument>
-    <argument id="624" parent="211">
-      <ArgumentDirection>R</ArgumentDirection>
-    </argument>
-    <argument id="625" parent="212">
-      <ArgumentDirection>R</ArgumentDirection>
     </argument>
     <argument id="626" parent="213">
-      <ArgumentDirection>R</ArgumentDirection>
+      <Position>2</Position>
     </argument>
-    <table id="627" parent="214" name="consumer_heartbeat"/>
-    <table id="628" parent="214" name="quant_agent_decision_log"/>
-    <table id="629" parent="214" name="quant_cache_data"/>
-    <table id="630" parent="214" name="quant_data_source_circuit"/>
-    <table id="631" parent="214" name="quant_evolution_history"/>
-    <table id="632" parent="214" name="quant_flow_state"/>
-    <table id="633" parent="214" name="quant_news_vectors"/>
-    <table id="634" parent="214" name="quant_rule_test_case"/>
-    <table id="635" parent="214" name="quant_stock_pool_holding"/>
-    <table id="636" parent="214" name="quant_stock_pool_optional"/>
-    <table id="637" parent="214" name="quant_strategy_rules"/>
-    <table id="638" parent="214" name="quant_system_config"/>
-    <table id="639" parent="214" name="quant_task"/>
-    <table id="640" parent="214" name="quant_trade_log"/>
-    <table id="641" parent="214" name="quant_user_account"/>
-    <table id="642" parent="214" name="sqlite_master">
+    <table id="627" parent="214" name="alembic_version"/>
+    <table id="628" parent="214" name="analysis_tasks"/>
+    <table id="629" parent="214" name="impact_snapshots"/>
+    <table id="630" parent="214" name="industry_rankings"/>
+    <table id="631" parent="214" name="news_items"/>
+    <table id="632" parent="214" name="sqlite_master">
       <System>1</System>
     </table>
-    <column id="643" parent="627" name="id">
+    <table id="633" parent="214" name="stock_recommendations"/>
+    <table id="634" parent="214" name="users"/>
+    <table id="635" parent="214" name="watchlist"/>
+    <column id="636" parent="627" name="version_num">
       <NotNull>1</NotNull>
       <Position>1</Position>
-      <StoredType>INTEGER|0s</StoredType>
-    </column>
-    <column id="644" parent="627" name="consumer_id">
-      <NotNull>1</NotNull>
-      <Position>2</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="645" parent="627" name="queue_name">
-      <NotNull>1</NotNull>
-      <Position>3</Position>
       <StoredType>VARCHAR(32)|0s</StoredType>
     </column>
-    <column id="646" parent="627" name="last_beat">
-      <NotNull>1</NotNull>
-      <Position>4</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <column id="647" parent="627" name="metadata_json">
-      <NotNull>1</NotNull>
-      <Position>5</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <index id="648" parent="627" name="sqlite_autoindex_consumer_heartbeat_1">
-      <ColNames>consumer_id</ColNames>
+    <index id="637" parent="627" name="sqlite_autoindex_alembic_version_1">
+      <ColNames>version_num</ColNames>
       <NameSurrogate>1</NameSurrogate>
       <Unique>1</Unique>
     </index>
-    <index id="649" parent="627" name="ix_consumer_heartbeat_consumer_id">
-      <ColNames>consumer_id</ColNames>
-    </index>
-    <key id="650" parent="627">
-      <ColNames>id</ColNames>
+    <key id="638" parent="627" name="alembic_version_pkc">
+      <ColNames>version_num</ColNames>
       <Primary>1</Primary>
+      <UnderlyingIndexName>sqlite_autoindex_alembic_version_1</UnderlyingIndexName>
     </key>
-    <key id="651" parent="627" name="uq_consumer">
-      <ColNames>consumer_id</ColNames>
-      <UnderlyingIndexName>sqlite_autoindex_consumer_heartbeat_1</UnderlyingIndexName>
-    </key>
-    <column id="652" parent="628" name="id">
+    <column id="639" parent="628" name="id">
       <NotNull>1</NotNull>
       <Position>1</Position>
-      <StoredType>INTEGER|0s</StoredType>
+      <StoredType>VARCHAR(32)|0s</StoredType>
     </column>
-    <column id="653" parent="628" name="ts">
+    <column id="640" parent="628" name="user_id">
       <NotNull>1</NotNull>
       <Position>2</Position>
-      <StoredType>DATETIME|0s</StoredType>
+      <StoredType>INTEGER|0s</StoredType>
     </column>
-    <column id="654" parent="628" name="agent">
+    <column id="641" parent="628" name="ticker">
       <NotNull>1</NotNull>
       <Position>3</Position>
+      <StoredType>VARCHAR(16)|0s</StoredType>
+    </column>
+    <column id="642" parent="628" name="stock_name">
+      <NotNull>1</NotNull>
+      <Position>4</Position>
+      <StoredType>VARCHAR(64)|0s</StoredType>
+    </column>
+    <column id="643" parent="628" name="trade_date">
+      <NotNull>1</NotNull>
+      <Position>5</Position>
+      <StoredType>VARCHAR(10)|0s</StoredType>
+    </column>
+    <column id="644" parent="628" name="status">
+      <NotNull>1</NotNull>
+      <Position>6</Position>
+      <StoredType>VARCHAR(16)|0s</StoredType>
+    </column>
+    <column id="645" parent="628" name="signal">
+      <NotNull>1</NotNull>
+      <Position>7</Position>
+      <StoredType>VARCHAR(32)|0s</StoredType>
+    </column>
+    <column id="646" parent="628" name="error">
+      <NotNull>1</NotNull>
+      <Position>8</Position>
+      <StoredType>TEXT|0s</StoredType>
+    </column>
+    <column id="647" parent="628" name="llm_provider">
+      <NotNull>1</NotNull>
+      <Position>9</Position>
       <StoredType>VARCHAR(48)|0s</StoredType>
     </column>
-    <column id="655" parent="628" name="task_id">
-      <NotNull>1</NotNull>
-      <Position>4</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="656" parent="628" name="flow_id">
-      <NotNull>1</NotNull>
-      <Position>5</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="657" parent="628" name="symbol">
-      <NotNull>1</NotNull>
-      <Position>6</Position>
-      <StoredType>VARCHAR(16)|0s</StoredType>
-    </column>
-    <column id="658" parent="628" name="decision">
-      <NotNull>1</NotNull>
-      <Position>7</Position>
-      <StoredType>VARCHAR(32)|0s</StoredType>
-    </column>
-    <column id="659" parent="628" name="reason">
-      <NotNull>1</NotNull>
-      <Position>8</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="660" parent="628" name="detail_json">
-      <NotNull>1</NotNull>
-      <Position>9</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <index id="661" parent="628" name="ix_quant_agent_decision_log_ts">
-      <ColNames>ts</ColNames>
-    </index>
-    <index id="662" parent="628" name="ix_quant_agent_decision_log_flow_id">
-      <ColNames>flow_id</ColNames>
-    </index>
-    <index id="663" parent="628" name="ix_quant_agent_decision_log_symbol">
-      <ColNames>symbol</ColNames>
-    </index>
-    <key id="664" parent="628">
-      <ColNames>id</ColNames>
-      <Primary>1</Primary>
-    </key>
-    <column id="665" parent="629" name="cache_key">
-      <NotNull>1</NotNull>
-      <Position>1</Position>
-      <StoredType>VARCHAR(256)|0s</StoredType>
-    </column>
-    <column id="666" parent="629" name="category">
-      <NotNull>1</NotNull>
-      <Position>2</Position>
-      <StoredType>VARCHAR(32)|0s</StoredType>
-    </column>
-    <column id="667" parent="629" name="payload">
-      <NotNull>1</NotNull>
-      <Position>3</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="668" parent="629" name="expires_at">
-      <Position>4</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <column id="669" parent="629" name="created_at">
-      <NotNull>1</NotNull>
-      <Position>5</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <index id="670" parent="629" name="sqlite_autoindex_quant_cache_data_1">
-      <ColNames>cache_key</ColNames>
-      <NameSurrogate>1</NameSurrogate>
-      <Unique>1</Unique>
-    </index>
-    <index id="671" parent="629" name="ix_quant_cache_data_category">
-      <ColNames>category</ColNames>
-    </index>
-    <key id="672" parent="629">
-      <ColNames>cache_key</ColNames>
-      <Primary>1</Primary>
-      <UnderlyingIndexName>sqlite_autoindex_quant_cache_data_1</UnderlyingIndexName>
-    </key>
-    <column id="673" parent="630" name="source_name">
-      <NotNull>1</NotNull>
-      <Position>1</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="674" parent="630" name="state">
-      <NotNull>1</NotNull>
-      <Position>2</Position>
-      <StoredType>VARCHAR(16)|0s</StoredType>
-    </column>
-    <column id="675" parent="630" name="failure_count">
-      <NotNull>1</NotNull>
-      <Position>3</Position>
-      <StoredType>INTEGER|0s</StoredType>
-    </column>
-    <column id="676" parent="630" name="opened_at">
-      <Position>4</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <column id="677" parent="630" name="updated_at">
-      <NotNull>1</NotNull>
-      <Position>5</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <index id="678" parent="630" name="sqlite_autoindex_quant_data_source_circuit_1">
-      <ColNames>source_name</ColNames>
-      <NameSurrogate>1</NameSurrogate>
-      <Unique>1</Unique>
-    </index>
-    <key id="679" parent="630">
-      <ColNames>source_name</ColNames>
-      <Primary>1</Primary>
-      <UnderlyingIndexName>sqlite_autoindex_quant_data_source_circuit_1</UnderlyingIndexName>
-    </key>
-    <column id="680" parent="631" name="id">
-      <NotNull>1</NotNull>
-      <Position>1</Position>
-      <StoredType>INTEGER|0s</StoredType>
-    </column>
-    <column id="681" parent="631" name="ts">
-      <NotNull>1</NotNull>
-      <Position>2</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <column id="682" parent="631" name="rule_id">
-      <NotNull>1</NotNull>
-      <Position>3</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="683" parent="631" name="params_json">
-      <NotNull>1</NotNull>
-      <Position>4</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="684" parent="631" name="train_metrics_json">
-      <NotNull>1</NotNull>
-      <Position>5</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="685" parent="631" name="valid_metrics_json">
-      <NotNull>1</NotNull>
-      <Position>6</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="686" parent="631" name="oos_metrics_json">
-      <NotNull>1</NotNull>
-      <Position>7</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="687" parent="631" name="status">
-      <NotNull>1</NotNull>
-      <Position>8</Position>
-      <StoredType>VARCHAR(24)|0s</StoredType>
-    </column>
-    <column id="688" parent="631" name="reviewer_note">
-      <NotNull>1</NotNull>
-      <Position>9</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <key id="689" parent="631">
-      <ColNames>id</ColNames>
-      <Primary>1</Primary>
-    </key>
-    <column id="690" parent="632" name="flow_id">
-      <NotNull>1</NotNull>
-      <Position>1</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="691" parent="632" name="flow_type">
-      <NotNull>1</NotNull>
-      <Position>2</Position>
-      <StoredType>VARCHAR(32)|0s</StoredType>
-    </column>
-    <column id="692" parent="632" name="status">
-      <NotNull>1</NotNull>
-      <Position>3</Position>
-      <StoredType>VARCHAR(16)|0s</StoredType>
-    </column>
-    <column id="693" parent="632" name="current_step">
-      <NotNull>1</NotNull>
-      <Position>4</Position>
-      <StoredType>VARCHAR(48)|0s</StoredType>
-    </column>
-    <column id="694" parent="632" name="completed_steps_json">
-      <NotNull>1</NotNull>
-      <Position>5</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="695" parent="632" name="data_json">
-      <NotNull>1</NotNull>
-      <Position>6</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="696" parent="632" name="timeout_seconds">
-      <NotNull>1</NotNull>
-      <Position>7</Position>
-      <StoredType>INTEGER|0s</StoredType>
-    </column>
-    <column id="697" parent="632" name="allow_fallback">
-      <NotNull>1</NotNull>
-      <Position>8</Position>
-      <StoredType>BOOLEAN|0s</StoredType>
-    </column>
-    <column id="698" parent="632" name="error">
-      <NotNull>1</NotNull>
-      <Position>9</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="699" parent="632" name="created_at">
+    <column id="648" parent="628" name="quick_think_llm">
       <NotNull>1</NotNull>
       <Position>10</Position>
-      <StoredType>DATETIME|0s</StoredType>
+      <StoredType>VARCHAR(96)|0s</StoredType>
     </column>
-    <column id="700" parent="632" name="updated_at">
+    <column id="649" parent="628" name="deep_think_llm">
       <NotNull>1</NotNull>
       <Position>11</Position>
-      <StoredType>DATETIME|0s</StoredType>
+      <StoredType>VARCHAR(96)|0s</StoredType>
     </column>
-    <index id="701" parent="632" name="sqlite_autoindex_quant_flow_state_1">
-      <ColNames>flow_id</ColNames>
-      <NameSurrogate>1</NameSurrogate>
-      <Unique>1</Unique>
-    </index>
-    <key id="702" parent="632">
-      <ColNames>flow_id</ColNames>
-      <Primary>1</Primary>
-      <UnderlyingIndexName>sqlite_autoindex_quant_flow_state_1</UnderlyingIndexName>
-    </key>
-    <column id="703" parent="633" name="id">
-      <NotNull>1</NotNull>
-      <Position>1</Position>
-      <StoredType>INTEGER|0s</StoredType>
-    </column>
-    <column id="704" parent="633" name="news_hash">
-      <NotNull>1</NotNull>
-      <Position>2</Position>
-      <StoredType>VARCHAR(32)|0s</StoredType>
-    </column>
-    <column id="705" parent="633" name="title">
-      <NotNull>1</NotNull>
-      <Position>3</Position>
-      <StoredType>VARCHAR(512)|0s</StoredType>
-    </column>
-    <column id="706" parent="633" name="content">
-      <NotNull>1</NotNull>
-      <Position>4</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="707" parent="633" name="source">
-      <NotNull>1</NotNull>
-      <Position>5</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="708" parent="633" name="pub_time">
-      <NotNull>1</NotNull>
-      <Position>6</Position>
-      <StoredType>VARCHAR(32)|0s</StoredType>
-    </column>
-    <column id="709" parent="633" name="symbol">
-      <NotNull>1</NotNull>
-      <Position>7</Position>
-      <StoredType>VARCHAR(16)|0s</StoredType>
-    </column>
-    <column id="710" parent="633" name="added_at">
-      <NotNull>1</NotNull>
-      <Position>8</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <index id="711" parent="633" name="sqlite_autoindex_quant_news_vectors_1">
-      <ColNames>news_hash</ColNames>
-      <NameSurrogate>1</NameSurrogate>
-      <Unique>1</Unique>
-    </index>
-    <index id="712" parent="633" name="ix_quant_news_vectors_news_hash">
-      <ColNames>news_hash</ColNames>
-    </index>
-    <index id="713" parent="633" name="ix_quant_news_vectors_symbol">
-      <ColNames>symbol</ColNames>
-    </index>
-    <key id="714" parent="633">
-      <ColNames>id</ColNames>
-      <Primary>1</Primary>
-    </key>
-    <key id="715" parent="633" name="uq_news_hash">
-      <ColNames>news_hash</ColNames>
-      <UnderlyingIndexName>sqlite_autoindex_quant_news_vectors_1</UnderlyingIndexName>
-    </key>
-    <column id="716" parent="634" name="id">
-      <NotNull>1</NotNull>
-      <Position>1</Position>
-      <StoredType>INTEGER|0s</StoredType>
-    </column>
-    <column id="717" parent="634" name="rule_id">
-      <NotNull>1</NotNull>
-      <Position>2</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="718" parent="634" name="case_name">
-      <NotNull>1</NotNull>
-      <Position>3</Position>
-      <StoredType>VARCHAR(128)|0s</StoredType>
-    </column>
-    <column id="719" parent="634" name="input_json">
-      <NotNull>1</NotNull>
-      <Position>4</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="720" parent="634" name="expected">
-      <NotNull>1</NotNull>
-      <Position>5</Position>
-      <StoredType>BOOLEAN|0s</StoredType>
-    </column>
-    <column id="721" parent="634" name="enabled">
-      <NotNull>1</NotNull>
-      <Position>6</Position>
-      <StoredType>BOOLEAN|0s</StoredType>
-    </column>
-    <index id="722" parent="634" name="ix_quant_rule_test_case_rule_id">
-      <ColNames>rule_id</ColNames>
-    </index>
-    <key id="723" parent="634">
-      <ColNames>id</ColNames>
-      <Primary>1</Primary>
-    </key>
-    <column id="724" parent="635" name="user_id">
-      <NotNull>1</NotNull>
-      <Position>1</Position>
-      <StoredType>VARCHAR(32)|0s</StoredType>
-    </column>
-    <column id="725" parent="635" name="symbol">
-      <NotNull>1</NotNull>
-      <Position>2</Position>
-      <StoredType>VARCHAR(16)|0s</StoredType>
-    </column>
-    <column id="726" parent="635" name="name">
-      <NotNull>1</NotNull>
-      <Position>3</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="727" parent="635" name="quantity">
-      <NotNull>1</NotNull>
-      <Position>4</Position>
-      <StoredType>INTEGER|0s</StoredType>
-    </column>
-    <column id="728" parent="635" name="available_quantity">
-      <NotNull>1</NotNull>
-      <Position>5</Position>
-      <StoredType>INTEGER|0s</StoredType>
-    </column>
-    <column id="729" parent="635" name="cost_price">
-      <NotNull>1</NotNull>
-      <Position>6</Position>
-      <StoredType>FLOAT|0s</StoredType>
-    </column>
-    <column id="730" parent="635" name="buy_time">
-      <NotNull>1</NotNull>
-      <Position>7</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <column id="731" parent="635" name="entry_reason">
-      <NotNull>1</NotNull>
-      <Position>8</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="732" parent="635" name="plan_json">
-      <NotNull>1</NotNull>
-      <Position>9</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="733" parent="635" name="predicted_path_json">
-      <NotNull>1</NotNull>
-      <Position>10</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="734" parent="635" name="stop_loss">
-      <NotNull>1</NotNull>
-      <Position>11</Position>
-      <StoredType>FLOAT|0s</StoredType>
-    </column>
-    <column id="735" parent="635" name="take_profit">
-      <NotNull>1</NotNull>
+    <column id="650" parent="628" name="lookback_days">
       <Position>12</Position>
-      <StoredType>FLOAT|0s</StoredType>
-    </column>
-    <column id="736" parent="635" name="last_review_time">
-      <Position>13</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <column id="737" parent="635" name="cannot_sell_until">
-      <Position>14</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <index id="738" parent="635" name="sqlite_autoindex_quant_stock_pool_holding_1">
-      <ColNames>user_id
-symbol</ColNames>
-      <NameSurrogate>1</NameSurrogate>
-      <Unique>1</Unique>
-    </index>
-    <key id="739" parent="635">
-      <ColNames>user_id
-symbol</ColNames>
-      <Primary>1</Primary>
-      <UnderlyingIndexName>sqlite_autoindex_quant_stock_pool_holding_1</UnderlyingIndexName>
-    </key>
-    <column id="740" parent="636" name="symbol">
-      <NotNull>1</NotNull>
-      <Position>1</Position>
-      <StoredType>VARCHAR(16)|0s</StoredType>
-    </column>
-    <column id="741" parent="636" name="name">
-      <NotNull>1</NotNull>
-      <Position>2</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="742" parent="636" name="industry">
-      <NotNull>1</NotNull>
-      <Position>3</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="743" parent="636" name="add_time">
-      <NotNull>1</NotNull>
-      <Position>4</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <column id="744" parent="636" name="reason">
-      <NotNull>1</NotNull>
-      <Position>5</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="745" parent="636" name="bull_factors">
-      <NotNull>1</NotNull>
-      <Position>6</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="746" parent="636" name="bear_factors">
-      <NotNull>1</NotNull>
-      <Position>7</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="747" parent="636" name="stage_judgement">
-      <NotNull>1</NotNull>
-      <Position>8</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="748" parent="636" name="rise_trigger">
-      <NotNull>1</NotNull>
-      <Position>9</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="749" parent="636" name="report">
-      <NotNull>1</NotNull>
-      <Position>10</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="750" parent="636" name="risk_tags_json">
-      <NotNull>1</NotNull>
-      <Position>11</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="751" parent="636" name="confidence">
-      <NotNull>1</NotNull>
-      <Position>12</Position>
-      <StoredType>FLOAT|0s</StoredType>
-    </column>
-    <column id="752" parent="636" name="status">
-      <NotNull>1</NotNull>
-      <Position>13</Position>
-      <StoredType>VARCHAR(16)|0s</StoredType>
-    </column>
-    <column id="753" parent="636" name="observe_expire">
-      <Position>14</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <column id="754" parent="636" name="remove_reason">
-      <NotNull>1</NotNull>
-      <Position>15</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="755" parent="636" name="remove_time">
-      <Position>16</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <index id="756" parent="636" name="sqlite_autoindex_quant_stock_pool_optional_1">
-      <ColNames>symbol</ColNames>
-      <NameSurrogate>1</NameSurrogate>
-      <Unique>1</Unique>
-    </index>
-    <key id="757" parent="636">
-      <ColNames>symbol</ColNames>
-      <Primary>1</Primary>
-      <UnderlyingIndexName>sqlite_autoindex_quant_stock_pool_optional_1</UnderlyingIndexName>
-    </key>
-    <column id="758" parent="637" name="rule_id">
-      <NotNull>1</NotNull>
-      <Position>1</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="759" parent="637" name="description">
-      <NotNull>1</NotNull>
-      <Position>2</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="760" parent="637" name="condition">
-      <NotNull>1</NotNull>
-      <Position>3</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="761" parent="637" name="action">
-      <NotNull>1</NotNull>
-      <Position>4</Position>
-      <StoredType>VARCHAR(48)|0s</StoredType>
-    </column>
-    <column id="762" parent="637" name="priority">
-      <NotNull>1</NotNull>
-      <Position>5</Position>
       <StoredType>INTEGER|0s</StoredType>
     </column>
-    <column id="763" parent="637" name="enabled">
-      <NotNull>1</NotNull>
-      <Position>6</Position>
-      <StoredType>BOOLEAN|0s</StoredType>
-    </column>
-    <column id="764" parent="637" name="version">
-      <NotNull>1</NotNull>
-      <Position>7</Position>
-      <StoredType>INTEGER|0s</StoredType>
-    </column>
-    <column id="765" parent="637" name="test_case_ids_json">
-      <NotNull>1</NotNull>
-      <Position>8</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="766" parent="637" name="gray_scale">
-      <NotNull>1</NotNull>
-      <Position>9</Position>
-      <StoredType>BOOLEAN|0s</StoredType>
-    </column>
-    <column id="767" parent="637" name="min_sample_out_perf">
-      <NotNull>1</NotNull>
-      <Position>10</Position>
-      <StoredType>FLOAT|0s</StoredType>
-    </column>
-    <column id="768" parent="637" name="created_at">
-      <NotNull>1</NotNull>
-      <Position>11</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <column id="769" parent="637" name="updated_at">
-      <NotNull>1</NotNull>
-      <Position>12</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <index id="770" parent="637" name="sqlite_autoindex_quant_strategy_rules_1">
-      <ColNames>rule_id</ColNames>
-      <NameSurrogate>1</NameSurrogate>
-      <Unique>1</Unique>
-    </index>
-    <key id="771" parent="637">
-      <ColNames>rule_id</ColNames>
-      <Primary>1</Primary>
-      <UnderlyingIndexName>sqlite_autoindex_quant_strategy_rules_1</UnderlyingIndexName>
-    </key>
-    <column id="772" parent="638" name="key">
-      <NotNull>1</NotNull>
-      <Position>1</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="773" parent="638" name="value">
-      <NotNull>1</NotNull>
-      <Position>2</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="774" parent="638" name="description">
-      <NotNull>1</NotNull>
-      <Position>3</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <index id="775" parent="638" name="sqlite_autoindex_quant_system_config_1">
-      <ColNames>key</ColNames>
-      <NameSurrogate>1</NameSurrogate>
-      <Unique>1</Unique>
-    </index>
-    <key id="776" parent="638">
-      <ColNames>key</ColNames>
-      <Primary>1</Primary>
-      <UnderlyingIndexName>sqlite_autoindex_quant_system_config_1</UnderlyingIndexName>
-    </key>
-    <column id="777" parent="639" name="task_id">
-      <NotNull>1</NotNull>
-      <Position>1</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="778" parent="639" name="queue_name">
-      <NotNull>1</NotNull>
-      <Position>2</Position>
-      <StoredType>VARCHAR(32)|0s</StoredType>
-    </column>
-    <column id="779" parent="639" name="task_type">
-      <NotNull>1</NotNull>
-      <Position>3</Position>
-      <StoredType>VARCHAR(48)|0s</StoredType>
-    </column>
-    <column id="780" parent="639" name="payload_json">
-      <NotNull>1</NotNull>
-      <Position>4</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="781" parent="639" name="status">
-      <NotNull>1</NotNull>
-      <Position>5</Position>
-      <StoredType>VARCHAR(16)|0s</StoredType>
-    </column>
-    <column id="782" parent="639" name="priority">
-      <NotNull>1</NotNull>
-      <Position>6</Position>
-      <StoredType>INTEGER|0s</StoredType>
-    </column>
-    <column id="783" parent="639" name="available_at">
-      <NotNull>1</NotNull>
-      <Position>7</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <column id="784" parent="639" name="attempts">
-      <NotNull>1</NotNull>
-      <Position>8</Position>
-      <StoredType>INTEGER|0s</StoredType>
-    </column>
-    <column id="785" parent="639" name="max_attempts">
-      <NotNull>1</NotNull>
-      <Position>9</Position>
-      <StoredType>INTEGER|0s</StoredType>
-    </column>
-    <column id="786" parent="639" name="last_error">
-      <NotNull>1</NotNull>
-      <Position>10</Position>
-      <StoredType>TEXT|0s</StoredType>
-    </column>
-    <column id="787" parent="639" name="consumer_id">
-      <NotNull>1</NotNull>
-      <Position>11</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="788" parent="639" name="processing_started_at">
-      <Position>12</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <column id="789" parent="639" name="created_at">
+    <column id="651" parent="628" name="created_at">
       <NotNull>1</NotNull>
       <Position>13</Position>
       <StoredType>DATETIME|0s</StoredType>
     </column>
-    <column id="790" parent="639" name="updated_at">
+    <column id="652" parent="628" name="updated_at">
       <NotNull>1</NotNull>
       <Position>14</Position>
       <StoredType>DATETIME|0s</StoredType>
     </column>
-    <index id="791" parent="639" name="sqlite_autoindex_quant_task_1">
-      <ColNames>task_id</ColNames>
+    <foreign-key id="653" parent="628">
+      <ColNames>user_id</ColNames>
+      <OnDelete>cascade</OnDelete>
+      <RefColNames>id</RefColNames>
+      <RefTableName>users</RefTableName>
+    </foreign-key>
+    <index id="654" parent="628" name="sqlite_autoindex_analysis_tasks_1">
+      <ColNames>id</ColNames>
       <NameSurrogate>1</NameSurrogate>
       <Unique>1</Unique>
     </index>
-    <index id="792" parent="639" name="ix_quant_task_dispatch">
-      <ColNames>queue_name
-status
-available_at</ColNames>
+    <index id="655" parent="628" name="ix_analysis_tasks_user_id">
+      <ColNames>user_id</ColNames>
     </index>
-    <index id="793" parent="639" name="ix_quant_task_queue_name">
-      <ColNames>queue_name</ColNames>
+    <index id="656" parent="628" name="ix_analysis_tasks_ticker">
+      <ColNames>ticker</ColNames>
     </index>
-    <index id="794" parent="639" name="ix_quant_task_status">
+    <index id="657" parent="628" name="ix_analysis_tasks_trade_date">
+      <ColNames>trade_date</ColNames>
+    </index>
+    <index id="658" parent="628" name="ix_analysis_tasks_status">
       <ColNames>status</ColNames>
     </index>
-    <index id="795" parent="639" name="ix_quant_task_available_at">
-      <ColNames>available_at</ColNames>
-    </index>
-    <key id="796" parent="639">
-      <ColNames>task_id</ColNames>
+    <key id="659" parent="628">
+      <ColNames>id</ColNames>
       <Primary>1</Primary>
-      <UnderlyingIndexName>sqlite_autoindex_quant_task_1</UnderlyingIndexName>
+      <UnderlyingIndexName>sqlite_autoindex_analysis_tasks_1</UnderlyingIndexName>
     </key>
-    <column id="797" parent="640" name="id">
+    <column id="660" parent="629" name="id">
       <NotNull>1</NotNull>
       <Position>1</Position>
       <StoredType>INTEGER|0s</StoredType>
     </column>
-    <column id="798" parent="640" name="user_id">
+    <column id="661" parent="629" name="snapshot_time">
       <NotNull>1</NotNull>
       <Position>2</Position>
-      <StoredType>VARCHAR(32)|0s</StoredType>
+      <StoredType>DATETIME|0s</StoredType>
     </column>
-    <column id="799" parent="640" name="order_id">
+    <column id="662" parent="629" name="period">
       <NotNull>1</NotNull>
       <Position>3</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
+      <StoredType>VARCHAR(4)|0s</StoredType>
     </column>
-    <column id="800" parent="640" name="symbol">
+    <column id="663" parent="629" name="status">
       <NotNull>1</NotNull>
       <Position>4</Position>
       <StoredType>VARCHAR(16)|0s</StoredType>
     </column>
-    <column id="801" parent="640" name="name">
+    <column id="664" parent="629" name="total_news_collected">
       <NotNull>1</NotNull>
       <Position>5</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
+      <StoredType>INTEGER|0s</StoredType>
     </column>
-    <column id="802" parent="640" name="side">
+    <column id="665" parent="629" name="top20_json">
       <NotNull>1</NotNull>
       <Position>6</Position>
-      <StoredType>VARCHAR(8)|0s</StoredType>
+      <StoredType>TEXT|0s</StoredType>
     </column>
-    <column id="803" parent="640" name="price">
+    <column id="666" parent="629" name="created_at">
       <NotNull>1</NotNull>
+      <Position>7</Position>
+      <StoredType>DATETIME|0s</StoredType>
+    </column>
+    <key id="667" parent="629">
+      <ColNames>id</ColNames>
+      <Primary>1</Primary>
+    </key>
+    <column id="668" parent="630" name="id">
+      <NotNull>1</NotNull>
+      <Position>1</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="669" parent="630" name="snapshot_id">
+      <NotNull>1</NotNull>
+      <Position>2</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="670" parent="630" name="industry">
+      <NotNull>1</NotNull>
+      <Position>3</Position>
+      <StoredType>VARCHAR(64)|0s</StoredType>
+    </column>
+    <column id="671" parent="630" name="industry_code">
+      <NotNull>1</NotNull>
+      <Position>4</Position>
+      <StoredType>VARCHAR(16)|0s</StoredType>
+    </column>
+    <column id="672" parent="630" name="heat_score">
+      <NotNull>1</NotNull>
+      <Position>5</Position>
+      <StoredType>FLOAT|0s</StoredType>
+    </column>
+    <column id="673" parent="630" name="news_count">
+      <NotNull>1</NotNull>
+      <Position>6</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="674" parent="630" name="fund_flow_net">
       <Position>7</Position>
       <StoredType>FLOAT|0s</StoredType>
     </column>
-    <column id="804" parent="640" name="quantity">
-      <NotNull>1</NotNull>
+    <column id="675" parent="630" name="change_pct">
       <Position>8</Position>
+      <StoredType>FLOAT|0s</StoredType>
+    </column>
+    <column id="676" parent="630" name="resonance">
+      <NotNull>1</NotNull>
+      <Position>9</Position>
+      <StoredType>VARCHAR(16)|0s</StoredType>
+    </column>
+    <column id="677" parent="630" name="rating">
+      <NotNull>1</NotNull>
+      <Position>10</Position>
+      <StoredType>VARCHAR(2)|0s</StoredType>
+    </column>
+    <column id="678" parent="630" name="leader_stocks_json">
+      <NotNull>1</NotNull>
+      <Position>11</Position>
+      <StoredType>TEXT|0s</StoredType>
+    </column>
+    <column id="679" parent="630" name="rank">
+      <NotNull>1</NotNull>
+      <Position>12</Position>
       <StoredType>INTEGER|0s</StoredType>
     </column>
-    <column id="805" parent="640" name="amount">
+    <column id="680" parent="630" name="created_at">
+      <NotNull>1</NotNull>
+      <Position>13</Position>
+      <StoredType>DATETIME|0s</StoredType>
+    </column>
+    <column id="681" parent="630" name="board_name">
+      <DefaultExpression>&apos;&apos;</DefaultExpression>
+      <NotNull>1</NotNull>
+      <Position>14</Position>
+      <StoredType>VARCHAR(64)|0s</StoredType>
+    </column>
+    <column id="682" parent="630" name="industry_level">
+      <DefaultExpression>&apos;&apos;</DefaultExpression>
+      <NotNull>1</NotNull>
+      <Position>15</Position>
+      <StoredType>VARCHAR(16)|0s</StoredType>
+    </column>
+    <foreign-key id="683" parent="630">
+      <ColNames>snapshot_id</ColNames>
+      <OnDelete>cascade</OnDelete>
+      <RefColNames>id</RefColNames>
+      <RefTableName>impact_snapshots</RefTableName>
+    </foreign-key>
+    <index id="684" parent="630" name="ix_industry_rankings_snapshot_id">
+      <ColNames>snapshot_id</ColNames>
+    </index>
+    <key id="685" parent="630">
+      <ColNames>id</ColNames>
+      <Primary>1</Primary>
+    </key>
+    <column id="686" parent="631" name="id">
+      <NotNull>1</NotNull>
+      <Position>1</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="687" parent="631" name="snapshot_id">
+      <NotNull>1</NotNull>
+      <Position>2</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="688" parent="631" name="title_hash">
+      <NotNull>1</NotNull>
+      <Position>3</Position>
+      <StoredType>VARCHAR(32)|0s</StoredType>
+    </column>
+    <column id="689" parent="631" name="title">
+      <NotNull>1</NotNull>
+      <Position>4</Position>
+      <StoredType>VARCHAR(512)|0s</StoredType>
+    </column>
+    <column id="690" parent="631" name="content">
+      <NotNull>1</NotNull>
+      <Position>5</Position>
+      <StoredType>TEXT|0s</StoredType>
+    </column>
+    <column id="691" parent="631" name="source">
+      <NotNull>1</NotNull>
+      <Position>6</Position>
+      <StoredType>VARCHAR(64)|0s</StoredType>
+    </column>
+    <column id="692" parent="631" name="pub_time">
+      <NotNull>1</NotNull>
+      <Position>7</Position>
+      <StoredType>VARCHAR(32)|0s</StoredType>
+    </column>
+    <column id="693" parent="631" name="category">
+      <NotNull>1</NotNull>
+      <Position>8</Position>
+      <StoredType>VARCHAR(16)|0s</StoredType>
+    </column>
+    <column id="694" parent="631" name="policy_score">
       <NotNull>1</NotNull>
       <Position>9</Position>
       <StoredType>FLOAT|0s</StoredType>
     </column>
-    <column id="806" parent="640" name="fee">
+    <column id="695" parent="631" name="news_score">
       <NotNull>1</NotNull>
       <Position>10</Position>
       <StoredType>FLOAT|0s</StoredType>
     </column>
-    <column id="807" parent="640" name="status">
+    <column id="696" parent="631" name="capital_score">
       <NotNull>1</NotNull>
       <Position>11</Position>
-      <StoredType>VARCHAR(16)|0s</StoredType>
+      <StoredType>FLOAT|0s</StoredType>
     </column>
-    <column id="808" parent="640" name="reason">
+    <column id="697" parent="631" name="sentiment_score">
       <NotNull>1</NotNull>
       <Position>12</Position>
-      <StoredType>TEXT|0s</StoredType>
+      <StoredType>FLOAT|0s</StoredType>
     </column>
-    <column id="809" parent="640" name="broker">
+    <column id="698" parent="631" name="composite_score">
       <NotNull>1</NotNull>
       <Position>13</Position>
-      <StoredType>VARCHAR(32)|0s</StoredType>
+      <StoredType>FLOAT|0s</StoredType>
     </column>
-    <column id="810" parent="640" name="cost_price">
+    <column id="699" parent="631" name="supply_demand_json">
       <NotNull>1</NotNull>
       <Position>14</Position>
-      <StoredType>FLOAT|0s</StoredType>
+      <StoredType>TEXT|0s</StoredType>
     </column>
-    <column id="811" parent="640" name="realized_pnl">
+    <column id="700" parent="631" name="bull_bear_bias">
       <NotNull>1</NotNull>
       <Position>15</Position>
-      <StoredType>FLOAT|0s</StoredType>
+      <StoredType>VARCHAR(16)|0s</StoredType>
     </column>
-    <column id="812" parent="640" name="pnl_pct">
+    <column id="701" parent="631" name="debate_summary">
       <NotNull>1</NotNull>
       <Position>16</Position>
-      <StoredType>FLOAT|0s</StoredType>
+      <StoredType>TEXT|0s</StoredType>
     </column>
-    <column id="813" parent="640" name="trade_time">
+    <column id="702" parent="631" name="industries_json">
       <NotNull>1</NotNull>
       <Position>17</Position>
-      <StoredType>DATETIME|0s</StoredType>
+      <StoredType>TEXT|0s</StoredType>
     </column>
-    <index id="814" parent="640" name="ix_quant_trade_log_user_id">
-      <ColNames>user_id</ColNames>
+    <column id="703" parent="631" name="top_stocks_json">
+      <NotNull>1</NotNull>
+      <Position>18</Position>
+      <StoredType>TEXT|0s</StoredType>
+    </column>
+    <column id="704" parent="631" name="expected_gain_low">
+      <NotNull>1</NotNull>
+      <Position>19</Position>
+      <StoredType>FLOAT|0s</StoredType>
+    </column>
+    <column id="705" parent="631" name="expected_gain_high">
+      <NotNull>1</NotNull>
+      <Position>20</Position>
+      <StoredType>FLOAT|0s</StoredType>
+    </column>
+    <column id="706" parent="631" name="rank">
+      <NotNull>1</NotNull>
+      <Position>21</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <foreign-key id="707" parent="631">
+      <ColNames>snapshot_id</ColNames>
+      <OnDelete>cascade</OnDelete>
+      <RefColNames>id</RefColNames>
+      <RefTableName>impact_snapshots</RefTableName>
+    </foreign-key>
+    <index id="708" parent="631" name="ix_news_items_snapshot_id">
+      <ColNames>snapshot_id</ColNames>
     </index>
-    <index id="815" parent="640" name="ix_quant_trade_log_symbol">
-      <ColNames>symbol</ColNames>
+    <index id="709" parent="631" name="ix_news_items_title_hash">
+      <ColNames>title_hash</ColNames>
     </index>
-    <key id="816" parent="640">
+    <key id="710" parent="631">
       <ColNames>id</ColNames>
       <Primary>1</Primary>
     </key>
-    <column id="817" parent="641" name="user_id">
-      <NotNull>1</NotNull>
-      <Position>1</Position>
-      <StoredType>VARCHAR(32)|0s</StoredType>
-    </column>
-    <column id="818" parent="641" name="username">
-      <NotNull>1</NotNull>
-      <Position>2</Position>
-      <StoredType>VARCHAR(64)|0s</StoredType>
-    </column>
-    <column id="819" parent="641" name="initial_capital">
-      <NotNull>1</NotNull>
-      <Position>3</Position>
-      <StoredType>FLOAT|0s</StoredType>
-    </column>
-    <column id="820" parent="641" name="cash_balance">
-      <NotNull>1</NotNull>
-      <Position>4</Position>
-      <StoredType>FLOAT|0s</StoredType>
-    </column>
-    <column id="821" parent="641" name="status">
-      <NotNull>1</NotNull>
-      <Position>5</Position>
-      <StoredType>VARCHAR(16)|0s</StoredType>
-    </column>
-    <column id="822" parent="641" name="created_at">
-      <NotNull>1</NotNull>
-      <Position>6</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <column id="823" parent="641" name="updated_at">
-      <NotNull>1</NotNull>
-      <Position>7</Position>
-      <StoredType>DATETIME|0s</StoredType>
-    </column>
-    <index id="824" parent="641" name="sqlite_autoindex_quant_user_account_1">
-      <ColNames>user_id</ColNames>
-      <NameSurrogate>1</NameSurrogate>
-      <Unique>1</Unique>
-    </index>
-    <key id="825" parent="641">
-      <ColNames>user_id</ColNames>
-      <Primary>1</Primary>
-      <UnderlyingIndexName>sqlite_autoindex_quant_user_account_1</UnderlyingIndexName>
-    </key>
-    <column id="826" parent="642" name="type">
+    <column id="711" parent="632" name="type">
       <Position>1</Position>
       <StoredType>TEXT|0s</StoredType>
     </column>
-    <column id="827" parent="642" name="name">
+    <column id="712" parent="632" name="name">
       <Position>2</Position>
       <StoredType>TEXT|0s</StoredType>
     </column>
-    <column id="828" parent="642" name="tbl_name">
+    <column id="713" parent="632" name="tbl_name">
       <Position>3</Position>
       <StoredType>TEXT|0s</StoredType>
     </column>
-    <column id="829" parent="642" name="rootpage">
+    <column id="714" parent="632" name="rootpage">
       <Position>4</Position>
       <StoredType>INT|0s</StoredType>
     </column>
-    <column id="830" parent="642" name="sql">
+    <column id="715" parent="632" name="sql">
       <Position>5</Position>
       <StoredType>TEXT|0s</StoredType>
     </column>
+    <column id="716" parent="633" name="id">
+      <NotNull>1</NotNull>
+      <Position>1</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="717" parent="633" name="snapshot_id">
+      <NotNull>1</NotNull>
+      <Position>2</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="718" parent="633" name="ticker">
+      <NotNull>1</NotNull>
+      <Position>3</Position>
+      <StoredType>VARCHAR(16)|0s</StoredType>
+    </column>
+    <column id="719" parent="633" name="stock_name">
+      <NotNull>1</NotNull>
+      <Position>4</Position>
+      <StoredType>VARCHAR(64)|0s</StoredType>
+    </column>
+    <column id="720" parent="633" name="industry">
+      <NotNull>1</NotNull>
+      <Position>5</Position>
+      <StoredType>VARCHAR(64)|0s</StoredType>
+    </column>
+    <column id="721" parent="633" name="trigger_event">
+      <NotNull>1</NotNull>
+      <Position>6</Position>
+      <StoredType>TEXT|0s</StoredType>
+    </column>
+    <column id="722" parent="633" name="buy_logic">
+      <NotNull>1</NotNull>
+      <Position>7</Position>
+      <StoredType>TEXT|0s</StoredType>
+    </column>
+    <column id="723" parent="633" name="fundamentals_score">
+      <NotNull>1</NotNull>
+      <Position>8</Position>
+      <StoredType>FLOAT|0s</StoredType>
+    </column>
+    <column id="724" parent="633" name="technical_score">
+      <NotNull>1</NotNull>
+      <Position>9</Position>
+      <StoredType>FLOAT|0s</StoredType>
+    </column>
+    <column id="725" parent="633" name="event_match_score">
+      <NotNull>1</NotNull>
+      <Position>10</Position>
+      <StoredType>FLOAT|0s</StoredType>
+    </column>
+    <column id="726" parent="633" name="debate_score">
+      <NotNull>1</NotNull>
+      <Position>11</Position>
+      <StoredType>FLOAT|0s</StoredType>
+    </column>
+    <column id="727" parent="633" name="final_score">
+      <NotNull>1</NotNull>
+      <Position>12</Position>
+      <StoredType>FLOAT|0s</StoredType>
+    </column>
+    <column id="728" parent="633" name="target_price">
+      <NotNull>1</NotNull>
+      <Position>13</Position>
+      <StoredType>FLOAT|0s</StoredType>
+    </column>
+    <column id="729" parent="633" name="expected_gain_low">
+      <NotNull>1</NotNull>
+      <Position>14</Position>
+      <StoredType>FLOAT|0s</StoredType>
+    </column>
+    <column id="730" parent="633" name="expected_gain_high">
+      <NotNull>1</NotNull>
+      <Position>15</Position>
+      <StoredType>FLOAT|0s</StoredType>
+    </column>
+    <column id="731" parent="633" name="stop_loss_price">
+      <NotNull>1</NotNull>
+      <Position>16</Position>
+      <StoredType>FLOAT|0s</StoredType>
+    </column>
+    <column id="732" parent="633" name="holding_period">
+      <NotNull>1</NotNull>
+      <Position>17</Position>
+      <StoredType>VARCHAR(16)|0s</StoredType>
+    </column>
+    <column id="733" parent="633" name="risk_level">
+      <NotNull>1</NotNull>
+      <Position>18</Position>
+      <StoredType>VARCHAR(8)|0s</StoredType>
+    </column>
+    <column id="734" parent="633" name="bull_bear_summary">
+      <NotNull>1</NotNull>
+      <Position>19</Position>
+      <StoredType>TEXT|0s</StoredType>
+    </column>
+    <column id="735" parent="633" name="rank">
+      <NotNull>1</NotNull>
+      <Position>20</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="736" parent="633" name="is_alternate">
+      <NotNull>1</NotNull>
+      <Position>21</Position>
+      <StoredType>BOOLEAN|0s</StoredType>
+    </column>
+    <column id="737" parent="633" name="created_at">
+      <NotNull>1</NotNull>
+      <Position>22</Position>
+      <StoredType>DATETIME|0s</StoredType>
+    </column>
+    <foreign-key id="738" parent="633">
+      <ColNames>snapshot_id</ColNames>
+      <OnDelete>cascade</OnDelete>
+      <RefColNames>id</RefColNames>
+      <RefTableName>impact_snapshots</RefTableName>
+    </foreign-key>
+    <index id="739" parent="633" name="ix_stock_recommendations_snapshot_id">
+      <ColNames>snapshot_id</ColNames>
+    </index>
+    <key id="740" parent="633">
+      <ColNames>id</ColNames>
+      <Primary>1</Primary>
+    </key>
+    <column id="741" parent="634" name="id">
+      <NotNull>1</NotNull>
+      <Position>1</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="742" parent="634" name="username">
+      <NotNull>1</NotNull>
+      <Position>2</Position>
+      <StoredType>VARCHAR(64)|0s</StoredType>
+    </column>
+    <column id="743" parent="634" name="email">
+      <NotNull>1</NotNull>
+      <Position>3</Position>
+      <StoredType>VARCHAR(255)|0s</StoredType>
+    </column>
+    <column id="744" parent="634" name="password_hash">
+      <NotNull>1</NotNull>
+      <Position>4</Position>
+      <StoredType>VARCHAR(255)|0s</StoredType>
+    </column>
+    <column id="745" parent="634" name="created_at">
+      <NotNull>1</NotNull>
+      <Position>5</Position>
+      <StoredType>DATETIME|0s</StoredType>
+    </column>
+    <column id="746" parent="634" name="updated_at">
+      <NotNull>1</NotNull>
+      <Position>6</Position>
+      <StoredType>DATETIME|0s</StoredType>
+    </column>
+    <index id="747" parent="634" name="ix_users_username">
+      <ColNames>username</ColNames>
+      <Unique>1</Unique>
+    </index>
+    <index id="748" parent="634" name="ix_users_email">
+      <ColNames>email</ColNames>
+      <Unique>1</Unique>
+    </index>
+    <key id="749" parent="634">
+      <ColNames>id</ColNames>
+      <Primary>1</Primary>
+    </key>
+    <column id="750" parent="635" name="id">
+      <NotNull>1</NotNull>
+      <Position>1</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="751" parent="635" name="user_id">
+      <NotNull>1</NotNull>
+      <Position>2</Position>
+      <StoredType>INTEGER|0s</StoredType>
+    </column>
+    <column id="752" parent="635" name="ticker">
+      <NotNull>1</NotNull>
+      <Position>3</Position>
+      <StoredType>VARCHAR(16)|0s</StoredType>
+    </column>
+    <column id="753" parent="635" name="note">
+      <NotNull>1</NotNull>
+      <Position>4</Position>
+      <StoredType>VARCHAR(255)|0s</StoredType>
+    </column>
+    <column id="754" parent="635" name="created_at">
+      <NotNull>1</NotNull>
+      <Position>5</Position>
+      <StoredType>DATETIME|0s</StoredType>
+    </column>
+    <foreign-key id="755" parent="635">
+      <ColNames>user_id</ColNames>
+      <OnDelete>cascade</OnDelete>
+      <RefColNames>id</RefColNames>
+      <RefTableName>users</RefTableName>
+    </foreign-key>
+    <index id="756" parent="635" name="sqlite_autoindex_watchlist_1">
+      <ColNames>user_id
+ticker</ColNames>
+      <NameSurrogate>1</NameSurrogate>
+      <Unique>1</Unique>
+    </index>
+    <index id="757" parent="635" name="ix_watchlist_user_id">
+      <ColNames>user_id</ColNames>
+    </index>
+    <key id="758" parent="635">
+      <ColNames>id</ColNames>
+      <Primary>1</Primary>
+    </key>
+    <key id="759" parent="635" name="uq_watchlist_user_ticker">
+      <ColNames>user_id
+ticker</ColNames>
+      <UnderlyingIndexName>sqlite_autoindex_watchlist_1</UnderlyingIndexName>
+    </key>
   </database-model>
 </dataSource>

@@ -68,6 +68,24 @@ OBSERVE_EXPIRE_TRADING_DAYS = 7
 MIN_ENTRY_CONFIDENCE = 6.0
 
 # ---------------------------------------------------------------------------
+# 选股集群: 自上而下 (宏观事件 → 生命周期 → 三大支柱) 筛选常量 (§7.1)
+# ---------------------------------------------------------------------------
+
+MAX_INDUSTRIES_OUTPUT = 4            # 生命周期定位后最终输出行业数 (Top 4)
+STOCK_SELECT_INDUSTRIES = 3          # 进入个股精选的行业数 (优化点 1: 控制 LLM 调用次数)
+STOCKS_PER_INDUSTRY = 3              # 每行业精选入池股票数 (合计约 9 只)
+MIN_STOCK_COMPREHENSIVE_SCORE = 5.0  # LLM 三大支柱综合分硬门槛, 低于直接剔除
+INDUSTRY_STOCK_POOL_SIZE = 20        # 每行业取流动性前 20 成分股作候选
+MAX_LIMIT_UP_WAVES = 8               # 涨停潮题材最多保留条数 (辅助信号)
+MACRO_NEWS_DAYS = 3                  # 宏观事件解析的新闻窗口 (日)
+MAX_SCAN_CANDIDATES = 12             # 行业扫描候选上限 (事件映射优先, 涨幅榜补足)
+
+# 行业榜 (前端展示): 筛选自选时生命周期排序后的前 N 个行业作为行业榜,
+# 每个行业展示前 M 只龙头股 (精选行业取三大支柱评估排序, 其余取流动性前 M)
+INDUSTRY_BOARD_SIZE = 10
+LEADER_STOCKS_PER_BOARD = 10
+
+# ---------------------------------------------------------------------------
 # Stop-loss / take-profit rules (multi-bar confirmed, never intraday spikes)
 # ---------------------------------------------------------------------------
 

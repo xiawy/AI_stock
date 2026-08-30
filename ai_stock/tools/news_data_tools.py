@@ -22,6 +22,27 @@ def _validate_a_stock_code(tool_name: str, ticker: str) -> tuple[bool, str]:
     return True, code
 
 
+def fetch_news(ticker: str, start_date: str, end_date: str):
+    """纯函数内核: 校验代码后返回供应商原始结果 (新闻文本), 供程序化调用."""
+    ok, code_or_message = _validate_a_stock_code("get_news", ticker)
+    if not ok:
+        return code_or_message
+    return route_to_vendor("get_news", code_or_message, start_date, end_date)
+
+
+def fetch_global_news(curr_date: str, look_back_days: int = 7, limit: int = 5):
+    """纯函数内核: 返回供应商原始结果 (全球新闻文本), 供程序化调用."""
+    return route_to_vendor("get_global_news", curr_date, look_back_days, limit)
+
+
+def fetch_insider_transactions(ticker: str):
+    """纯函数内核: 校验代码后返回供应商原始结果 (增减持文本), 供程序化调用."""
+    ok, code_or_message = _validate_a_stock_code("get_insider_transactions", ticker)
+    if not ok:
+        return code_or_message
+    return route_to_vendor("get_insider_transactions", code_or_message)
+
+
 @tool
 def get_news(
     ticker: Annotated[str, "6-digit A-stock code (e.g. 600379). Must be numeric, NOT company name or Chinese text"],
@@ -38,10 +59,7 @@ def get_news(
     Returns:
         str: A formatted string containing news data
     """
-    ok, code_or_message = _validate_a_stock_code("get_news", ticker)
-    if not ok:
-        return code_or_message
-    return route_to_vendor("get_news", code_or_message, start_date, end_date)
+    return fetch_news(ticker, start_date, end_date)
 
 @tool
 def get_global_news(
@@ -59,7 +77,7 @@ def get_global_news(
     Returns:
         str: A formatted string containing global news data
     """
-    return route_to_vendor("get_global_news", curr_date, look_back_days, limit)
+    return fetch_global_news(curr_date, look_back_days, limit)
 
 @tool
 def get_insider_transactions(
@@ -73,7 +91,4 @@ def get_insider_transactions(
     Returns:
         str: A report of insider transaction data
     """
-    ok, code_or_message = _validate_a_stock_code("get_insider_transactions", ticker)
-    if not ok:
-        return code_or_message
-    return route_to_vendor("get_insider_transactions", code_or_message)
+    return fetch_insider_transactions(ticker)
