@@ -646,22 +646,23 @@ class PositionOpenAgent(BaseAgent):
             return result
 
         fill_price = result_order.avg_fill_price
+        # 含费成本: 与 broker 内存态/用户账户口径统一 (避免盈亏系统性高估)
+        cost_price = round(
+            (result_order.amount + result_order.fee) / result_order.filled_quantity, 4,
+        )
         stop_loss_pct = float(plan.get("stop_loss_pct", 5.0))
         take_profit_pct = float(plan.get("take_profit_pct", 15.0))
 
         # 5) 写持仓池: T+1 禁卖标记 + 操作规划 + 走势预测 (§7.2.4)
-        # 带北京时间时区写入: SQLite 读回保持 aware, 避免被误当 UTC 延长禁卖窗口 8 小时
-        from ..calendar_utils import next_trading_day
-        _market_tz = timezone(timedelta(hours=8))
-        cannot_sell_until = datetime.combine(
-            next_trading_day(datetime.now().date()), datetime.min.time(),
-        ).replace(hour=15, tzinfo=_market_tz) + timedelta(seconds=1)
+        # 复用 user_accounts._t1_lock_until: 市场时区下一交易日开盘, 全链路口径一致
+        from ..user_accounts import _t1_lock_until
+        cannot_sell_until = _t1_lock_until()
         db_ops.upsert_holding({
             "symbol": symbol,
             "name": name or quote.get("name", ""),
             "quantity": result_order.filled_quantity,
             "available_quantity": 0,  # T+1: 当日买入冻结
-            "cost_price": fill_price,
+            "cost_price": cost_price,
             "entry_reason": verification.get("reason", ""),
             "plan": plan,
             "predicted_path": {"text": verification.get("predicted_path", "")},

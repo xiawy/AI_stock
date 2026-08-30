@@ -117,9 +117,15 @@ def upsert_optional_stock(item: dict) -> bool:
         row.add_time = _now()
         row.remove_reason = ""
         row.remove_time = None
-        row.observe_expire = advance_trading_days(
-            datetime.now().date(), OBSERVE_EXPIRE_TRADING_DAYS,
-        )
+        # aware datetime 写入 (过期日北京时间 23:59:59): DateTime 列类型匹配,
+        # 且过期日当天任何时刻比较均不触发, 保持「过期日仍可观察, 次日起到期」语义;
+        # 旧版写 date 对象依赖 SQLite strftime 隐式兼容, 跨后端脆弱.
+        row.observe_expire = datetime.combine(
+            advance_trading_days(
+                datetime.now(_MARKET_TZ).date(), OBSERVE_EXPIRE_TRADING_DAYS,
+            ),
+            datetime.max.time(),
+        ).replace(microsecond=0, tzinfo=_MARKET_TZ)
         s.commit()
     return True
 
@@ -191,11 +197,19 @@ def update_optional_status(
 def expire_stale_optional(today: datetime | None = None) -> int:
     """观察期到期 → status=expired (每日报告前跑一次).
 
-    observe_expire 存的是交易日 date: 必须按"日期"比较 (过期日当天仍可观察,
-    次日起才到期), 用 aware datetime 直接比会在过期日零点就提前出池, 观察期少一天.
+    observe_expire 为过期日北京时间 23:59:59 的 aware datetime (旧数据可能为
+    date 对象): 按市场时区当日零点统一比较, 两种存储形态均满足「过期日当天
+    仍可观察, 次日起到期」语义.
     """
     now = today or _now()
-    expire_before = now.date() if isinstance(now, datetime) else now
+    if isinstance(now, datetime):
+        market_today = now.astimezone(_MARKET_TZ).date() \
+            if now.tzinfo else now.date()
+    else:
+        market_today = now
+    expire_before = datetime.combine(market_today, datetime.min.time()).replace(
+        tzinfo=_MARKET_TZ,
+    )
     with session_scope() as s:
         result = s.execute(
             update(StockPoolOptional)
@@ -420,7 +434,10 @@ def get_trades(
     limit: int = 200,
     user_id: str | None = None,
 ) -> list[dict]:
-    """user_id 缺省为系统账户 (保持既有引擎链路口径); '__all__' 返回全部用户."""
+    """user_id 缺省为系统账户 (保持既有引擎链路口径); '__all__' 返回全部用户.
+
+    limit<=0 表示不限条数 (如 broker 全量回放重建状态).
+    """
     from .config import SYSTEM_USER
 
     uid = SYSTEM_USER if user_id is None else user_id
@@ -436,22 +453,28 @@ def get_trades(
                 TradeLog.trade_time >= day,
                 TradeLog.trade_time < day + timedelta(days=1),
             )
-        rows = q.limit(limit).all()
+        rows = q.limit(limit).all() if limit > 0 else q.all()
         return [r.to_dict() for r in rows]
 
 
-def count_orders_today(date_str: Optional[str] = None) -> int:
-    """当日委托笔数 (含 rejected, 用于 max_daily_orders 校验; 按北京时间日界)."""
+def count_orders_today(date_str: Optional[str] = None, user_id: str | None = None) -> int:
+    """当日委托笔数 (含 rejected, 用于 max_daily_orders 校验; 按北京时间日界).
+
+    user_id 缺省为系统账户 (与既有引擎链路口径一致), 避免多用户流水
+    互相挤占限额; '__all__' 统计全部用户.
+    """
+    from .config import SYSTEM_USER
+
+    uid = SYSTEM_USER if user_id is None else user_id
     day = _market_day_start(date_str)
     with session_scope() as s:
-        return (
-            s.query(TradeLog)
-            .filter(
-                TradeLog.trade_time >= day,
-                TradeLog.trade_time < day + timedelta(days=1),
-            )
-            .count()
+        q = s.query(TradeLog).filter(
+            TradeLog.trade_time >= day,
+            TradeLog.trade_time < day + timedelta(days=1),
         )
+        if uid != "__all__":
+            q = q.filter(TradeLog.user_id == uid)
+        return q.count()
 
 
 # ---------------------------------------------------------------------------
@@ -520,6 +543,32 @@ def adjust_user_cash(user_id: str, delta: float) -> Optional[float]:
         return row.cash_balance
 
 
+def deduct_user_cash(user_id: str, amount: float) -> Optional[float]:
+    """原子扣款: 单条 UPDATE 带余额守卫, 返回扣款后余额.
+
+    账户不存在或余额不足返回 None (并发买卖不会透支票款);
+    与先查后扣的 ``adjust_user_cash`` 不同, 检查与扣减在同一条语句内完成.
+    """
+    amount = round(float(amount), 2)
+    if amount <= 0:
+        return adjust_user_cash(user_id, -amount)
+    with session_scope() as s:
+        result = s.execute(
+            update(UserAccount)
+            .where(
+                UserAccount.user_id == user_id,
+                UserAccount.cash_balance >= amount - 1e-6,
+            )
+            .values(cash_balance=UserAccount.cash_balance - amount)
+        )
+        if not result.rowcount:
+            s.rollback()
+            return None
+        s.commit()
+        row = s.get(UserAccount, user_id)
+        return round(row.cash_balance, 2) if row else None
+
+
 def get_user_trade_stats(user_id: str) -> dict:
     """用户交易统计: 以已成交卖出为一笔闭环交易, 统计胜率与累计盈亏."""
     trades = get_trades(limit=5000, user_id=user_id)
@@ -549,27 +598,34 @@ def get_realized_pnl_today(date_str: Optional[str] = None, user_id: str | None =
     """当日已实现盈亏.
 
     优先汇总卖出流水中已记录的 realized_pnl (broker/用户卖出均写入);
-    旧数据无记录时降级为当日买卖配对的近似口径兜底.
+    无成本记录的旧数据行用当日买入均价近似, 与已记录行合并汇总,
+    避免部分有记录/部分无记录时口径不一致导致漏算.
     """
     trades = get_trades(date_str=date_str, limit=1000, user_id=user_id)
     sells = [t for t in trades if t["side"] == "sell" and t["status"] == "filled"]
-    recorded = [t for t in sells if (t.get("cost_price") or 0.0) > 0]
-    if recorded:
-        return round(sum(t.get("realized_pnl") or 0.0 for t in recorded), 2)
-    # 兜底: 旧数据近似口径 (当日卖出回款 - 卖出份额×当日买入均价)
-    buy_amount, sell_net = 0.0, 0.0
-    buy_qty, sell_qty = 0, 0
-    for t in trades:
-        if t["side"] == "buy" and t["status"] == "filled":
-            buy_amount += t["amount"] + t["fee"]
-            buy_qty += t["quantity"]
-        elif t["side"] == "sell" and t["status"] == "filled":
-            sell_net += t["amount"] - t["fee"]
-            sell_qty += t["quantity"]
-    if sell_qty == 0 or buy_qty == 0:
+    if not sells:
         return 0.0
-    avg_cost = buy_amount / buy_qty
-    return sell_net - sell_qty * avg_cost
+    recorded = [t for t in sells if (t.get("cost_price") or 0.0) > 0]
+    unrecorded = [t for t in sells if (t.get("cost_price") or 0.0) <= 0]
+    total = sum(t.get("realized_pnl") or 0.0 for t in recorded)
+    if unrecorded:
+        # 兜底: 无成本记录的卖出用当日买入均价近似 (当日无买入则计为 -卖出费)
+        buy_amount, buy_qty = 0.0, 0
+        for t in trades:
+            if t["side"] == "buy" and t["status"] == "filled":
+                buy_amount += t["amount"] + t["fee"]
+                buy_qty += t["quantity"]
+        avg_cost = buy_amount / buy_qty if buy_qty else 0.0
+        for t in unrecorded:
+            if avg_cost > 0:
+                total += (t["amount"] - t["fee"]) - t["quantity"] * avg_cost
+            else:
+                total -= t["fee"]
+        logger.warning(
+            "realized pnl fallback: %d/%d sells lack cost_price, 近似口径兜底",
+            len(unrecorded), len(sells),
+        )
+    return round(total, 2)
 
 
 # ---------------------------------------------------------------------------

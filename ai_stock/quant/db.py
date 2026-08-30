@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from collections.abc import Generator
 from pathlib import Path
 
@@ -77,18 +78,22 @@ def _build_engine(url: str):
 
 _engine = None
 _SessionFactory: sessionmaker | None = None
+_engine_lock = threading.Lock()
 
 
 def get_engine():
-    """惰性创建并返回全局 quant engine 单例."""
+    """惰性创建并返回全局 quant engine 单例 (带锁, 防多线程重复初始化)."""
     global _engine, _SessionFactory
-    if _engine is None:
-        url = _resolve_db_url()
-        _engine = _build_engine(url)
-        _SessionFactory = sessionmaker(
-            bind=_engine, autoflush=False, autocommit=False, expire_on_commit=False,
-        )
-        logger.info("Quant engine ready: %s", url)
+    if _engine is not None:
+        return _engine
+    with _engine_lock:
+        if _engine is None:
+            url = _resolve_db_url()
+            _engine = _build_engine(url)
+            _SessionFactory = sessionmaker(
+                bind=_engine, autoflush=False, autocommit=False, expire_on_commit=False,
+            )
+            logger.info("Quant engine ready: %s", url)
     return _engine
 
 

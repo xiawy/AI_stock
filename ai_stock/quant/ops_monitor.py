@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +42,10 @@ class AlertManager:
             logger.debug("Alert %s silenced (window %.0fs)", alert_type, self.silence_seconds)
             return False
         self._last_emit[alert_type] = now
+        # 长期运行防泄漏: 超出上限时淘汰最旧的告警类型条目 (过期条目无复用语义)
+        if len(self._last_emit) > 500:
+            for _ in range(len(self._last_emit) - 500):
+                self._last_emit.pop(next(iter(self._last_emit)), None)
         log_fn = _LEVEL_LOG.get(level, logger.warning)
         log_fn("[%s] %s: %s", level, alert_type, message)
         if level in (ERROR, CRITICAL):
@@ -86,7 +89,7 @@ def generate_daily_report(trade_date: Optional[str] = None) -> dict:
     optional_removed = db_ops.get_decisions(
         limit=500, agent="logic_guard", decision="remove", date=date_str,
     )
-    trades = db_ops.get_trades(date_str=date_str, limit=200)
+    trades = db_ops.get_trades(date_str=date_str, limit=0)  # 不截断, 防超 200 笔统计失真
     holdings = db_ops.get_holdings()
     today_decisions = db_ops.get_decisions(limit=500, date=date_str)
     errors = [d for d in today_decisions if "error" in (d.get("decision") or "")]

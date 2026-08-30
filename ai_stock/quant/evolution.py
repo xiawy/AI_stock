@@ -153,10 +153,15 @@ def _segment_results(
     series_map: dict[str, list[float]],
     seg: range,
     params: dict,
+    base_len: int = 0,
 ) -> list[dict]:
     results = []
     for closes in series_map.values():
-        segment = list(closes[seg.start:seg.stop])
+        # 右对齐切片: 各标的序列终点一致 (最新 K 线) 但长度不同,
+        # 按最短序列基准右移, 保证三段窗口的日历时间轴对齐;
+        # base_len=0 保持旧行为 (绝对索引) 兼容既有调用.
+        offset = max(len(closes) - base_len, 0) if base_len else 0
+        segment = list(closes[offset + seg.start:offset + seg.stop])
         if len(segment) < 5:
             continue
         results.append(backtest_stop_policy(segment, **params))
@@ -169,6 +174,7 @@ def search_params(
     valid_seg: range,
     grid: Optional[list[dict]] = None,
     scorer: Optional[Callable[[dict], float]] = None,
+    base_len: int = 0,
 ) -> tuple[Optional[dict], dict]:
     """训练集网格搜索 + 验证集确认. 返回 (最优参数, {train, valid} 指标).
 
@@ -180,13 +186,17 @@ def search_params(
 
     best_params, best_score, best_train, best_valid = None, -math.inf, {}, {}
     for params in grid:
-        train_metrics = aggregate_metrics(_segment_results(series_map, train_seg, params))
+        train_metrics = aggregate_metrics(
+            _segment_results(series_map, train_seg, params, base_len)
+        )
         score = scorer(train_metrics)
         if score > best_score:
             best_score = score
             best_params = params
             best_train = train_metrics
-            best_valid = aggregate_metrics(_segment_results(series_map, valid_seg, params))
+            best_valid = aggregate_metrics(
+                _segment_results(series_map, valid_seg, params, base_len)
+            )
     return best_params, {"train": best_train, "valid": best_valid}
 
 
@@ -237,11 +247,15 @@ def evolve_stop_loss(
     if oos_seg.stop - oos_seg.start < 5:
         return {"status": "skipped", "reason": "样本外段过短, 无法校验"}
 
-    best_params, tv_metrics = search_params(series_map, train_seg, valid_seg, grid)
+    best_params, tv_metrics = search_params(
+        series_map, train_seg, valid_seg, grid, base_len=n,
+    )
     if best_params is None:
         return {"status": "skipped", "reason": "参数网格为空"}
 
-    oos_metrics = aggregate_metrics(_segment_results(series_map, oos_seg, best_params))
+    oos_metrics = aggregate_metrics(
+        _segment_results(series_map, oos_seg, best_params, base_len=n)
+    )
     gate_rule = {"min_sample_out_perf": MIN_OOS_SHARPE}
     oos_passed = validate_sample_out_perf(oos_metrics, gate_rule) \
         and oos_metrics["max_drawdown"] <= MAX_OOS_DRAWDOWN

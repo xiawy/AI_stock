@@ -362,7 +362,8 @@ class Orchestrator:
             "flow_type": flow_type,
             "step": step_def["step"],
             "step_index": step_index,
-            "context": flow_data,
+            # 剥离下划线前缀内部字段 (如 _step_started_at), 避免引擎元数据泄漏给下游
+            "context": {k: v for k, v in flow_data.items() if not k.startswith("_")},
         }
         task_id, created = enqueue_task(
             step_def["queue"], step_def["task_type"], payload,

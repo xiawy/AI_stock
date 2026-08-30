@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -31,6 +32,21 @@ from .config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# A 股市场时区: T+1 / 状态重建的日界口径 (与 db_ops/_MARKET_TZ 对齐,
+# 避免主机时区非东八区时本地 datetime.now() 切错日界)
+_MARKET_TZ = timezone(timedelta(hours=8))
+
+
+def _trade_date_market(ts: str) -> str:
+    """trade_time (UTC 存储) 转 A 股市场时区日期, 回放 T+1 口径一致."""
+    try:
+        dt = datetime.fromisoformat(ts or "")
+    except ValueError:
+        return (ts or "")[:10]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_MARKET_TZ).strftime("%Y-%m-%d")
 
 
 class OrderSide(Enum):
@@ -172,6 +188,13 @@ class SimulatedBroker(BrokerAdapter):
         # symbol -> {"qty": int, "available": int, "cost": float, "buy_date": str}
         self._positions: Dict[str, dict] = {}
         self._today = None
+        # 多队列消费线程并发下单保护 (现金/持仓内存态竞态)
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def _market_today() -> str:
+        """市场日期 (北京时间): T+1 与状态重建的唯一日界口径."""
+        return datetime.now(_MARKET_TZ).strftime("%Y-%m-%d")
 
     # -- 行情 ---------------------------------------------------------------
     @staticmethod
@@ -198,47 +221,50 @@ class SimulatedBroker(BrokerAdapter):
         卖出按时间序冲减可用. 修复旧版回放后 available 恒为 0 导致当日加仓后
         旧仓被整体冻结无法卖出的问题.
         """
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = self._market_today()
         if self._cash is not None and self._today == today:
             return
-        initial = float(db_ops.get_config_value("initial_cash", "1000000"))
-        cash = initial
-        positions: Dict[str, dict] = {}
-        trades = db_ops.get_trades(limit=5000)
-        for t in reversed(trades):  # 时间正序回放
-            if t["status"] != "filled":
-                continue
-            sym = t["symbol"]
-            trade_date = (t.get("trade_time") or "")[:10]
-            pos = positions.setdefault(
-                sym, {"qty": 0, "available": 0, "cost": 0.0, "buy_date": ""},
+        with self._lock:
+            if self._cash is not None and self._today == today:
+                return  # 其他线程已完成本日重建
+            initial = float(db_ops.get_config_value("initial_cash", "1000000"))
+            cash = initial
+            positions: Dict[str, dict] = {}
+            trades = db_ops.get_trades(limit=0)  # 全量回放, 不截断 (防状态重建不完整)
+            for t in reversed(trades):  # 时间正序回放
+                if t["status"] != "filled":
+                    continue
+                sym = t["symbol"]
+                trade_date = _trade_date_market(t.get("trade_time"))
+                pos = positions.setdefault(
+                    sym, {"qty": 0, "available": 0, "cost": 0.0, "buy_date": ""},
+                )
+                if t["side"] == "buy":
+                    total_cost = pos["cost"] * pos["qty"] + t["amount"] + t["fee"]
+                    pos["qty"] += t["quantity"]
+                    pos["cost"] = total_cost / pos["qty"] if pos["qty"] else 0.0
+                    pos["buy_date"] = trade_date
+                    if trade_date and trade_date < today:
+                        pos["available"] += t["quantity"]  # 隔日买入已解冻
+                    cash -= t["amount"] + t["fee"]
+                elif t["side"] == "sell":
+                    pos["qty"] = max(pos["qty"] - t["quantity"], 0)
+                    pos["available"] = max(pos["available"] - t["quantity"], 0)
+                    cash += t["amount"] - t["fee"]
+            self._cash = cash
+            self._positions = positions
+            self._today = today
+            logger.info(
+                "SimulatedBroker state rebuilt: cash=%.2f, %d positions",
+                cash, len(positions),
             )
-            if t["side"] == "buy":
-                total_cost = pos["cost"] * pos["qty"] + t["amount"] + t["fee"]
-                pos["qty"] += t["quantity"]
-                pos["cost"] = total_cost / pos["qty"] if pos["qty"] else 0.0
-                pos["buy_date"] = trade_date
-                if trade_date and trade_date < today:
-                    pos["available"] += t["quantity"]  # 隔日买入已解冻
-                cash -= t["amount"] + t["fee"]
-            elif t["side"] == "sell":
-                pos["qty"] = max(pos["qty"] - t["quantity"], 0)
-                pos["available"] = max(pos["available"] - t["quantity"], 0)
-                cash += t["amount"] - t["fee"]
-        self._cash = cash
-        self._positions = positions
-        self._today = today
-        logger.info(
-            "SimulatedBroker state rebuilt: cash=%.2f, %d positions",
-            cash, len(positions),
-        )
 
     def _refresh_available(self, symbol: str) -> None:
         """T+1: 过了最后一笔买入日, 冻结份额转为可用."""
         pos = self._positions.get(symbol)
         if not pos or not pos["buy_date"]:
             return
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = self._market_today()
         if pos["buy_date"] < today:
             # 最后一笔买入已隔日 → 剩余持仓全部可卖 (含当日部分减仓后的余量)
             pos["available"] = pos["qty"]
@@ -290,6 +316,12 @@ class SimulatedBroker(BrokerAdapter):
         return out
 
     def place_order(self, request: OrderRequest) -> OrderResult:
+        # buy/hold/risk 多队列消费线程可能并发下单, 全程持锁防现金/持仓竞态;
+        # RLock 允许锁内调用的 _ensure_state 再次加锁重建状态.
+        with self._lock:
+            return self._place_order_impl(request)
+
+    def _place_order_impl(self, request: OrderRequest) -> OrderResult:
         self._ensure_state()
         order_id = f"SIM-{uuid.uuid4().hex[:12]}"
         symbol = str(request.symbol).strip().lower()
@@ -316,7 +348,7 @@ class SimulatedBroker(BrokerAdapter):
             pos = self._positions.get(symbol)
             if not pos or pos["available"] < qty:
                 avail = pos["available"] if pos else 0
-                if pos and pos["qty"] >= qty and pos["buy_date"] == datetime.now().strftime("%Y-%m-%d"):
+                if pos and pos["qty"] >= qty and pos["buy_date"] == self._market_today():
                     return self._reject(order_id, request, "T+1: 当日买入不可卖出")
                 return self._reject(order_id, request, f"可卖数量不足 (可用 {avail} < {qty})")
 
@@ -355,7 +387,7 @@ class SimulatedBroker(BrokerAdapter):
             total_cost = pos["cost"] * pos["qty"] + amount + fee
             pos["qty"] += qty
             pos["cost"] = total_cost / pos["qty"]
-            pos["buy_date"] = datetime.now().strftime("%Y-%m-%d")  # T+1 冻结
+            pos["buy_date"] = self._market_today()  # T+1 冻结
             self._cash -= amount + fee
         else:
             pos = self._positions[symbol]

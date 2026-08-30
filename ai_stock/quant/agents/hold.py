@@ -165,7 +165,9 @@ class TrendTrackingAgent(BaseAgent):
         # 走势对比: 与买入时预测路径对比 (LLM 预测文本 + 简单数据对比)
         predicted = (context.get("predicted_path") or {}).get("text", "")
         trend = "as_expected"
-        if gain_ratio >= 0.08 or "sell_all" not in rule_actions and max_gain_ratio >= 0.10:
+        if gain_ratio >= 0.08 or (
+            "sell_all" not in rule_actions and max_gain_ratio >= 0.10
+        ):
             trend = "above"       # 超预期
         elif loss_ratio >= STOP_LOSS_PCT * 0.6:
             trend = "below"       # 不及预期
@@ -220,10 +222,10 @@ class AddPositionAgent(BaseAgent):
         current_close = close_series[-1] if close_series else 0.0
         gain_ratio = trend_result.get("gain_ratio", 0.0)
 
-        # 突破关键位置: 收盘突破近 10 日高点 (前高, 不含当日)
+        # 突破关键位置: 收盘突破近 10 个交易日高点 (前高, 不含当日)
         breakout = bool(
             len(high_series) >= 11
-            and current_close > max(high_series[:-1])
+            and current_close > max(high_series[-11:-1])
         )
         above_expectation = trend_result.get("trend") == "above"
         new_catalyst = self._check_new_catalyst(symbol, context)
@@ -548,6 +550,24 @@ class ExecutionUpdateAgent(BaseAgent):
             "fee": result_order.fee,
         }
         if result_order.status.value == "filled":
+            # 同步持仓池: 数量累加 + 成本含费摊薄; 今日新买份额 T+1 冻结,
+            # 可卖数量保持不变 (与 broker 权威数据一致)
+            holding = db_ops.get_holding(symbol)
+            old_qty = int((holding or {}).get("quantity", 0) or 0)
+            old_cost = float((holding or {}).get("cost_price", 0.0) or 0.0)
+            new_qty = old_qty + result_order.filled_quantity
+            new_cost = (
+                (old_cost * old_qty + result_order.amount + result_order.fee) / new_qty
+                if new_qty else 0.0
+            )
+            db_ops.upsert_holding({
+                "symbol": symbol,
+                "quantity": new_qty,
+                "available_quantity": int(
+                    (holding or {}).get("available_quantity", 0) or 0
+                ),
+                "cost_price": round(new_cost, 4),
+            })
             # 多用户扇出: 加仓同步到每个用户账户 (各自按 20% 资金预算执行)
             from ..user_accounts import fanout_buy
             outcome["user_fanout"] = fanout_buy(

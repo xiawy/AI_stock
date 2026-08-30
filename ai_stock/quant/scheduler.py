@@ -42,6 +42,12 @@ def _aligned_hhmm(now: datetime, interval_minutes: int) -> str:
     return f"{now.hour:02d}{slot:02d}"
 
 
+def _shifted_time(hour: int, minute: int, delta_minutes: int = 0) -> dtime:
+    """构造 daily 触发时刻: 分钟偏移进位, 避免 minute ≥60 时 dtime 抛异常."""
+    total = hour * 60 + minute + delta_minutes
+    return dtime((total // 60) % 24, total % 60)
+
+
 # ---------------------------------------------------------------------------
 # 触发器 — 只入队, 不做任何业务逻辑 (§5.1)
 # ---------------------------------------------------------------------------
@@ -352,13 +358,14 @@ class QuantScheduler:
             {"name": "daily_report", "kind": "daily",
              "at": dtime(*DAILY_REPORT_AT), "fn": trigger_daily_report},
             {"name": "pool_expire", "kind": "daily",
-             "at": dtime(DAILY_REPORT_AT[0], DAILY_REPORT_AT[1] + 5), "fn": trigger_pool_expire},
+             "at": _shifted_time(*DAILY_REPORT_AT, delta_minutes=5), "fn": trigger_pool_expire},
             {"name": "cleanup", "kind": "daily", "at": dtime(3, 0), "fn": trigger_cleanup},
         ]
         return jobs
 
     def _register_apscheduler_jobs(self) -> None:
         aps = self._aps
+        _pool_expire_at = _shifted_time(*DAILY_REPORT_AT, delta_minutes=5)
         for hhmm in SELECTION_SCHEDULE:
             hour, minute = hhmm.split(":")
             aps.add_job(
@@ -386,8 +393,8 @@ class QuantScheduler:
             minute=DAILY_REPORT_AT[1], id="daily_report", replace_existing=True,
         )
         aps.add_job(
-            trigger_pool_expire, "cron", hour=DAILY_REPORT_AT[0],
-            minute=DAILY_REPORT_AT[1] + 5, id="pool_expire", replace_existing=True,
+            trigger_pool_expire, "cron", hour=_pool_expire_at.hour,
+            minute=_pool_expire_at.minute, id="pool_expire", replace_existing=True,
         )
         aps.add_job(
             trigger_cleanup, "cron", hour=3, minute=0,

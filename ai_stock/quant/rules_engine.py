@@ -81,15 +81,19 @@ class RuleEngine:
     """规则引擎: 加载 DB 规则 + 内置硬规则, 按优先级求值."""
 
     def __init__(self):
-        self._rules_cache: Optional[list[dict]] = None
+        # 按 include_disabled 分槽缓存: 管理/进化链路查全量 (含禁用) 与
+        # 交易链路查启用规则互不污染 (避免首次全量查询后禁用规则参与交易)
+        self._rules_cache: dict[bool, list[dict]] = {}
 
     def reload(self) -> None:
-        self._rules_cache = None
+        self._rules_cache = {}
 
     def rules(self, include_disabled: bool = False) -> list[dict]:
-        if self._rules_cache is None:
-            self._rules_cache = db_ops.get_rules(enabled_only=not include_disabled)
-        return self._rules_cache
+        if include_disabled not in self._rules_cache:
+            self._rules_cache[include_disabled] = db_ops.get_rules(
+                enabled_only=not include_disabled
+            )
+        return self._rules_cache[include_disabled]
 
     def evaluate(self, context: dict[str, Any]) -> list[dict]:
         """按优先级求值全部启用的规则, 返回触发的 [{rule_id, action, ...}]."""

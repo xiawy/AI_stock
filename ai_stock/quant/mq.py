@@ -175,9 +175,9 @@ class RedisMQBackend(MQBackend):
     # -- MQBackend API ------------------------------------------------------
     def enqueue(self, queue_name, task_type, payload, task_id,
                 priority=0, delay_seconds=0, max_attempts=3) -> str:
+        from redis import WatchError
+
         r = self._redis
-        if r.exists(self._meta_key(task_id)):
-            raise TaskAlreadyExists(task_id)
         now = _now()
         available_at = now + timedelta(seconds=max(delay_seconds, 0))
         meta = {
@@ -195,13 +195,27 @@ class RedisMQBackend(MQBackend):
             "consumer_id": "",
             "processing_started_at": "0",
         }
-        pipe = r.pipeline()
-        pipe.hset(self._meta_key(task_id), mapping=meta)
-        if delay_seconds > 0:
-            pipe.zadd(REDIS_DELAYED_KEY, {task_id: _ts(available_at)})
-        else:
-            pipe.lpush(self._queue_key(queue_name), task_id)
-        pipe.execute()
+        # WATCH + MULTI 原子入列: 双生产者同 task_id 时, 后到者要么命中
+        # exists 被拒, 要么因 WATCH 冲突重试后被拒 (旧版 exists+pipeline
+        # 非原子, 并发下可重复入列)
+        meta_key = self._meta_key(task_id)
+        while True:
+            try:
+                with r.pipeline() as pipe:
+                    pipe.watch(meta_key)
+                    if pipe.exists(meta_key):
+                        pipe.unwatch()
+                        raise TaskAlreadyExists(task_id)
+                    pipe.multi()
+                    pipe.hset(meta_key, mapping=meta)
+                    if delay_seconds > 0:
+                        pipe.zadd(REDIS_DELAYED_KEY, {task_id: _ts(available_at)})
+                    else:
+                        pipe.lpush(self._queue_key(queue_name), task_id)
+                    pipe.execute()
+                break
+            except WatchError:
+                continue  # 并发写入冲突 → 重查 (下一轮 exists 命中则抛已存在)
         logger.debug("Enqueued %s task %s -> %s", task_type, task_id, queue_name)
         return task_id
 

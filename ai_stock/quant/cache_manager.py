@@ -27,6 +27,11 @@ from . import db_ops
 
 logger = logging.getLogger(__name__)
 
+# 负缓存: 回源返回 None 时写入短 TTL 哨兵, 避免持续穿透数据源;
+# 哨兵包装使 get() 对外仍返回 None, 不破坏 _get_stale 兜底链路.
+_NEGATIVE_CACHE_MARKER = {"__neg__": True}
+_NEGATIVE_CACHE_TTL = 60
+
 
 class CircuitOpenError(Exception):
     """数据源熔断打开中, 请求被拒绝."""
@@ -175,6 +180,8 @@ class CacheManager:
     ) -> Any:
         """读缓存, miss 时回源; 熔断/回源失败时允许返回过期缓存兜底 (§9.1)."""
         cached = self.get(key)
+        if cached == _NEGATIVE_CACHE_MARKER:
+            return None  # 负缓存命中: 回源近期返回过 None, 短窗口内不穿透
         if cached is not None:
             return cached
 
@@ -197,6 +204,12 @@ class CacheManager:
             raise
 
         if value is None:
+            # 负缓存 (短 TTL): 回源返回 None 时避免高频持续穿透数据源;
+            # 哨兵包装使 get() 仍返回 None, 不破坏 _get_stale 兜底链路.
+            self.set(
+                key, {"__neg__": True}, min(ttl, _NEGATIVE_CACHE_TTL),
+                category=category,
+            )
             return None  # 外部接口返回 None 不向上传, 由调用方处理
         self.set(key, value, ttl, category=category)
         return value
