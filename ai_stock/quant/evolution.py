@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import math
+import uuid
 from datetime import datetime
 from typing import Callable, Optional, Sequence
 
@@ -190,7 +191,12 @@ def search_params(
 
 
 def _next_evolved_rule_id() -> str:
-    return f"stop_loss_evolved_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    # 秒级时间戳 + 4 位随机后缀, 避免同一秒内多次进化产生 rule_id 冲突
+    # (StrategyRule.rule_id 是主键, 冲突会静默覆盖前一条候选规则)
+    return (
+        f"stop_loss_evolved_{datetime.now().strftime('%Y%m%d%H%M%S')}_"
+        f"{uuid.uuid4().hex[:4]}"
+    )
 
 
 def _seed_evolved_cases(rule_id: str, stop_loss_pct: float) -> None:
@@ -269,7 +275,9 @@ def evolve_stop_loss(
             "metrics": {**tv_metrics, "oos": oos_metrics},
         }
 
-    # 达标: 写入候选规则 (永不自动启用) + 走强制上线流水线进入人工审核
+    # 达标: 写入候选规则 (永不自动启用) + 走强制上线流水线进入人工审核。
+    # evolution_history 记录由 submit_rule_candidate 内部唯一写入 (含三套指标),
+    # 这里不再重复插入, 避免同一候选产生两条 pending_review 记录。
     stop_pct = float(best_params["stop_loss_pct"])
     _seed_evolved_cases(rule_id, stop_pct)
     submit = submit_rule_candidate({
@@ -285,11 +293,9 @@ def evolve_stop_loss(
         "version": 1,
         "gray_scale": True,
         "min_sample_out_perf": MIN_OOS_SHARPE,
+        "metrics": {**tv_metrics, "oos": oos_metrics, "params": base_record["params"]},
     })
-    record_id = db_ops.add_evolution_record({
-        **base_record,
-        "status": submit.get("status", "pending_review"),
-    })
+    record_id = submit.get("evolution_id")
     db_ops.log_decision(
         agent="evolution", decision="candidate_submitted",
         reason=f"进化候选 {rule_id} 通过样本外校验, 进入人工审核 (禁止自动上线)",

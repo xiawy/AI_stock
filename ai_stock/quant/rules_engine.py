@@ -15,7 +15,7 @@ import logging
 from typing import Any, Optional
 
 from . import db_ops
-from .config import STOP_LOSS_PCT, TIME_STOP_MIN_GAIN, TIME_STOP_TRADING_DAYS
+from .config import LIVE_MODE, STOP_LOSS_PCT, TIME_STOP_MIN_GAIN, TIME_STOP_TRADING_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ class RuleEngine:
     def evaluate(self, context: dict[str, Any]) -> list[dict]:
         """按优先级求值全部启用的规则, 返回触发的 [{rule_id, action, ...}]."""
         triggered = []
-        # 1) 内置硬规则 (最高优先)
+        # 1) 内置硬规则 (最高优先; 风控第一道防线, 任何模式都生效)
         for rule_id, rule in HARD_RULES.items():
             try:
                 if rule["fn"](context):
@@ -102,6 +102,7 @@ class RuleEngine:
                         "rule_id": rule_id,
                         "action": rule["action"],
                         "description": rule["description"],
+                        "priority": rule["priority"],
                         "source": "builtin",
                     })
             except Exception as exc:
@@ -109,6 +110,9 @@ class RuleEngine:
         # 2) DB 配置规则 (跳过与硬规则同名的)
         for rule in self.rules():
             if rule["rule_id"] in HARD_RULES:
+                continue
+            # 灰度规则仅模拟盘观察生效 (§10.2); 实盘必须人工升级后才触发
+            if rule.get("gray_scale") and LIVE_MODE:
                 continue
             if eval_condition(rule["condition"], context):
                 triggered.append({**rule, "source": "db"})
@@ -167,22 +171,36 @@ def submit_rule_candidate(rule: dict) -> dict:
 
     样本外回测需要历史数据, 由 evolution 模块异步补充; 这里至少强制
     单测通过且进入 pending_review, 未审核规则永远 enabled=False.
+    本函数负责写入唯一一条 evolution_history 记录 (test_failed /
+    pending_review), 调用方 (evolution.py) 不要再重复插入, 避免同一
+    候选产生两条审核记录 (审计口径与 approve/reject 关联都会错乱)。
     """
     rule = {**rule, "enabled": False, "gray_scale": True}
     ok = db_ops.upsert_rule(rule)
     if not ok:
         return {"status": "invalid", "error": "rule_id 为空"}
+    metrics = rule.get("metrics") or {}
+    record_kw = {
+        "rule_id": rule["rule_id"],
+        "params": {
+            "condition": rule["condition"],
+            "action": rule["action"],
+            **metrics.get("params", {}),
+        },
+        "train_metrics": metrics.get("train", {}),
+        "valid_metrics": metrics.get("valid", {}),
+        "oos_metrics": metrics.get("oos", {}),
+    }
     passed, results = run_rule_test_cases(rule["rule_id"])
     if not passed:
         db_ops.add_evolution_record({
-            "rule_id": rule["rule_id"],
+            **record_kw,
             "status": "test_failed",
             "reviewer_note": "单元测试未通过, 直接丢弃",
         })
         return {"status": "test_failed", "results": results}
     record_id = db_ops.add_evolution_record({
-        "rule_id": rule["rule_id"],
-        "params": {"condition": rule["condition"], "action": rule["action"]},
+        **record_kw,
         "status": "pending_review",
     })
     return {"status": "pending_review", "evolution_id": record_id}

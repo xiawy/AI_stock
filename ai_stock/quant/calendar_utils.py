@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta
 logger = logging.getLogger(__name__)
 
 try:  # 优雅降级: pip install 'chinese-calendar'
-    from chinese_calendar import is_workday, is_holiday
+    from chinese_calendar import is_workday
     _HAS_CN_CAL = True
 except ImportError:
     _HAS_CN_CAL = False
@@ -39,8 +39,10 @@ def is_trading_day(d: date | datetime | None = None) -> bool:
 
     if _HAS_CN_CAL:
         try:
-            # 调休周末上班日 is_workday=True 但 A 股不开盘, 必须叠加周中判断
-            ok = is_workday(d) and not is_holiday(d) and d.weekday() < 5
+            # chinese_calendar 中 is_workday 与 is_holiday 互补 (is_workday 含调休
+            # 周末上班日), 因此只需 is_workday; 叠加 weekdays 判断是为了排除调休
+            # 周末上班日 — A 股周末不开盘
+            ok = is_workday(d) and d.weekday() < 5
         except NotImplementedError:
             # chinese_calendar 数据只覆盖到已发布的年份, 超出范围回退工作日近似
             ok = d.weekday() < 5

@@ -82,16 +82,13 @@ def generate_daily_report(trade_date: Optional[str] = None) -> dict:
     stats = backend.stats(list(ALL_QUEUES))
 
     optional_active = db_ops.get_optional_pool("active")
-    optional_removed = [
-        d for d in db_ops.get_decisions(limit=500, agent="logic_guard")
-        if d.get("decision") == "remove" and (d.get("ts") or "").startswith(date_str)
-    ]
+    # 查询下推: decision + 日期过滤在 SQL 完成, 不再拉 500 条后 Python 端过滤
+    optional_removed = db_ops.get_decisions(
+        limit=500, agent="logic_guard", decision="remove", date=date_str,
+    )
     trades = db_ops.get_trades(date_str=date_str, limit=200)
     holdings = db_ops.get_holdings()
-    decisions = db_ops.get_decisions(limit=500)
-    today_decisions = [
-        d for d in decisions if (d.get("ts") or "").startswith(date_str)
-    ]
+    today_decisions = db_ops.get_decisions(limit=500, date=date_str)
     errors = [d for d in today_decisions if "error" in (d.get("decision") or "")]
     alerts = [
         d for d in today_decisions

@@ -126,8 +126,9 @@ def pre_trade_check(order, snapshot: Optional[dict] = None) -> CheckResult:
                     return CheckResult(False, f"T+1: {until} 前禁止卖出", details)
             except ValueError:
                 pass
-        if quote["price"] <= quote.get("limit_down", 0) > 0:
-            return CheckResult(False, f"跌停价 {quote['limit_down']} 不可卖出", details)
+        limit_down = quote.get("limit_down", 0)
+        if limit_down and quote["price"] <= limit_down:
+            return CheckResult(False, f"跌停价 {limit_down} 不可卖出", details)
     else:
         if quote.get("limit_up", 0) and quote["price"] >= quote["limit_up"]:
             return CheckResult(False, f"涨停价 {quote['limit_up']} 不可买入", details)
@@ -186,39 +187,60 @@ def async_risk_scan() -> dict:
     snap = account_snapshot()
     holdings = db_ops.get_holdings()
     broker = get_broker()
-    total_assets = snap.get("total_assets", 0.0) or 1.0
+    total_assets = snap.get("total_assets", 0.0) or 0.0
 
     positions = {p.symbol: p for p in broker.get_positions()}
-    for holding in holdings:
-        symbol = holding["symbol"]
-        pos = positions.get(symbol)
-        if pos is None:
-            continue
-        # 个股仓位占比
-        value_pct = (pos.market_value or 0.0) / total_assets
-        if value_pct > SINGLE_POSITION_MAX_PCT * 1.5:
-            task_id, created = enqueue_task(
-                HOLD_QUEUE, "force_reduce",
-                {
-                    "symbol": symbol,
-                    "reason": f"单只仓位占比 {value_pct:.0%} 超限",
-                    "target_pct": SINGLE_POSITION_MAX_PCT,
-                },
-                idempotent_key=f"force_reduce_{symbol}_{datetime.now().strftime('%Y%m%d%H%M')}",
-                priority=5,
-            )
-            if created:
-                findings.append({"symbol": symbol, "issue": "position_cap", "task_id": task_id})
-                get_alerts().emit(
-                    ERROR, "position_cap",
-                    f"{symbol} 仓位占比 {value_pct:.0%} 超限, 已生成强制减仓任务",
+    # 总资产不可用 (行情/账户接口异常) 时跳过个股占比校验, 避免 0 除产生
+    # 错误占比 (value_pct → inf) 触发误减仓
+    if total_assets > 0:
+        for holding in holdings:
+            symbol = holding["symbol"]
+            pos = positions.get(symbol)
+            if pos is None:
+                continue
+            # 个股仓位占比
+            value_pct = (pos.market_value or 0.0) / total_assets
+            if value_pct > SINGLE_POSITION_MAX_PCT * 1.5:
+                task_id, created = enqueue_task(
+                    HOLD_QUEUE, "force_reduce",
+                    {
+                        "symbol": symbol,
+                        "reason": f"单只仓位占比 {value_pct:.0%} 超限",
+                        "target_pct": SINGLE_POSITION_MAX_PCT,
+                    },
+                    idempotent_key=f"force_reduce_{symbol}_{datetime.now().strftime('%Y%m%d%H%M')}",
+                    priority=5,
                 )
+                if created:
+                    findings.append({"symbol": symbol, "issue": "position_cap", "task_id": task_id})
+                    get_alerts().emit(
+                        ERROR, "position_cap",
+                        f"{symbol} 仓位占比 {value_pct:.0%} 超限, 已生成强制减仓任务",
+                    )
 
-    # 账户级: 总回撤
+    # 账户级: 总回撤 / 单日亏损 → 冻结新建仓 (与 pre_trade_check 阈值一致)
+    def _is_frozen() -> bool:
+        return db_ops.get_config_value("trade_frozen", "0") == "1"
+
     max_dd = float(db_ops.get_config_value("max_drawdown_pct", "0.10"))
-    if snap.get("drawdown_pct", 0.0) >= max_dd and \
-            db_ops.get_config_value("trade_frozen", "0") != "1":
+    if not _is_frozen() and snap.get("drawdown_pct", 0.0) >= max_dd:
         _freeze("异步风控: 总回撤超阈值", snap)
         findings.append({"issue": "drawdown_freeze"})
+
+    max_daily = float(db_ops.get_config_value("max_daily_loss_pct", "0.03"))
+    initial = float(db_ops.get_config_value("initial_cash", "1000000"))
+    if not _is_frozen() and initial > 0 and snap.get("daily_pnl", 0.0) < -initial * max_daily:
+        _freeze("异步风控: 单日亏损超阈值", snap)
+        findings.append({"issue": "daily_loss_freeze"})
+
+    # 单日委托笔数超限: 后续买单会被 pre_trade_check 拒绝, 这里显式告警留痕
+    max_orders = int(db_ops.get_config_value("max_daily_orders", "50"))
+    orders_today = db_ops.count_orders_today()
+    if orders_today >= max_orders:
+        findings.append({"issue": "daily_orders_over_limit", "max": max_orders})
+        get_alerts().emit(
+            ERROR, "daily_orders_over_limit",
+            f"当日委托笔数 {orders_today} 已达上限 {max_orders}, 后续买单将被拒绝",
+        )
 
     return {"findings": findings, "snapshot": snap}

@@ -64,11 +64,13 @@ class CircuitBreaker:
 
     def record_success(self) -> None:
         with self._lock:
-            if self._state != "closed":
-                logger.info("Circuit %s recovered → closed", self.source_name)
+            was_open = self._state != "closed"
             self._state = "closed"
             self._failure_count = 0
-            db_ops.circuit_set(self.source_name, "closed", 0)
+            # 仅在状态发生迁移时持久化 (closed→closed 每次写 SQLite 会放大写放大量)
+            if was_open:
+                logger.info("Circuit %s recovered → closed", self.source_name)
+                db_ops.circuit_set(self.source_name, "closed", 0)
 
     def record_failure(self) -> None:
         with self._lock:
@@ -128,7 +130,7 @@ class CacheManager:
 
     # -- 统一入口 ------------------------------------------------------------
     def get(self, key: str) -> Any | None:
-        """纯读 (不触发回源): L1 → Redis → SQLite 归档."""
+        """纯读 (不触发回源): L1 → Redis → SQLite 归档. Redis 命中回填 L1."""
         value = self._mem_get(key)
         if value is not None:
             return value
@@ -136,7 +138,11 @@ class CacheManager:
             try:
                 raw = self._redis.cache_get(key)
                 if raw is not None:
-                    return json.loads(raw)
+                    parsed = json.loads(raw)
+                    # Redis 命中回填 L1: 热数据复用到内存 (避免每次穿透到 Redis),
+                    # 60s 默认 TTL, 过期由后续 get_or_fetch 的 set 重新刷新
+                    self._mem_set(key, parsed, 60)
+                    return parsed
             except Exception as exc:
                 logger.debug("Redis cache read failed (%s); skip tier-2", exc)
         return db_ops.cache_get(key)
@@ -223,8 +229,29 @@ def get_cache_manager(redis_cache=None) -> CacheManager:
         return _manager
 
 
+def _restore_breaker_state(breaker: CircuitBreaker, source_name: str) -> None:
+    """首次访问时从 SQLite 恢复持久化熔断状态 (进程重启后熔断不丢失)."""
+    try:
+        row = db_ops.circuit_get(source_name)
+    except Exception as exc:
+        logger.debug("Circuit state restore failed for %s: %s", source_name, exc)
+        return
+    if row.get("state") == "open":
+        breaker._state = "open"
+        breaker._failure_count = int(row.get("failure_count") or 0)
+        # monotonic 时钟与墙钟不可直接换算, 恢复后从此刻起重新计熔断窗口
+        breaker._opened_at = time.monotonic()
+        logger.warning(
+            "Circuit %s restored OPEN from persistence (failures=%d), "
+            "%ds 后 half-open 试探",
+            source_name, breaker._failure_count, breaker.open_seconds,
+        )
+
+
 def get_breaker(source_name: str) -> CircuitBreaker:
     with _breakers_lock:
         if source_name not in _breakers:
-            _breakers[source_name] = CircuitBreaker(source_name)
+            breaker = CircuitBreaker(source_name)
+            _restore_breaker_state(breaker, source_name)
+            _breakers[source_name] = breaker
         return _breakers[source_name]

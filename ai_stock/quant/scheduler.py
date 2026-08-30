@@ -272,8 +272,12 @@ class _FallbackScheduler(threading.Thread):
             import time
 
             interval = job["minutes"] * 60
-            last = self._last_interval.get(name, 0.0)
-            if time.monotonic() - last >= interval:
+            last = self._last_interval.get(name)
+            if last is None:
+                # 启动首拍不立即触发, 避免进程重启后周期任务立即双发
+                # (幂等 key 可去重, 但调度节奏应与周期对齐)
+                self._last_interval[name] = time.monotonic()
+            elif time.monotonic() - last >= interval:
                 self._last_interval[name] = time.monotonic()
                 job["fn"]()
 

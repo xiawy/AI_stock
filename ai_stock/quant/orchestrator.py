@@ -2,6 +2,7 @@
 
 核心能力:
 - 流程超时熔断: ``running`` 状态超过 ``timeout_seconds`` 无进展 → failed + 告警
+  (以每步派发时刻为起点独立计时, 慢步骤不会被累计时长误杀; 事件到达视为进度)
 - 失败 Fallback 降级: ``allow_fallback=True`` 时子任务失败不终止流程, 读取上
   一次成功 flow 的同步骤输出作为降级数据继续运行 (同时 WARNING 告警)
 - 重启恢复: 启动时扫描 running flow, 超时的标记失败, 其余重新驱动当前步骤
@@ -214,11 +215,6 @@ class Orchestrator:
             )
             return {"action": "ignored", "reason": f"flow_{flow['status']}"}
 
-        # 超时熔断 (§8.1): running 超过 timeout_seconds 无进展
-        if self._is_timed_out(flow):
-            self._fail_flow(flow, "timeout", f"流程超时 ({flow.get('timeout_seconds')}s 无进展)")
-            return {"action": "failed", "reason": "flow_timeout"}
-
         # 事件去重 (§8.1): (flow_id, step) 短时窗口内重复直接丢弃
         if self._is_duplicate(flow_id, step):
             return {"action": "ignored", "reason": "duplicate_event"}
@@ -374,7 +370,11 @@ class Orchestrator:
             priority=2,
         )
         if created:
-            db_ops.update_flow(flow_id, current_step=step_def["step"])
+            data = dict(flow_data)
+            # 步骤级超时起点: 每步以自身派发时刻为起点独立计时 (§8.1),
+            # slow-but-successful 步骤 (多轮 LLM) 不会被全局累计时长误杀。
+            data["_step_started_at"] = datetime.now(timezone.utc).isoformat()
+            db_ops.update_flow(flow_id, current_step=step_def["step"], data=data)
             logger.info(
                 "Flow %s step [%d/%d] %s dispatched -> %s",
                 flow_id, step_index + 1, len(steps), step_def["step"], step_def["queue"],
@@ -390,10 +390,19 @@ class Orchestrator:
         timeout = int(flow.get("timeout_seconds") or 0)
         if timeout <= 0:
             return False
-        updated = _parse_iso(flow.get("updated_at")) or _parse_iso(flow.get("created_at"))
-        if updated is None:
+        # 超时以「最近一次步骤派发」为起点按步计预算 (每步最多 timeout_seconds),
+        # 而不是按 flow 整体累计时长: 合法长步骤 (选股深分析多轮 LLM) 只占用
+        # 自己步骤的预算, 不会被全局时间桶误判超时。旧数据无 _step_started_at
+        # 时退回 updated_at / created_at。
+        step_started = _parse_iso((flow.get("data") or {}).get("_step_started_at"))
+        ref = (
+            step_started
+            or _parse_iso(flow.get("updated_at"))
+            or _parse_iso(flow.get("created_at"))
+        )
+        if ref is None:
             return False
-        return (datetime.now(timezone.utc) - updated).total_seconds() > timeout
+        return (datetime.now(timezone.utc) - ref).total_seconds() > timeout
 
     def _fail_flow(self, flow: dict, status: str, reason: str) -> None:
         from .ops_monitor import ERROR, get_alerts

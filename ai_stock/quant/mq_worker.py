@@ -76,7 +76,9 @@ class TaskConsumer(threading.Thread):
 
     def _maybe_beat(self) -> None:
         self._beat_counter += 1
-        if self._beat_counter >= 3:  # ≈3×CONSUME_TIMEOUT, 低于 HEARTBEAT_INTERVAL 也能覆盖
+        # 按 HEARTBEAT_INTERVAL 换算轮次: 每 ≈HEARTBEAT_INTERVAL 秒写一次心跳
+        # (orchestrator 的活跃判定窗口为 180s, 30s 心跳有充足余量)
+        if self._beat_counter >= max(1, HEARTBEAT_INTERVAL // CONSUME_TIMEOUT):
             self._beat_counter = 0
             db_ops.beat(self.consumer_id, self.queue_name)
 

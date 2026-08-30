@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from sqlalchemy import delete, update
+from sqlalchemy.exc import IntegrityError
 
 from .db import session_scope
 from .db_models import (
@@ -606,6 +607,8 @@ def get_decisions(
     agent: Optional[str] = None,
     symbol: Optional[str] = None,
     flow_id: Optional[str] = None,
+    decision: Optional[str] = None,
+    date: Optional[str] = None,
 ) -> list[dict]:
     with session_scope() as s:
         q = s.query(AgentDecisionLog).order_by(AgentDecisionLog.ts.desc())
@@ -615,6 +618,19 @@ def get_decisions(
             q = q.filter(AgentDecisionLog.symbol == symbol)
         if flow_id:
             q = q.filter(AgentDecisionLog.flow_id == flow_id)
+        if decision:
+            q = q.filter(AgentDecisionLog.decision == decision)
+        if date:
+            try:
+                start = datetime.strptime(date, "%Y-%m-%d").replace(
+                    hour=0, minute=0, tzinfo=timezone.utc,
+                )
+                q = q.filter(
+                    AgentDecisionLog.ts >= start,
+                    AgentDecisionLog.ts < start + timedelta(days=1),
+                )
+            except ValueError:
+                pass
         return [r.to_dict() for r in q.limit(limit).all()]
 
 
@@ -661,7 +677,7 @@ def update_flow(
     data: Optional[dict] = None,
     error: Optional[str] = None,
 ) -> bool:
-    """更新 flow 状态; data 与既有 data 深合并 (每步关键结果累积)."""
+    """更新 flow 状态; data 与既有 data 顶层合并 (每步关键结果按顶层 key 累积)."""
     with session_scope() as s:
         row = s.get(QuantFlowState, flow_id)
         if row is None:
@@ -882,20 +898,14 @@ def cache_put(
 
 
 def cache_cleanup(keep_days: int = 3) -> int:
+    """删除过期缓存归档 (SQL 条件删除, 不再整表加载; NULL expires_at 永不过期)."""
     cutoff = _now() - timedelta(days=keep_days)
     with session_scope() as s:
-        rows = s.query(QuantCacheData).all()
-        expired = [
-            r.cache_key for r in rows
-            if r.expires_at is not None and _aware(r.expires_at) < cutoff
-        ]
-        result = 0
-        if expired:
-            result = s.execute(
-                delete(QuantCacheData).where(QuantCacheData.cache_key.in_(expired))
-            ).rowcount or 0
+        result = s.execute(
+            delete(QuantCacheData).where(QuantCacheData.expires_at < cutoff)
+        )
         s.commit()
-        return result
+        return result.rowcount or 0
 
 
 # ---------------------------------------------------------------------------
@@ -913,13 +923,11 @@ def news_meta_exists(news_hash: str) -> bool:
 
 
 def news_meta_add(item: dict) -> bool:
-    """新增新闻元数据; 已存在返回 False (去重)."""
+    """新增新闻元数据; 已存在返回 False (去重, 并发安全由唯一约束兜底)."""
     h = item.get("news_hash", "")
     if not h:
         return False
     with session_scope() as s:
-        if news_meta_exists(h):
-            return False
         s.add(NewsVectorMeta(
             news_hash=h,
             title=item.get("title", "")[:512],
@@ -928,8 +936,14 @@ def news_meta_add(item: dict) -> bool:
             pub_time=item.get("pub_time", ""),
             symbol=item.get("symbol", ""),
         ))
-        s.commit()
-        return True
+        try:
+            s.commit()
+            return True
+        except IntegrityError:
+            # 并发插入同一 hash: 唯一约束兜底去重; 比「先查后插」无竞态,
+            # 且不再嵌套额外 session (原实现在同一个 session 内开第二个事务)
+            s.rollback()
+            return False
 
 
 def news_meta_search(

@@ -118,7 +118,9 @@ class NewsVectorStore:
         symbol: str = "",
     ) -> list[dict]:
         """检索相关新闻 (语义优先; 强制 days 天时间窗口过滤)."""
-        if self._collection is not None and self._collection.count() > 0:
+        # 不再每查询先 count() 全量统计 (chroma count 为 O(n) 全表遍历);
+        # 空 collection 时 query 会返回空结果, 由 _search_chroma 处理
+        if self._collection is not None:
             try:
                 semantic = self._search_chroma(query, days, n_results, symbol)
                 if semantic:
@@ -142,6 +144,9 @@ class NewsVectorStore:
                 added = str(meta.get("added", ""))
                 try:
                     added_dt = datetime.fromisoformat(added)
+                    # 统一补 UTC: 旧数据可能为 naive 写入, 与 aware cutoff 比较会 TypeError
+                    if added_dt.tzinfo is None:
+                        added_dt = added_dt.replace(tzinfo=timezone.utc)
                 except ValueError:
                     added_dt = None
                 if added_dt is not None and added_dt < cutoff:
@@ -185,6 +190,8 @@ class NewsVectorStore:
                     meta = metas[i] if i < len(metas) else {}
                     try:
                         added_dt = datetime.fromisoformat(str(meta.get("added", "")))
+                        if added_dt.tzinfo is None:
+                            added_dt = added_dt.replace(tzinfo=timezone.utc)
                     except ValueError:
                         continue
                     if added_dt < cutoff:

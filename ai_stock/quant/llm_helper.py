@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any, Optional, Type, TypeVar
 
 from pydantic import BaseModel
@@ -102,21 +101,47 @@ def structured_invoke(
 
 
 def _extract_json(text: str) -> Optional[dict]:
-    """从自由文本中提取第一个 JSON 对象 (容忍 markdown 代码块)."""
+    """从自由文本中提取第一个 JSON 对象 (容忍 markdown 代码块与前后缀文本).
+
+    优先整体解析; 失败后用「字符串感知的平衡大括号扫描」定位候选对象,
+    避免原实现 ``re.search(r'\\{[\\s\\S]*\\}')`` 贪婪匹配把 JSON 后的说明
+    文本 (常含额外括号/引号) 一并吞入导致解析失败。
+    """
     if not text:
         return None
-    cleaned = text.replace("```json", "```")
-    match = re.search(r"```(.*?)```", cleaned, re.DOTALL)
-    candidates = [match.group(1)] if match else []
-    # 直接找 {...} 块
-    brace = re.search(r"\{[\s\S]*\}", cleaned)
-    if brace:
-        candidates.append(brace.group())
-    for candidate in candidates:
-        try:
-            data = json.loads(candidate.strip())
-            if isinstance(data, dict):
-                return data
-        except (ValueError, TypeError):
+    cleaned = text.replace("```json", "```").replace("```", "").strip()
+    parsed = _try_parse_json(cleaned)
+    if parsed is not None:
+        return parsed
+    depth, in_str, esc, start = 0, False, False, -1
+    for i, ch in enumerate(cleaned):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
             continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                parsed = _try_parse_json(cleaned[start:i + 1])
+                if parsed is not None:
+                    return parsed
+                start = -1
     return None
+
+
+def _try_parse_json(s: str) -> Optional[dict]:
+    try:
+        data = json.loads(s)
+    except (ValueError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
