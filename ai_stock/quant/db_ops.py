@@ -40,6 +40,23 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# A 股市场时区: 交易日的日界必须按北京时间切分 (UTC 日界会把北京凌晨~上午 8 点前的委托错归前一天).
+# 注意: SQLite 的 DateTime 比较是字符串字典序, 存储侧统一 +00:00 后缀,
+# 查询边界必须先换算成 UTC 再传入, 混合偏移后缀会导致过滤失效.
+_MARKET_TZ = timezone(timedelta(hours=8))
+
+
+def _market_day_start(date_str: Optional[str] = None) -> datetime:
+    """返回北京日历日零点 (已换算为 UTC, 供 trade_time 查询边界用)."""
+    if date_str:
+        local = datetime.strptime(date_str, "%Y-%m-%d")
+    else:
+        local = datetime.now(_MARKET_TZ).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        )
+    return local.replace(tzinfo=_MARKET_TZ).astimezone(timezone.utc)
+
+
 # ---------------------------------------------------------------------------
 # system_config
 # ---------------------------------------------------------------------------
@@ -413,7 +430,7 @@ def get_trades(
         if symbol:
             q = q.filter(TradeLog.symbol == symbol)
         if date_str:
-            day = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            day = _market_day_start(date_str)
             q = q.filter(
                 TradeLog.trade_time >= day,
                 TradeLog.trade_time < day + timedelta(days=1),
@@ -423,11 +440,8 @@ def get_trades(
 
 
 def count_orders_today(date_str: Optional[str] = None) -> int:
-    """当日委托笔数 (含 rejected, 用于 max_daily_orders 校验)."""
-    day = (
-        datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        if date_str else datetime.now(timezone.utc)
-    )
+    """当日委托笔数 (含 rejected, 用于 max_daily_orders 校验; 按北京时间日界)."""
+    day = _market_day_start(date_str)
     with session_scope() as s:
         return (
             s.query(TradeLog)
@@ -531,9 +545,17 @@ def get_user_trade_stats(user_id: str) -> dict:
 
 
 def get_realized_pnl_today(date_str: Optional[str] = None, user_id: str | None = None) -> float:
-    """当日已实现盈亏 (卖出回款 - 卖出份额对应成本 - 费用). 简化口径:
-    Σ(sell amount - fee) - Σ(对应 buy amount + fee 按比例)."""
+    """当日已实现盈亏.
+
+    优先汇总卖出流水中已记录的 realized_pnl (broker/用户卖出均写入);
+    旧数据无记录时降级为当日买卖配对的近似口径兜底.
+    """
     trades = get_trades(date_str=date_str, limit=1000, user_id=user_id)
+    sells = [t for t in trades if t["side"] == "sell" and t["status"] == "filled"]
+    recorded = [t for t in sells if (t.get("cost_price") or 0.0) > 0]
+    if recorded:
+        return round(sum(t.get("realized_pnl") or 0.0 for t in recorded), 2)
+    # 兜底: 旧数据近似口径 (当日卖出回款 - 卖出份额×当日买入均价)
     buy_amount, sell_net = 0.0, 0.0
     buy_qty, sell_qty = 0, 0
     for t in trades:

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -556,7 +557,7 @@ class SQLiteMQBackend(MQBackend):
 # ---------------------------------------------------------------------------
 
 _backend: Optional[MQBackend] = None
-_backend_lock = None
+_backend_lock = threading.Lock()
 
 
 def get_mq_backend(forced: Optional[str] = None) -> MQBackend:
@@ -566,11 +567,7 @@ def get_mq_backend(forced: Optional[str] = None) -> MQBackend:
     - ``sqlite`` → 强制 SQLite 降级
     - ``auto``   → 尝试 Redis, 失败自动降级 SQLite 并告警 (默认)
     """
-    global _backend, _backend_lock
-    import threading
-
-    if _backend_lock is None:
-        _backend_lock = threading.Lock()
+    global _backend
     if _backend is not None:
         return _backend
     with _backend_lock:

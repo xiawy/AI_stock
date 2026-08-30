@@ -41,6 +41,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_INITIAL_CAPITAL = 1_000_000.0
 DEFAULT_CAPITAL_FILENAME = "quant_capital.json"
 
+# A 股市场时区 (cannot_sell_until 写入/读取统一口径)
+_MARKET_TZ = timezone(timedelta(hours=8))
+
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent.parent
@@ -166,12 +169,16 @@ def user_portfolio_snapshot(user_id: str) -> dict:
 
 
 def _t1_lock_until() -> datetime:
-    """T+1 禁卖截止时间: 下一交易日 15:00:01 (与引擎建仓口径一致)."""
+    """T+1 禁卖截止时间: 下一交易日 15:00:01 (北京时间, 与引擎建仓口径一致).
+
+    带时区写入: SQLite 持久化为 "+08:00" 偏移字符串, 读回即 aware,
+    避免 naive 本地时间被读取侧误当 UTC 而延长禁卖窗口 8 小时.
+    """
     from .calendar_utils import next_trading_day
 
     return datetime.combine(
         next_trading_day(datetime.now().date()), datetime.min.time(),
-    ).replace(hour=15) + timedelta(seconds=1)
+    ).replace(hour=15, tzinfo=_MARKET_TZ) + timedelta(seconds=1)
 
 
 def _t1_active(holding: dict) -> bool:
@@ -184,7 +191,8 @@ def _t1_active(holding: dict) -> bool:
     except ValueError:
         return False
     if until_dt.tzinfo is None:
-        until_dt = until_dt.replace(tzinfo=timezone.utc)
+        # 旧数据为北京时间 naive 写入, 按市场时区解释 (当 UTC 会多锁 8 小时)
+        until_dt = until_dt.replace(tzinfo=_MARKET_TZ)
     return until_dt > datetime.now(timezone.utc)
 
 
@@ -249,13 +257,21 @@ def execute_user_buy(
         old_cost = float(existing.get("cost_price", 0.0) or 0.0)
         new_qty = old_qty + qty
         new_cost = (old_cost * old_qty + amount + fee) / new_qty if new_qty else 0.0
+        # 加仓不重锁旧份额: 保留既有 cannot_sell_until (过期/缺失时才会延长),
+        # 否则已解锁的旧仓位会被新仓的 T+1 窗口误冻结到下一交易日收盘后.
+        old_lock = existing.get("cannot_sell_until")
+        if isinstance(old_lock, str):
+            try:
+                old_lock = datetime.fromisoformat(old_lock)
+            except ValueError:
+                old_lock = None
         db_ops.upsert_holding({
             "symbol": symbol,
             "name": name or existing.get("name", ""),
             "quantity": new_qty,
             "available_quantity": int(existing.get("available_quantity", 0) or 0),
             "cost_price": round(new_cost, 4),
-            "cannot_sell_until": cannot_sell_until,
+            "cannot_sell_until": old_lock or cannot_sell_until,
         }, user_id=user_id)
     else:
         db_ops.upsert_holding({

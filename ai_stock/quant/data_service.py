@@ -359,7 +359,7 @@ class DataService:
             items = fetch_impact_news(
                 _market_today(), hours=hours,
             )
-            code = str(symbol).lower().removeprefix("sh").removeprefix("sz")
+            code = str(symbol).lower().removeprefix("sh").removeprefix("sz").removeprefix("bj")
             name_hint = ""
             try:
                 quote = self.get_realtime_quote(symbol)

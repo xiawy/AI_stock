@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from . import db_ops
@@ -120,7 +120,8 @@ def pre_trade_check(order, snapshot: Optional[dict] = None) -> CheckResult:
             try:
                 until_dt = datetime.fromisoformat(until)
                 if until_dt.tzinfo is None:
-                    until_dt = until_dt.replace(tzinfo=timezone.utc)
+                    # 旧数据为北京时间 naive 写入, 按市场时区解释 (当 UTC 会多锁 8 小时)
+                    until_dt = until_dt.replace(tzinfo=timezone(timedelta(hours=8)))
                 if until_dt > datetime.now(timezone.utc):
                     return CheckResult(False, f"T+1: {until} 前禁止卖出", details)
             except ValueError:

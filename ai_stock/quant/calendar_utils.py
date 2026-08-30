@@ -39,7 +39,8 @@ def is_trading_day(d: date | datetime | None = None) -> bool:
 
     if _HAS_CN_CAL:
         try:
-            ok = is_workday(d) and not is_holiday(d)
+            # 调休周末上班日 is_workday=True 但 A 股不开盘, 必须叠加周中判断
+            ok = is_workday(d) and not is_holiday(d) and d.weekday() < 5
         except NotImplementedError:
             # chinese_calendar 数据只覆盖到已发布的年份, 超出范围回退工作日近似
             ok = d.weekday() < 5

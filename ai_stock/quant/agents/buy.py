@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -650,10 +650,12 @@ class PositionOpenAgent(BaseAgent):
         take_profit_pct = float(plan.get("take_profit_pct", 15.0))
 
         # 5) 写持仓池: T+1 禁卖标记 + 操作规划 + 走势预测 (§7.2.4)
+        # 带北京时间时区写入: SQLite 读回保持 aware, 避免被误当 UTC 延长禁卖窗口 8 小时
         from ..calendar_utils import next_trading_day
+        _market_tz = timezone(timedelta(hours=8))
         cannot_sell_until = datetime.combine(
             next_trading_day(datetime.now().date()), datetime.min.time(),
-        ).replace(hour=15) + timedelta(seconds=1)
+        ).replace(hour=15, tzinfo=_market_tz) + timedelta(seconds=1)
         db_ops.upsert_holding({
             "symbol": symbol,
             "name": name or quote.get("name", ""),

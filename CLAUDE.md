@@ -6,7 +6,7 @@
 - **仓库**: https://github.com/xiawy/AI_stock
 - **协议**: Apache 2.0
 - **Python**: >=3.10
-- **当前版本**: 0.5.14（2026-08-09 发布，经 codex 九轮审计）
+- **当前版本**: 0.5.15（2026-08-30 发布，quant 子系统全量审计修复）
   ⚠️ 改版本号时**三处要一起改**：`pyproject.toml` / `CHANGELOG.md` / 这一行。漏了这行会让后续 agent 和发版流程读到旧版本（`tests/test_version_consistency.py` 会拦）。
 
 ## 架构
@@ -137,6 +137,17 @@ deepseek-v4-flash 等模型在 tool call 时可能返回中文股票名而非 6 
 ⚠️ **动这条规则必须整张跑 `test_rating_value_boundary_matrix`（22 例）**，
 只补自己想到的一两个用例正是前三轮反复的成因。误判会静默改写决策评级，
 一路污染记忆日志与绩效统计。
+
+### SQLite 的 DateTime 比较是字符串字典序，混合时区偏移直接失效（v0.5.15 实测）
+quant 库（SQLAlchemy `DateTime(timezone=True)` + SQLite）的存储格式是带偏移后缀的字符串，
+比较时**不会**做时区换算：写入侧统一 `+00:00` 后缀，查询边界若传 `+08:00` 后缀的
+datetime，字典序比较会静默漏数据（实测复现）。两条硬规则：
+
+1. **DB 层时间过滤的边界必须先 `astimezone(timezone.utc)`**（quant 里统一走
+   `db_ops._market_day_start()`）；业务语义上的"北京交易日"在应用层算好再换算。
+2. **SQLite 读回会剥离偏移后缀（恒为 naive）**：写入带 `+08:00` 的北京时间，
+   存下的墙上时刻不变但读回无时区——读侧必须约定统一按北京时间解释（如
+   `cannot_sell_until` 的两个读点），不能 `replace(tzinfo=utc)`。
 
 ### 探测 mootdx 不能覆写用户配置（v0.5.10，v0.5.12 重构）
 `StdQuotes.__init__` 里有 `config.set('BESTIP', {'HQ': self.server})`——**每建一次带

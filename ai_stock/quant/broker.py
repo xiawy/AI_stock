@@ -345,6 +345,9 @@ class SimulatedBroker(BrokerAdapter):
             return self._reject(order_id, request, f"可用资金不足 (需 {amount + fee:.2f}, 有 {self._cash:.2f})")
 
         # ---- 成交: 更新内存 + 落库 ----
+        realized_pnl = 0.0
+        pnl_pct = 0.0
+        cost_price = 0.0
         if request.side == OrderSide.BUY:
             pos = self._positions.setdefault(
                 symbol, {"qty": 0, "available": 0, "cost": 0.0, "buy_date": ""},
@@ -356,13 +359,17 @@ class SimulatedBroker(BrokerAdapter):
             self._cash -= amount + fee
         else:
             pos = self._positions[symbol]
+            cost_price = float(pos.get("cost", 0.0) or 0.0)
+            # 单笔已实现盈亏须在减仓前用原持仓成本计算 (含卖出费用)
+            realized_pnl = round((fill_price - cost_price) * qty - fee, 2)
+            pnl_pct = round((fill_price - cost_price) / cost_price, 4) if cost_price > 0 else 0.0
             pos["qty"] -= qty
             pos["available"] -= qty
             self._cash += amount - fee
             if pos["qty"] <= 0:
                 self._positions.pop(symbol, None)
 
-        db_ops.add_trade_log({
+        trade_entry = {
             "order_id": order_id,
             "symbol": symbol,
             "name": quote.get("name", ""),
@@ -374,7 +381,14 @@ class SimulatedBroker(BrokerAdapter):
             "status": "filled",
             "reason": request.reason,
             "broker": self.broker_name,
-        })
+        }
+        if request.side == OrderSide.SELL:
+            trade_entry.update({
+                "cost_price": cost_price,
+                "realized_pnl": realized_pnl,
+                "pnl_pct": pnl_pct,
+            })
+        db_ops.add_trade_log(trade_entry)
         logger.info(
             "SIM FILLED %s %s ×%d @%.3f amount=%.2f fee=%.2f",
             request.side.value, symbol, qty, fill_price, amount, fee,

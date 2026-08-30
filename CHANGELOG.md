@@ -7,6 +7,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.15] — 2026-08-30
+
+### quant 子系统全量审计：时区/盈亏口径/交易日历共 8 处修复 + 1 处修复自身的返工
+
+对 `ai_stock/quant` 全部 30 个源文件做了逐文件审查（基线 31 测试全绿），
+确认并修复以下问题：
+
+- 🔴 **QB1 T+1 禁卖窗口被延长 8 小时**：`cannot_sell_until` 写入侧生成北京时间
+  naive 值，读取侧（`risk_control.pre_trade_check` / 用户账户 `_t1_active`）却
+  `replace(tzinfo=utc)` 当 UTC 解读 → 禁卖实际持续到下一交易日北京时间 23:00，
+  覆盖整个下午盘。修复：写入侧统一带 `+08:00` 时区；读取侧对遗留 naive 数据
+  按北京时间解释。
+- 🔴 **QB2 单日亏损冻结规则实际失效**：`get_realized_pnl_today` 只用「当日买入
+  均价 × 当日卖出量」配对，卖旧仓位（当日无买入）恒返回 0，`max_daily_loss_pct`
+  永远不触发；且引擎卖单根本不记录盈亏。修复：`SimulatedBroker` 卖单成交时按持仓
+  成本写入 `cost_price/realized_pnl/pnl_pct`；统计函数优先汇总已记录值，旧数据
+  保留近似口径兜底。
+- **QB3 用户加仓重锁旧份额**：`execute_user_buy` 加仓时对整个持仓写新的
+  `cannot_sell_until`，已解锁的旧仓位被误冻结 → 改为保留既有锁（缺失才写新锁）。
+- **QB4 委托日界按 UTC 切分**：`count_orders_today` / `get_trades` 日期过滤用
+  UTC 日界，北京 00:00–08:00 的委托错归前一天（`max_daily_orders` 可被绕过）
+  → 新增 `_market_day_start()` 按北京时间日界。
+- **QB5 调休周末误判为交易日**：`calendar_utils.is_trading_day` 只查
+  `is_workday and not is_holiday`，调休上班的周六/周日会被判为 A 股交易日
+  → 叠加 `weekday() < 5`。
+- **QB6**：`data_service.get_stock_news` 补 `bj` 前缀剥离（北交所标的新闻匹配失效）。
+- **QB7**：`mq.get_mq_backend` 的锁从函数内惰性初始化改为模块级初始化（消除竞态窗口）。
+- ⚠️ **QB8 修复自身的返工（审计复核时发现）**：QB4 第一版直接把 `+08:00` 边界传入
+  SQLite 查询——**SQLite 的 DateTime 比较是字符串字典序**，存储侧统一 `+00:00`
+  后缀，混合偏移后缀会导致过滤直接失效（实测验证）。边界必须先 `astimezone(utc)`
+  再传入。另实测确认 SQLite `DateTime(timezone=True)` 读回会剥离偏移后缀（恒为
+  naive），因此读侧按北京时间解释 naive 的语义正好闭环，旧数据无需迁移。
+  这两条已写入 `db_ops` 注释，防止后续再犯。
+- 已知取舍（未改）：`agents/risk.py` 的 `handle_force_reduce` 只减系统账户、
+  不扇出用户账户——风控强制减仓是否同步到用户模拟盘属产品决策，待定。
+- 审查中排除的疑似误报：`hold.py` 趋势判断运算符优先级（符合预期）、
+  `SimulatedBroker` 从 trade_log 重建状态（旧版 available 恒 0 问题已修）、
+  `expire_stale_optional` 用日期比较防提前过期（注释已说明）。
+
+### 测试
+
+quant 三套测试 31 passed / **0 failed**；另用临时库冒烟验证：`+08:00` 边界在
+SQLite 过滤失效（复现）→ 换算 UTC 后命中；`cannot_sell_until` 写→存→读语义闭环；
+北京凌晨 03:00 委托正确归入当天。
+
+---
+
 ## [0.5.14] — 2026-08-09
 
 ### 优化：分析师层并行化（O1）+ 数据源风控护栏
