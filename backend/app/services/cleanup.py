@@ -117,8 +117,12 @@ def run_all_cleanup() -> dict:
         logger.error("Ranking cleanup failed: %s", exc)
         stats["rankings"] = "error"
     try:
+        # quant 表由 QuantService.start() 建; 清理线程可能先于它启动 (或
+        # QUANT_ENABLED=0 时永不启动), 先幂等建表避免 "no such table".
+        from ai_stock.quant.db import init_quant_db
         from ai_stock.quant.db_ops import cleanup_industry_board
 
+        init_quant_db()
         stats["industry_board"] = cleanup_industry_board(RANKING_RETENTION_DAYS)
     except Exception as exc:
         logger.error("Industry board cleanup failed: %s", exc)

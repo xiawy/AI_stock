@@ -517,7 +517,11 @@ class TestDeferredReflection:
                 m.history.return_value = _price_df(bench_prices if sym == "000300.SS" else stock_prices)
                 return m
             mock_ticker_cls.side_effect = _make_ticker
-            raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "688017", "2026-01-05")
+            with patch(
+                "ai_stock.dataflows.a_stock.fetch_settlement_prices",
+                return_value=None,
+            ):
+                raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "688017", "2026-01-05")
         assert raw is not None and alpha is not None and days is not None
         assert isinstance(raw, float) and isinstance(alpha, float) and isinstance(days, int)
         assert days == 5
@@ -528,7 +532,12 @@ class TestDeferredReflection:
             m = MagicMock()
             m.history.return_value = _price_df([100.0, 101.0, 102.0, 103.0, 104.0, 105.0])
             mock_ticker_cls.return_value = m
-            TradingAgentsGraph._fetch_returns(mock_graph, "600519", "2026-01-05")
+            # 本用例验证 yfinance 回退路径的符号转换; 屏蔽国内源避免真实取数绕过回退.
+            with patch(
+                "ai_stock.dataflows.a_stock.fetch_settlement_prices",
+                return_value=None,
+            ):
+                TradingAgentsGraph._fetch_returns(mock_graph, "600519", "2026-01-05")
 
         assert mock_ticker_cls.call_args_list[0].args == ("600519.SS",)
 
@@ -539,7 +548,11 @@ class TestDeferredReflection:
             m = MagicMock()
             m.history.return_value = _price_df([100.0])
             mock_ticker_cls.return_value = m
-            raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "NVDA", "2026-04-19")
+            with patch(
+                "ai_stock.dataflows.a_stock.fetch_settlement_prices",
+                return_value=None,
+            ):
+                raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "NVDA", "2026-04-19")
         assert raw is None and alpha is None and days is None
 
     def test_fetch_returns_delisted(self):
@@ -549,7 +562,11 @@ class TestDeferredReflection:
             m = MagicMock()
             m.history.return_value = pd.DataFrame({"Close": []})
             mock_ticker_cls.return_value = m
-            raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "XXXXXFAKE", "2026-01-10")
+            with patch(
+                "ai_stock.dataflows.a_stock.fetch_settlement_prices",
+                return_value=None,
+            ):
+                raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "XXXXXFAKE", "2026-01-10")
         assert raw is None and alpha is None and days is None
 
     def test_fetch_returns_benchmark_shorter_than_stock(self):
@@ -563,7 +580,11 @@ class TestDeferredReflection:
                 m.history.return_value = _price_df(bench_prices if sym == "000300.SS" else stock_prices)
                 return m
             mock_ticker_cls.side_effect = _make_ticker
-            raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "688017", "2026-01-05")
+            with patch(
+                "ai_stock.dataflows.a_stock.fetch_settlement_prices",
+                return_value=None,
+            ):
+                raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "688017", "2026-01-05")
         assert raw is not None and alpha is not None and days is not None
         assert days == 2
 

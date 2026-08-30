@@ -71,51 +71,17 @@ def get_impact_news(
     Returns a list of dicts with keys:
         title, content, source, time, url, category, title_hash
 
-    Sources: CLS (财联社), Eastmoney 7x24, Baidu stock (百度股市通).
+    Sources: Eastmoney 7x24, 同花顺新闻推送, 新浪 7x24.
     Deduplication is by title hash.
+
+    财联社 telegraphList 子源已下线(实测 404), 于 2026-08 移除;
+    百度股市通 getbannernews 子源已下线(实测返回空 HTML), 于 2026-08 替换为同花顺 + 新浪.
     """
     cutoff = datetime.strptime(curr_date, "%Y-%m-%d") - timedelta(hours=hours)
     all_items: list[dict] = []
     seen_hashes: set[str] = set()
 
-    # --- Source 1: CLS (财联社快讯) ---
-    try:
-        cls_url = "https://www.cls.cn/nodeapi/telegraphList"
-        cls_params = {"rn": "80", "page": "1"}
-        cls_headers = {"User-Agent": _UA, "Referer": "https://www.cls.cn/"}
-        r = _requests.get(cls_url, params=cls_params, headers=cls_headers, timeout=10)
-        for item in r.json().get("data", {}).get("roll_data", []):
-            title = item.get("title", "") or item.get("brief", "")
-            if not title:
-                continue
-            content = item.get("content", "") or item.get("brief", "")
-            ctime = item.get("ctime", "")
-            pub_time = ""
-            if ctime:
-                try:
-                    pub_dt = datetime.fromtimestamp(int(ctime))
-                    pub_time = pub_dt.strftime("%Y-%m-%d %H:%M")
-                    if pub_dt < cutoff:
-                        continue
-                except (ValueError, TypeError, OSError):
-                    pub_time = str(ctime)
-            h = title_hash(title)
-            if h in seen_hashes:
-                continue
-            seen_hashes.add(h)
-            all_items.append({
-                "title": title,
-                "content": content,
-                "source": "财联社",
-                "time": pub_time,
-                "url": "",
-                "category": classify_news(title, content),
-                "title_hash": h,
-            })
-    except Exception as e:
-        logger.warning("CLS impact news fetch failed: %s", e)
-
-    # --- Source 2: Eastmoney 7x24 ---
+    # --- Source 1: Eastmoney 7x24 ---
     try:
         em_url = "https://np-weblist.eastmoney.com/comm/web/getFastNewsList"
         em_params = {
@@ -153,18 +119,22 @@ def get_impact_news(
     except Exception as e:
         logger.warning("Eastmoney impact news fetch failed: %s", e)
 
-    # --- Source 3: Baidu stock (百度股市通) ---
+    # --- Source 2: 同花顺新闻推送 (替代已下线的百度股市通) ---
     try:
-        baidu_url = "https://finance.pae.baidu.com/api/getbannernews"
-        baidu_params = {"page": "1", "pageSize": "50", "type": "0"}
-        baidu_headers = {"User-Agent": _UA, "Referer": "https://gushitong.baidu.com/"}
-        r = _requests.get(baidu_url, params=baidu_params, headers=baidu_headers, timeout=10)
-        for item in r.json().get("data", {}).get("data", []):
+        ths_url = "https://news.10jqka.com.cn/tapp/news/push/stock/"
+        ths_params = {"page": "1", "tag": "", "track": "website", "pagesize": "50"}
+        r = _requests.get(ths_url, params=ths_params, headers={"User-Agent": _UA}, timeout=10)
+        for item in r.json().get("data", {}).get("list", []) or []:
             title = item.get("title", "")
             if not title:
                 continue
-            content = item.get("abstract", "")[:300]
-            pub_time = item.get("time", "")
+            content = item.get("digest", "")[:300]
+            try:
+                pub_time = datetime.fromtimestamp(
+                    int(item.get("ctime", 0))
+                ).strftime("%Y-%m-%d %H:%M")
+            except (TypeError, ValueError):
+                pub_time = ""
             h = title_hash(title)
             if h in seen_hashes:
                 continue
@@ -172,14 +142,49 @@ def get_impact_news(
             all_items.append({
                 "title": title,
                 "content": content,
-                "source": "百度股市通",
+                "source": "同花顺",
                 "time": pub_time,
                 "url": item.get("url", ""),
                 "category": classify_news(title, content),
                 "title_hash": h,
             })
     except Exception as e:
-        logger.warning("Baidu impact news fetch failed: %s", e)
+        logger.warning("THS impact news fetch failed: %s", e)
+
+    # --- Source 3: 新浪 7x24 快讯 ---
+    try:
+        sina_url = "https://zhibo.sina.com.cn/api/zhibo/feed"
+        sina_params = {"page": "1", "page_size": "50", "zhibo_id": "152", "tag_id": "0"}
+        sina_headers = {"User-Agent": _UA, "Referer": "https://finance.sina.com.cn/7x24/"}
+        r = _requests.get(sina_url, params=sina_params, headers=sina_headers, timeout=10)
+        for item in r.json().get("result", {}).get("data", {}).get("feed", {}).get("list", []) or []:
+            rich_text = (item.get("rich_text") or "").strip()
+            if not rich_text:
+                continue
+            title = rich_text[:120]
+            pub_time = item.get("create_time", "")
+            if pub_time:
+                try:
+                    pt = datetime.strptime(pub_time[:16], "%Y-%m-%d %H:%M")
+                    if pt < cutoff:
+                        continue
+                except ValueError:
+                    pass
+            h = title_hash(title)
+            if h in seen_hashes:
+                continue
+            seen_hashes.add(h)
+            all_items.append({
+                "title": title,
+                "content": rich_text[:300],
+                "source": "新浪财经",
+                "time": pub_time,
+                "url": item.get("docurl", ""),
+                "category": classify_news(title, rich_text),
+                "title_hash": h,
+            })
+    except Exception as e:
+        logger.warning("Sina impact news fetch failed: %s", e)
 
     logger.info(
         "Collected %d unique news items for %s (past %dh)",

@@ -365,38 +365,47 @@ class QuantScheduler:
 
     def _register_apscheduler_jobs(self) -> None:
         aps = self._aps
+        # 触发器只入队且带幂等 key (§5.1/§5.3), 迟到补跑安全;
+        # 默认 misfire_grace_time=1s 会在休眠唤醒/线程瞬间饥饿时大量告警并跳过扫描,
+        # 这里按周期容忍延迟补跑, 多个错过周期合并为一次 (天然幂等).
+        grace = {
+            "misfire_grace_time": 30 * 60,
+            "coalesce": True,
+            "max_instances": 1,
+        }
         _pool_expire_at = _shifted_time(*DAILY_REPORT_AT, delta_minutes=5)
         for hhmm in SELECTION_SCHEDULE:
             hour, minute = hhmm.split(":")
             aps.add_job(
                 trigger_selection, "cron", hour=int(hour), minute=int(minute),
-                id=f"selection_{hhmm}", replace_existing=True,
+                id=f"selection_{hhmm}", replace_existing=True, **grace,
             )
         aps.add_job(
             trigger_buy_scan, "interval", minutes=BUY_SCAN_INTERVAL_MINUTES,
-            id="buy_scan", replace_existing=True,
+            id="buy_scan", replace_existing=True, **grace,
         )
         aps.add_job(
             trigger_hold_scan, "interval", minutes=HOLD_SCAN_INTERVAL_MINUTES,
-            id="hold_scan", replace_existing=True,
+            id="hold_scan", replace_existing=True, **grace,
         )
         aps.add_job(
             trigger_risk_scan, "interval", minutes=RISK_SCAN_INTERVAL_MINUTES,
-            id="risk_scan", replace_existing=True,
+            id="risk_scan", replace_existing=True, **grace,
         )
         aps.add_job(
             trigger_flow_timeout_check, "interval", minutes=RISK_SCAN_INTERVAL_MINUTES,
-            id="flow_timeout_check", replace_existing=True,
+            id="flow_timeout_check", replace_existing=True, **grace,
         )
         aps.add_job(
             trigger_daily_report, "cron", hour=DAILY_REPORT_AT[0],
-            minute=DAILY_REPORT_AT[1], id="daily_report", replace_existing=True,
+            minute=DAILY_REPORT_AT[1], id="daily_report", replace_existing=True, **grace,
         )
         aps.add_job(
             trigger_pool_expire, "cron", hour=_pool_expire_at.hour,
-            minute=_pool_expire_at.minute, id="pool_expire", replace_existing=True,
+            minute=_pool_expire_at.minute, id="pool_expire", replace_existing=True, **grace,
         )
         aps.add_job(
             trigger_cleanup, "cron", hour=3, minute=0,
-            id="maintenance_cleanup", replace_existing=True,
+            id="maintenance_cleanup", replace_existing=True, **grace,
         )
+

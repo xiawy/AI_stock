@@ -14,15 +14,17 @@
 ### 数据层（v0.2.5 全部直连 HTTP，零第三方数据库依赖）
 | 来源 | 协议 | 数据 |
 |------|------|------|
-| mootdx | TCP 7709 | OHLCV K线、财务快照、F10 文本 |
+| mootdx | TCP 7709 | OHLCV K线、财务快照、F10 文本（可选备源） |
 | 腾讯财经 | HTTP (qt.gtimg.cn) | PE/PB/市值/换手率 |
-| 东方财富 datacenter | HTTP (datacenter-web) | 龙虎榜、限售解禁、板块行情 |
-| 东方财富 push2/push2his | HTTP (push2.eastmoney) | 实时行情、个股信息、板块列表、资金流(分钟+日级) |
+| 东方财富 datacenter | HTTP (datacenter-web / datacenter F10) | 龙虎榜、限售解禁、板块行情、财报三表、股东增减持/十大股东 |
+| 东方财富 push2/push2his/push2delay | HTTP (push2.eastmoney) | 实时行情、个股信息、板块列表、资金流(分钟+日级); push2 被拒时自动降级 push2delay |
 | 东方财富 np-weblist | HTTP | 滚动新闻 |
-| 新浪财经 | HTTP (money.finance.sina) | K线历史、财报三表 |
+| 新浪财经 | HTTP (money.finance.sina) | K线历史（mootdx 备源） |
 | 同花顺 10jqka | HTTP | EPS 一致预期、热股题材 |
-| 财联社 cls.cn | HTTP | 全球财经快讯 |
 | 百度股市通 | HTTP (gushitong.baidu) | 概念板块归属（资金流已迁移至东财push2） |
+
+数据层多源机制: `dataflows/multi_source.py` 统一"采集 → 归一化 → 合并去重 → 返回",
+单源失效自动降级备源。新浪财报接口与财联社快讯已停服（实测返空/404），2026-08 移除。
 
 ### Agent 角色（6 个）
 原版 4 个（市场/情绪/新闻/基本面）+ A 股特化 2 个（政策分析师/游资追踪）
@@ -67,7 +69,7 @@ v0.2.5 起完全移除 akshare 依赖，所有数据通过直连 HTTP API 获取
 `fundsortlist` 和 `fundflow` 两个接口返回空（2026-05-19 确认）。v0.2.7 已替换为东财 push2 资金流 API。同时修复了 `RPT_ORGANIZATION_BUSSINESS`（改用席位筛选机构）和东财全球资讯 `req_trace` 参数。
 
 ### 东财接口防封限流（v0.2.11 新增，移植自 a-stock-data v3.2）
-`a_stock.py` 里所有指向 `eastmoney.com` 的请求（push2 / push2his / datacenter-web / search-api / np-weblist 共 7 个调用点）统一走节流入口 `_em_get()`：模块级时间戳串行限流（默认间隔 `EM_MIN_INTERVAL=1.0s`，可用同名环境变量覆盖）+ 0.1~0.5s 随机抖动 + 复用 `requests.Session`（Keep-Alive）+ 默认 UA。多 Agent 跑批量分析不再触发东财临时封 IP。**仅东财限流**——mootdx(TCP) / 腾讯 / 新浪 / 同花顺 / 财联社 / 百度 等非东财源不受影响。批量场景可设 `EM_MIN_INTERVAL=1.5~2` 进一步降速。新增东财端点时务必走 `_em_get` 而非裸 `requests.get`。
+`a_stock.py` 里所有指向 `eastmoney.com` 的请求（push2 / push2his / datacenter-web / search-api / np-weblist 共 7 个调用点）统一走节流入口 `_em_get()`：模块级时间戳串行限流（默认间隔 `EM_MIN_INTERVAL=1.0s`，可用同名环境变量覆盖）+ 0.1~0.5s 随机抖动 + 复用 `requests.Session`（Keep-Alive）+ 默认 UA。多 Agent 跑批量分析不再触发东财临时封 IP。**仅东财限流**——mootdx(TCP) / 腾讯 / 新浪 / 同花顺 / 百度 等非东财源不受影响。批量场景可设 `EM_MIN_INTERVAL=1.5~2` 进一步降速。新增东财端点时务必走 `_em_get` 而非裸 `requests.get`。
 
 ### 未来函数防护（v0.5.1 新增，改数据层必读）
 历史日期上跑分析时，数据层**不得**把"今天"的数据当成分析日当天的事实——报告里完全
@@ -76,6 +78,7 @@ v0.2.5 起完全移除 akshare 依赖，所有数据通过直连 HTTP API 获取
 curr_date 过滤历史行、复盘时整段不取实时分钟数据）；数据源根本没有历史时点值的
 （腾讯实时估值、同花顺当前一致预期）就在正文顶部**明确告警**并指示模型不得当作当天
 事实。**新增任何收 `curr_date` 的接口，必须处理这两种情况之一，不能收了不用。**
+财报三表现走东财 F10，报告期按 REPORT_DATE 截断，口径不变。
 
 ### 非 A 股代码防护（v0.5.3 新增，v0.5.5 补全）
 `_normalize_ticker()` 会拒绝港股（4~5 位数字 / `.HK`）与美股代码。**新增任何 vendor

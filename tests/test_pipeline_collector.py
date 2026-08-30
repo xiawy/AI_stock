@@ -44,29 +44,29 @@ class TestGetImpactNews:
     @patch("ai_stock.dataflows.pipeline_data._requests")
     @patch("ai_stock.dataflows.pipeline_data._em_get")
     def test_returns_list(self, mock_em, mock_req):
-        # Mock CLS
-        cls_resp = MagicMock()
-        cls_resp.json.return_value = {
-            "data": {"roll_data": [
-                {"title": "测试新闻", "content": "内容", "ctime": ""},
-            ]}
-        }
-        mock_req.get.return_value = cls_resp
-
+        # 财联社/百度股市通子源已下线(2026-08 移除), 改用东财 7x24 作为首个源验证采集链路;
+        # 同花顺/新浪补源均返回空列表 (真实采集由多源机制负责).
         # Mock Eastmoney
         em_resp = MagicMock()
-        em_resp.json.return_value = {"data": {"fastNewsList": []}}
+        em_resp.json.return_value = {
+            "data": {"fastNewsList": [
+                {"title": "测试新闻", "summary": "内容", "showTime": ""},
+            ]}
+        }
         mock_em.return_value = em_resp
 
-        # Mock Baidu
-        baidu_resp = MagicMock()
-        baidu_resp.json.return_value = {"data": {"data": []}}
-        # requests.get is called for CLS and Baidu
-        mock_req.get.side_effect = [cls_resp, baidu_resp]
+        # Mock 同花顺 / 新浪 (空结果)
+        def _empty_by_url(url, *args, **kwargs):
+            resp = MagicMock()
+            if "10jqka" in url:
+                resp.json.return_value = {"data": {"list": []}}
+            else:
+                resp.json.return_value = {"result": {"data": {"feed": {"list": []}}}}
+            return resp
+        mock_req.get.side_effect = _empty_by_url
 
         result = get_impact_news("2025-01-15", hours=12)
         assert isinstance(result, list)
-        # At least the CLS item should be present
         assert len(result) >= 1
         assert result[0]["title"] == "测试新闻"
         assert "title_hash" in result[0]

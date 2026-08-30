@@ -1220,54 +1220,194 @@ def _sina_stock_code(code: str) -> str:
     return f"{_get_prefix(code)}{code}"
 
 
-def _get_financial_report_sina(
-    code: str, report_type: str, freq: str, curr_date: str = None,
-) -> pd.DataFrame:
-    """Shared helper: fetch financial report via Sina direct HTTP API.
+# ---------------------------------------------------------------------------
+# Financial statements via multi-source pipeline (东财 F10 主 + 数据中心 备)
+#
+# 旧的新浪 CompanyFinanceService.getFinanceReport2022 已停服(实测恒返回空),
+# 改为统一多源机制: 采集 → 归一化(长表: 报告日/科目/数值) → 合并去重 → 返回.
+# ---------------------------------------------------------------------------
 
-    report_type: '资产负债表' | '利润表' | '现金流量表'
-    """
-    _report_type_map = {
-        "资产负债表": "fzb",
-        "利润表": "lrb",
-        "现金流量表": "llb",
-    }
-    source_type = _report_type_map.get(report_type, "lrb")
+from .multi_source import (
+    collect_sources,
+    describe as _describe_sources,
+    first_success,
+    merge_records,
+)
 
-    # 与 _sina_kline_fallback 同理：北交所代码此前被硬编码判成 sz，
-    # 财报接口因此对北交所标的静默返回空。统一走 _get_prefix。
-    prefix = _get_prefix(code)
-    paper_code = f"{prefix}{code}"
-    url = "https://quotes.sina.cn/cn/api/openapi.php/CompanyFinanceService.getFinanceReport2022"
+_EM_F10_FIN_URL = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
+
+# 报表科目 → 东财字段映射 (两套报文的公共字段保持同名, 供跨源去重)
+_FIN_REPORT_FIELDS: dict[str, dict[str, str]] = {
+    "资产负债表": {
+        "货币资金": "MONETARYFUNDS",
+        "应收票据及应收账款": "NOTE_ACCOUNTS_RECE",
+        "预付款项": "PREPAYMENT",
+        "存货": "INVENTORY",
+        "其他流动资产": "OTHER_CURRENT_ASSET",
+        "流动资产合计": "TOTAL_CURRENT_ASSETS",
+        "长期股权投资": "LONG_EQUITY_INVEST",
+        "固定资产": "FIXED_ASSET",
+        "在建工程": "CIP",
+        "无形资产": "INTANGIBLE_ASSET",
+        "商誉": "GOODWILL",
+        "非流动资产合计": "TOTAL_NONCURRENT_ASSETS",
+        "资产总计": "TOTAL_ASSETS",
+        "短期借款": "SHORT_LOAN",
+        "应付票据及应付账款": "NOTE_ACCOUNTS_PAYABLE",
+        "合同负债": "CONTRACT_LIAB",
+        "其他流动负债": "OTHER_CURRENT_LIAB",
+        "流动负债合计": "TOTAL_CURRENT_LIAB",
+        "长期借款": "LONG_LOAN",
+        "非流动负债合计": "TOTAL_NONCURRENT_LIAB",
+        "负债合计": "TOTAL_LIABILITIES",
+        "实收资本(股本)": "SHARE_CAPITAL",
+        "未分配利润": "UNASSIGN_RPOFIT",
+        "归母股东权益": "TOTAL_PARENT_EQUITY",
+        "股东权益合计": "TOTAL_EQUITY",
+        "负债和股东权益合计": "TOTAL_LIAB_EQUITY",
+    },
+    "利润表": {
+        "营业总收入": "TOTAL_OPERATE_INCOME",
+        "营业收入": "OPERATE_INCOME",
+        "营业总成本": "TOTAL_OPERATE_COST",
+        "营业成本": "OPERATE_COST",
+        "税金及附加": "OPERATE_TAX_ADD",
+        "销售费用": "SALE_EXPENSE",
+        "管理费用": "MANAGE_EXPENSE",
+        "研发费用": "RESEARCH_EXPENSE",
+        "财务费用": "FINANCE_EXPENSE",
+        "投资收益": "INVEST_INCOME",
+        "营业利润": "OPERATE_PROFIT",
+        "利润总额": "TOTAL_PROFIT",
+        "所得税": "INCOME_TAX",
+        "净利润": "NETPROFIT",
+        "归母净利润": "PARENT_NETPROFIT",
+        "扣非净利润": "DEDUCT_PARENT_NETPROFIT",
+        "基本每股收益": "BASIC_EPS",
+    },
+    "现金流量表": {
+        "销售商品、提供劳务收到的现金": "SALES_SERVICES",
+        "经营活动现金流入小计": "TOTAL_OPERATE_INFLOW",
+        "经营活动现金流出小计": "TOTAL_OPERATE_OUTFLOW",
+        "经营活动产生的现金流量净额": "NETCASH_OPERATE",
+        "投资活动现金流入小计": "TOTAL_INVEST_INFLOW",
+        "投资活动现金流出小计": "TOTAL_INVEST_OUTFLOW",
+        "投资活动产生的现金流量净额": "NETCASH_INVEST",
+        "筹资活动现金流入小计": "TOTAL_FINANCE_INFLOW",
+        "筹资活动现金流出小计": "TOTAL_FINANCE_OUTFLOW",
+        "筹资活动产生的现金流量净额": "NETCASH_FINANCE",
+        "期初现金及现金等价物余额": "BEGIN_CCE",
+        "期末现金及现金等价物余额": "END_CCE",
+    },
+}
+
+# report_type → (东财 F10 reportName, 数据中心 reportName)
+_FIN_REPORT_NAMES = {
+    "资产负债表": ("RPT_F10_FINANCE_GBALANCE", "RPT_DMSK_FN_BALANCE"),
+    "利润表": ("RPT_F10_FINANCE_GINCOME", "RPT_DMSK_FN_INCOME"),
+    "现金流量表": ("RPT_F10_FINANCE_GCASHFLOW", "RPT_DMSK_FN_CASHFLOW"),
+}
+
+
+def _secucode(code: str) -> str:
+    """6 位代码 → 东财 SECUCODE (600519.SH / 000001.SZ / 920002.BJ)."""
+    return f"{code}.{_get_prefix(code).upper()}"
+
+
+def _em_fin_rows(secucode: str, report_name: str) -> list[dict]:
+    """东财财报原始行 (宽表, 一行一个报告期)."""
     params = {
-        "paperCode": paper_code,
-        "source": source_type,
-        "type": "0",
-        "page": "1",
-        "num": "20",
+        "reportName": report_name,
+        "columns": "ALL",
+        "filter": f'(SECUCODE="{secucode}")',
+        "pageNumber": "1",
+        "pageSize": "12",
+        "sortColumns": "REPORT_DATE",
+        "sortTypes": "-1",
+        "source": "HSF10",
+        "client": "PC",
     }
-    r = _requests.get(url, params=params, headers={"User-Agent": _UA}, timeout=15)
+    r = _em_get(_EM_F10_FIN_URL, params=params, timeout=15)
     d = r.json()
+    return ((d.get("result") or {}).get("data")) or []
 
-    result = d.get("result", {}).get("data", {})
-    items = result.get(source_type, [])
-    if not isinstance(items, list) or not items:
-        return pd.DataFrame()
 
-    df = pd.DataFrame(items)
+def _normalize_fin_rows(
+    rows: list[dict], report_type: str,
+) -> list[dict]:
+    """宽表行 → 归一化长表记录 {报告日, 科目, 数值} (空值科目丢弃)."""
+    fields = _FIN_REPORT_FIELDS[report_type]
+    records: list[dict] = []
+    for row in rows:
+        report_date = str(row.get("REPORT_DATE", "") or "")[:10]
+        if not report_date:
+            continue
+        for item, field in fields.items():
+            v = row.get(field)
+            if v is None or v == "":
+                continue
+            records.append({"报告日": report_date, "科目": item, "数值": v})
+    return records
 
-    # Filter by curr_date
-    if curr_date and "报告日" in df.columns:
-        df["报告日"] = pd.to_datetime(df["报告日"], errors="coerce")
-        cutoff = pd.to_datetime(curr_date)
-        df = df[df["报告日"] <= cutoff]
 
-    # Filter by frequency (annual = month 12 reports only)
-    if freq.lower() == "annual" and "报告日" in df.columns:
-        months = pd.to_datetime(df["报告日"], errors="coerce").dt.month
-        df = df[months == 12]
+def _fetch_financial_statement_multi(
+    code: str, report_type: str, freq: str, curr_date: str = None,
+) -> tuple[pd.DataFrame, str]:
+    """多源采集财务报表: 东财 F10(主) + 东财数据中心(备), 合并去重.
 
-    return df.head(8)
+    返回 (长表 DataFrame, 来源说明); 全部源失败时 DataFrame 为空.
+    """
+    secucode = _secucode(code)
+    f10_name, dmsk_name = _FIN_REPORT_NAMES[report_type]
+    sources = [
+        ("东财F10", lambda: _normalize_fin_rows(
+            _em_fin_rows(secucode, f10_name), report_type)),
+        ("东财数据中心", lambda: _normalize_fin_rows(
+            _em_fin_rows(secucode, dmsk_name), report_type)),
+    ]
+    fetches = collect_sources(sources)
+    rows, _used = merge_records(fetches, key=lambda r: (r["报告日"], r["科目"]))
+    if not rows:
+        return pd.DataFrame(), _describe_sources(fetches)
+
+    df = pd.DataFrame(rows)
+    df["报告日"] = pd.to_datetime(df["报告日"], errors="coerce")
+    df = df.dropna(subset=["报告日"])
+    # point-in-time: 复盘历史时只能看截止日已披露的报告期 (与原新浪口径一致)
+    if curr_date:
+        df = df[df["报告日"] <= pd.to_datetime(curr_date)]
+    if freq.lower() == "annual":
+        df = df[df["报告日"].dt.month == 12]
+    # 每个报告期保留核心科目集: 取最近 8 个报告期, 时间倒序展示
+    periods = sorted(df["报告日"].unique(), reverse=True)[:8]
+    df = df[df["报告日"].isin(periods)].sort_values(
+        ["报告日", "科目"], ascending=[False, True],
+    )
+    df["报告日"] = df["报告日"].dt.strftime("%Y-%m-%d")
+    df = df.drop(columns=["_source"], errors="ignore")
+    return df, _describe_sources(fetches)
+
+
+def _financial_statement_text(
+    ticker: str, report_type: str, title: str,
+    freq: str, curr_date: str = None,
+) -> str:
+    """三表共用输出: 多源采集 → 归一化长表 → CSV (含数据来源标注)."""
+    code = _normalize_ticker(ticker)
+    try:
+        df, source_desc = _fetch_financial_statement_multi(
+            code, report_type, freq, curr_date,
+        )
+        if df.empty:
+            return f"No {title.lower()} data found for A-stock '{code}'"
+        header = f"# {title} for {code} (A-stock, {freq})\n"
+        header += f"# Data source: multi-source pipeline ({source_desc})\n"
+        header += (
+            f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        )
+        return header + df.to_csv(index=False)
+    except Exception as e:
+        return f"Error retrieving {title.lower()} for {code}: {str(e)}"
 
 
 def get_balance_sheet(
@@ -1275,27 +1415,8 @@ def get_balance_sheet(
     freq: Annotated[str, "frequency: 'annual' or 'quarterly'"] = "quarterly",
     curr_date: Annotated[str, "current date in YYYY-MM-DD format"] = None,
 ) -> str:
-    """Get balance sheet via Sina direct HTTP API."""
-    code = _normalize_ticker(ticker)
-
-    try:
-        df = _get_financial_report_sina(code, "资产负债表", freq, curr_date)
-
-        if df.empty:
-            return f"No balance sheet data found for A-stock '{code}'"
-
-        csv_string = df.to_csv(index=False)
-
-        header = f"# Balance Sheet for {code} (A-stock, {freq})\n"
-        header += "# Data source: sina direct HTTP\n"
-        header += (
-            f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        )
-
-        return header + csv_string
-
-    except Exception as e:
-        return f"Error retrieving balance sheet for {code}: {str(e)}"
+    """Get balance sheet via multi-source East Money F10 pipeline."""
+    return _financial_statement_text(ticker, "资产负债表", "Balance Sheet", freq, curr_date)
 
 
 # ---- 5. get_cashflow ----
@@ -1306,27 +1427,8 @@ def get_cashflow(
     freq: Annotated[str, "frequency: 'annual' or 'quarterly'"] = "quarterly",
     curr_date: Annotated[str, "current date in YYYY-MM-DD format"] = None,
 ) -> str:
-    """Get cash flow statement via Sina direct HTTP API."""
-    code = _normalize_ticker(ticker)
-
-    try:
-        df = _get_financial_report_sina(code, "现金流量表", freq, curr_date)
-
-        if df.empty:
-            return f"No cash flow data found for A-stock '{code}'"
-
-        csv_string = df.to_csv(index=False)
-
-        header = f"# Cash Flow for {code} (A-stock, {freq})\n"
-        header += "# Data source: sina direct HTTP\n"
-        header += (
-            f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        )
-
-        return header + csv_string
-
-    except Exception as e:
-        return f"Error retrieving cash flow for {code}: {str(e)}"
+    """Get cash flow statement via multi-source East Money F10 pipeline."""
+    return _financial_statement_text(ticker, "现金流量表", "Cash Flow", freq, curr_date)
 
 
 # ---- 6. get_income_statement ----
@@ -1337,27 +1439,8 @@ def get_income_statement(
     freq: Annotated[str, "frequency: 'annual' or 'quarterly'"] = "quarterly",
     curr_date: Annotated[str, "current date in YYYY-MM-DD format"] = None,
 ) -> str:
-    """Get income statement via Sina direct HTTP API."""
-    code = _normalize_ticker(ticker)
-
-    try:
-        df = _get_financial_report_sina(code, "利润表", freq, curr_date)
-
-        if df.empty:
-            return f"No income statement data found for A-stock '{code}'"
-
-        csv_string = df.to_csv(index=False)
-
-        header = f"# Income Statement for {code} (A-stock, {freq})\n"
-        header += "# Data source: sina direct HTTP\n"
-        header += (
-            f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        )
-
-        return header + csv_string
-
-    except Exception as e:
-        return f"Error retrieving income statement for {code}: {str(e)}"
+    """Get income statement via multi-source East Money F10 pipeline."""
+    return _financial_statement_text(ticker, "利润表", "Income Statement", freq, curr_date)
 
 
 # ---- 7. get_news ----
@@ -1527,7 +1610,11 @@ def get_global_news(
     look_back_days: Annotated[int, "Days to look back"] = 7,
     limit: Annotated[int, "Max articles"] = 10,
 ) -> str:
-    """Get China/global financial news via direct HTTP (CLS + Eastmoney)."""
+    """Get China/global financial news via direct HTTP (Eastmoney 7x24).
+
+    财联社 telegraphList 子源已下线(实测 404), 于 2026-08 移除;
+    东财 7x24 快讯已覆盖同类全球财经快讯场景.
+    """
     start_dt = datetime.strptime(curr_date, "%Y-%m-%d") - relativedelta(
         days=look_back_days
     )
@@ -1535,34 +1622,7 @@ def get_global_news(
 
     all_news: list[dict] = []
 
-    # Source 1: CLS wire (财联社快讯) — direct HTTP
-    try:
-        cls_url = "https://www.cls.cn/nodeapi/telegraphList"
-        cls_params = {"rn": str(limit), "page": "1"}
-        cls_headers = {"User-Agent": _UA, "Referer": "https://www.cls.cn/"}
-        r_cls = _requests.get(cls_url, params=cls_params, headers=cls_headers, timeout=10)
-        d_cls = r_cls.json()
-        for item in d_cls.get("data", {}).get("roll_data", []):
-            title = item.get("title", "") or item.get("brief", "")
-            content = item.get("content", "") or item.get("brief", "")
-            ctime = item.get("ctime", "")
-            # ctime is unix timestamp
-            pub_time = ""
-            if ctime:
-                try:
-                    pub_time = datetime.fromtimestamp(int(ctime)).strftime("%Y-%m-%d %H:%M")
-                except (ValueError, TypeError, OSError):
-                    pub_time = str(ctime)
-            all_news.append({
-                "title": title,
-                "content": content,
-                "time": pub_time,
-                "source": "CLS Wire",
-            })
-    except Exception as e:
-        logger.warning("CLS news fetch failed: %s", e)
-
-    # Source 2: Eastmoney global (东财7x24资讯) — direct HTTP
+    # Source: Eastmoney global (东财7x24资讯) — direct HTTP
     try:
         em_url = "https://np-weblist.eastmoney.com/comm/web/getFastNewsList"
         em_params = {
@@ -1621,49 +1681,120 @@ def get_global_news(
 # ---- 9. get_insider_transactions ----
 
 
+def _insider_executive_changes(code: str) -> str:
+    """源 1: 东财高管增减持明细 (datacenter-web, 直连 HTTP)."""
+    rows = _eastmoney_datacenter(
+        "RPT_EXECUTIVE_HOLD_DETAILS",
+        filter_str=f'(SECURITY_CODE="{code}")',
+        page_size=30,
+        sort_columns="CHANGE_DATE",
+        sort_types="-1",
+    )
+    if not rows:
+        return ""
+    lines = ["## 高管增减持 (近期)"]
+    for r in rows:
+        date = str(r.get("CHANGE_DATE", ""))[:10]
+        person = r.get("PERSON_NAME", "")
+        position = r.get("POSITION", "") or r.get("DUTY", "")
+        change_shares = r.get("CHANGE_SHARES", 0) or 0
+        price = r.get("AVG_PRICE", "")
+        after = r.get("HOLD_NUM", "")
+        direction = "增持" if (change_shares or 0) > 0 else "减持"
+        lines.append(
+            f"- {date} {person}({position}) {direction} "
+            f"{abs(change_shares):,.0f} 股 @ {price} | 持股余量: {after}"
+        )
+    return "\n".join(lines)
+
+
+def _insider_top_holders(code: str) -> str:
+    """源 2: 东财十大股东 (最新披露报告期, datacenter F10, 直连 HTTP)."""
+    secucode = _secucode(code)
+    params = {
+        "reportName": "RPT_F10_EH_HOLDERS",
+        "columns": "ALL",
+        "filter": f'(SECUCODE="{secucode}")',
+        "pageNumber": "1",
+        "pageSize": "10",
+        "sortColumns": "END_DATE,HOLDER_RANK",
+        "sortTypes": "-1,1",
+        "source": "HSF10",
+        "client": "PC",
+    }
+    r = _em_get(_EM_F10_FIN_URL, params=params, timeout=15)
+    rows = ((r.json().get("result") or {}).get("data")) or []
+    if not rows:
+        return ""
+    end_date = str(rows[0].get("END_DATE", ""))[:10]
+    lines = [f"## 十大股东 ({end_date} 报告期)"]
+    for row in rows:
+        rank = row.get("HOLDER_RANK", "")
+        name = row.get("HOLDER_NAME", "")
+        hold_num = row.get("HOLD_NUM", 0) or 0
+        ratio = row.get("HOLD_NUM_RATIO")
+        ratio_txt = f" ({float(ratio):.2f}%)" if ratio is not None else ""
+        change = row.get("HOLDER_CHANGE", "")
+        lines.append(
+            f"- {rank}. {name}: {hold_num:,.0f} 股{ratio_txt}"
+            + (f" [{change}]" if change else "")
+        )
+    return "\n".join(lines)
+
+
 def get_insider_transactions(
     ticker: Annotated[str, "A-stock code"],
 ) -> str:
-    """Get shareholder/insider activity via mootdx F10.
+    """Get shareholder/insider activity via multi-source pipeline.
 
-    Note: A-stock insider transaction data differs from US markets.
-    Uses mootdx F10 shareholder research as the closest equivalent.
+    多源采集: 东财高管增减持 + 十大股东 (直连 HTTP, 主),
+    mootdx F10 股东研究 (备, TCP 7709 被拦时自动降级).
     """
     code = _normalize_ticker(ticker)
 
-    try:
-        text = _mootdx_call("F10", symbol=code, name="股东研究")
+    sections: list[str] = []
+    used_sources: list[str] = []
 
-        if not text or not text.strip():
-            return f"No insider/shareholder data found for A-stock '{code}'"
+    for name, fn in (
+        ("东财高管增减持", _insider_executive_changes),
+        ("东财十大股东", _insider_top_holders),
+    ):
+        try:
+            text = fn(code)
+        except Exception as e:
+            logger.warning("insider source '%s' failed for %s: %s", name, code, e)
+            continue
+        if text:
+            sections.append(text)
+            used_sources.append(name)
 
-        header = f"# Shareholder Research for {code} (A-stock)\n"
-        header += "# Note: A-stock equivalent of insider transactions\n"
-        header += "# Data source: mootdx F10\n"
-        header += (
-            f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        )
+    if not sections:
+        # 备源: mootdx F10 股东研究 (TCP 依赖, 仅在直连源全部失效时兑底)
+        try:
+            raw = _mootdx_call("F10", symbol=code, name="股东研究")
+            if raw and raw.strip():
+                sec4_hits = list(_re.finditer(r"\r?\n【4\.股东变化】\r?\n", raw))
+                if sec4_hits:
+                    pos = sec4_hits[-1].start()
+                    tail = raw[pos:]
+                    if len(tail) > 2000:
+                        tail = tail[:2000] + "\n(... older history truncated ...)"
+                    raw = raw[:pos] + tail
+                sections.append(raw)
+                used_sources.append("mootdx F10")
+        except Exception as e:
+            logger.warning("mootdx insider fallback failed for %s: %s", code, e)
 
-        import re
+    if not sections:
+        return f"No insider/shareholder data found for A-stock '{code}'"
 
-        sec4_hits = list(re.finditer(r"\r?\n【4\.股东变化】\r?\n", text))
-        if sec4_hits:
-            sec4_pos = sec4_hits[-1].start()
-            before_sec4 = text[:sec4_pos]
-            sec4_text = text[sec4_pos:]
-            cut_at = 2000
-            if len(sec4_text) > cut_at:
-                sec4_text = (
-                    sec4_text[:cut_at]
-                    + "\n\n(... older shareholder history omitted, "
-                    f"{len(text) - sec4_pos - cut_at} chars truncated ...)"
-                )
-            text = before_sec4 + sec4_text
-
-        return header + text
-
-    except Exception as e:
-        return f"Error retrieving insider/shareholder data for {code}: {str(e)}"
+    header = f"# Shareholder Research for {code} (A-stock)\n"
+    header += "# Note: A-stock equivalent of insider transactions\n"
+    header += f"# Data source: multi-source pipeline ({' + '.join(used_sources)})\n"
+    header += (
+        f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+    )
+    return header + "\n\n".join(sections)
 
 
 # ---- 10. get_profit_forecast ----
@@ -2112,10 +2243,20 @@ def get_fund_flow(
     secid = f"1.{code}" if code.startswith("6") else f"0.{code}"
     lines = [
         f"# Fund Flow for {code} (A-stock)",
-        f"# Source: 东财 push2 (Eastmoney)",
+        f"# Source: 东财 push2 (Eastmoney, push2delay 镜像容灾)",
         f"# Retrieved: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "",
     ]
+
+    # push2/push2his 主域在部分网络环境被拒, 自动降级延迟行情镜像主机.
+    def _fflow_klines(path: str, hosts: tuple[str, ...], params: dict) -> list:
+        for host in hosts:
+            try:
+                r = _em_get(f"https://{host}{path}", params=params, timeout=10)
+                return (r.json().get("data") or {}).get("klines") or []
+            except Exception as e:
+                logger.warning("fund flow host %s failed: %s", host, e)
+        return []
 
     historical = _is_historical(curr_date)
     if historical:
@@ -2127,7 +2268,6 @@ def get_fund_flow(
 
     try:
         # Realtime minute-level fund flow
-        url_rt = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
         params_rt = {
             "secid": secid, "klt": 1,
             "fields1": "f1,f2,f3,f7",
@@ -2135,9 +2275,11 @@ def get_fund_flow(
         }
         klines = []
         if not historical:
-            r = _em_get(url_rt, params=params_rt, timeout=10)
-            d = r.json()
-            klines = d.get("data", {}).get("klines", [])
+            klines = _fflow_klines(
+                "/api/qt/stock/fflow/kline/get",
+                ("push2.eastmoney.com", "push2delay.eastmoney.com"),
+                params_rt,
+            )
 
         if klines:
             lines.append(
@@ -2173,12 +2315,8 @@ def get_fund_flow(
                 "No realtime fund flow (non-trading hours or holiday)"
             )
 
-        # Historical daily fund flow (push2his)
+        # Historical daily fund flow (push2his, 镜像容灾)
         if include_history:
-            url_hist = (
-                "https://push2his.eastmoney.com"
-                "/api/qt/stock/fflow/daykline/get"
-            )
             # 接口返回的是"从今天回溯 lmt 个交易日"，没有 end_date 参数。复盘一个
             # 较早的日期时，若仍只要 20 天，过滤后会**一行不剩**——把"数据不对"
             # 变成"没有数据"，比不过滤更糟。按分析日与今天的间隔把窗口放大到能
@@ -2194,9 +2332,12 @@ def get_fund_flow(
                 "fields1": "f1,f2,f3,f7",
                 "fields2": "f51,f52,f53,f54,f55,f56,f57",
             }
-            rh = _em_get(url_hist, params=params_hist, timeout=10)
-            dh = rh.json()
-            hist_klines = dh.get("data", {}).get("klines", [])
+            hist_klines = _fflow_klines(
+                "/api/qt/stock/fflow/daykline/get",
+                # push2hisdelay 实测返回 HTML 错误页; push2delay 同时承载日线资金流.
+                ("push2his.eastmoney.com", "push2delay.eastmoney.com"),
+                params_hist,
+            )
 
             # 逐行按分析日截断：接口返回的是"从今天回溯 20 个交易日"，
             # 在历史日期上直接打印等于把未来的资金流喂给模型（未来函数）。
@@ -2481,9 +2622,9 @@ def get_industry_comparison(
     code = _normalize_ticker(ticker)
     lines = [f"# 行业横向对比 | {code} | {trade_date}"]
 
-    # 东财 push2 行业板块排名 (direct HTTP, replaces 同花顺 which has 401)
-    try:
-        url = "https://push2.eastmoney.com/api/qt/clist/get"
+    # 东财行业板块排名 (多主机容灾: push2 主域在部分网络环境被拒,
+    # push2delay 镜像同源同参, 优先延迟盘后数据可用的 push2)
+    def _fetch_industry_items(base_url: str) -> list[dict]:
         params = {
             "pn": "1",
             "pz": "100",
@@ -2494,9 +2635,18 @@ def get_industry_comparison(
             "fs": "m:90+t:2",
             "fields": "f2,f3,f4,f12,f13,f14,f104,f105,f128,f136,f140,f141,f207",
         }
-        r = _em_get(url, params=params, timeout=15)
-        d = r.json()
-        items = d.get("data", {}).get("diff", [])
+        r = _em_get(f"{base_url}/api/qt/clist/get", params=params, timeout=15)
+        return ((r.json().get("data") or {}).get("diff")) or []
+
+    got = first_success(
+        [
+            ("push2", lambda: _fetch_industry_items("https://push2.eastmoney.com")),
+            ("push2delay", lambda: _fetch_industry_items("https://push2delay.eastmoney.com")),
+        ],
+    )
+
+    try:
+        items = got.records if got else []
 
         if items:
             lines.append(
@@ -2529,7 +2679,7 @@ def get_industry_comparison(
         else:
             lines.append("行业数据获取为空。")
     except Exception as e:
-        lines.append(f"行业对比查询失败: {e}")
+        lines.append(f"行业对比查询失败: {e} (已尝试主机: push2, push2delay)")
 
     return "\n".join(lines)
 
@@ -2559,9 +2709,11 @@ def fetch_settlement_prices(
     """
     code = _normalize_ticker(ticker)
     # 缓冲 10 个自然日：确保 holding_days 个交易日落窗内（节假日多时不至于截短）。
-    end_dt = datetime.strptime(trade_date, "%Y-%m-%d") + relativedelta(
-        days=holding_days + 10
-    )
+    # 统一用市场时区 aware datetime, 避免与 datetime.now(_MARKET_TZ) 比较时
+    # naive/aware 混用报 TypeError.
+    end_dt = datetime.strptime(trade_date, "%Y-%m-%d").replace(
+        tzinfo=_MARKET_TZ,
+    ) + relativedelta(days=holding_days + 10)
     # 未来日期裁剪到今天：结算只关心已发生的价格。
     end_str = min(end_dt, datetime.now(_MARKET_TZ)).strftime("%Y-%m-%d")
 

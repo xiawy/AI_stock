@@ -36,10 +36,16 @@ class _SessionCtx:
 
 
 @pytest.fixture()
-def cleanup_db(db_session, monkeypatch):
+def cleanup_db(db_session, monkeypatch, tmp_path):
     monkeypatch.setattr(core_db, "SessionLocal", lambda: _SessionCtx(db_session))
     # run_all_cleanup 还会调 quant 行业榜清理 — 隔离掉, 不碰真实库.
     monkeypatch.setattr(quant_db_ops, "cleanup_industry_board", lambda days=70: 0)
+    # run_all_cleanup 会幂等建 quant 表 — 指向临时库, 避免碰真实 aistock.db.
+    from ai_stock.quant import db as quant_db
+
+    monkeypatch.setenv("QUANT_DB_URL", f"sqlite:///{tmp_path / 'quant_test.db'}")
+    monkeypatch.setattr(quant_db, "_engine", None)
+    monkeypatch.setattr(quant_db, "_SessionFactory", None)
     return db_session
 
 
