@@ -80,10 +80,28 @@ MAX_LIMIT_UP_WAVES = 8               # 涨停潮题材最多保留条数 (辅助
 MACRO_NEWS_DAYS = 3                  # 宏观事件解析的新闻窗口 (日)
 MAX_SCAN_CANDIDATES = 12             # 行业扫描候选上限 (事件映射优先, 涨幅榜补足)
 
+# 行业综合排名权重 (供需第一性原理 × 生命周期矩阵 × 上游传导 × 涨停潮):
+# 综合分 = 供需失衡分×W1 + 阶段分×W2 + 上游传导加分×W3 + 涨停潮加分×W4,
+# 另叠加扩产周期/进入壁垒微调, 各项归一化后映射到 0-10 (见 IndustryScanAgent)
+WEIGHT_IMBALANCE = 0.40      # 供需失衡分 (0-10, 10=极度供不应求) 权重
+WEIGHT_STAGE = 0.30          # 生命周期阶段静态分权重 (八档矩阵, 保留原逻辑)
+WEIGHT_UPSTREAM = 0.15       # 上游传导发散加分权重 (快人一步的产业链发散)
+WEIGHT_WAVE = 0.15           # 涨停潮右侧确认加分权重 (原阶段修正器并入加权)
+WEIGHT_CYCLE = 0.05          # 扩产周期微调权重 (周期越长供需逻辑越持久)
+WEIGHT_BARRIER = 0.05        # 进入壁垒微调权重 (壁垒越高超额利润越难稀释)
+BONUS_UPSTREAM = 1.5         # 被其他候选行业点名为上游时的固定加分
+BONUS_WAVE = 1.5             # 当日出现涨停潮行业的加分 (右侧确认信号)
+IMBALANCE_STAGE_ESCALATION = 6.0  # 供需失衡分达该阈值且阶段分非正 → 强制上调爆发前期
+
 # 行业榜 (前端展示): 筛选自选时生命周期排序后的前 N 个行业作为行业榜,
 # 每个行业展示前 M 只龙头股 (精选行业取三大支柱评估排序, 其余取流动性前 M)
 INDUSTRY_BOARD_SIZE = 10
 LEADER_STOCKS_PER_BOARD = 10
+
+# 上游传导二次验证: Top 行业点名的上游未上榜时, 能对账板块库则附加展示在行业榜
+# (不强制入 Top, 不参与个股精选); 失衡分按衰减系数保守计分 (确定性弱于主行业)
+MAX_TRANSMISSION_BOARDS = 3
+TRANSMISSION_DECAY = 0.7
 
 # ---------------------------------------------------------------------------
 # Stop-loss / take-profit rules (multi-bar confirmed, never intraday spikes)

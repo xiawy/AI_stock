@@ -2,9 +2,12 @@
 
 覆盖需求:
 - MacroEventAgent JSON 解析容错 + 空新闻/LLM 不可用降级 (decision=empty 不阻断)
+- 事件类型分类 (first_proposal/政策支持等) 透传与生命周期 Prompt 新主题提示,
+  仅作提示不参与加权评分 (轻量级增强: "首次提出→业绩验证"闭环)
 - 事件-行业知识库: 关键词粗筛 + LLM/KB 交集收敛 (优化点 2)
-- IndustryScanAgent LLM 动态加权 + 静态兜底 + 涨停潮阶段修正器 (优化点 3/5)
-  + 无事件回退涨幅榜/资金异动量化扫描 (优化点 6 Level 2)
+- IndustryScanAgent 供需×生命周期加权综合排名 (供需 40% + 阶段 30% +
+  上游传导 15% + 涨停潮 15%) + 供需强势阶段上调 + 上游传导二次验证 (幻觉过滤)
+  + 无事件回退涨幅榜/资金异动量化扫描 (优化点 3/5/6)
 - StockSelectionAgent 合并深析: 综合分硬门槛 + 置信度门槛 + 同分按弹性排序
   + ST/北交所硬过滤 + 直接写自选池 + 无选股时自选池续持降级 (优化点 1/6)
 - 核心财务指标预提取 (优化点 4)
@@ -199,7 +202,8 @@ class TestMacroEventAgent:
                 MacroEvent(title="行业级事件", level="industry",
                            impact_industries=["光伏"], influence_score=6.0),
                 MacroEvent(title="全球变革事件", level="global",
-                           impact_industries=["半导体", "通信"], influence_score=9.5),
+                           impact_industries=["半导体", "通信"], influence_score=9.5,
+                           event_type="first_proposal"),
                 MacroEvent(title="无行业映射", level="national",
                            impact_industries=[], influence_score=10.0),
                 MacroEvent(title="国家级战略", level="national",
@@ -212,6 +216,9 @@ class TestMacroEventAgent:
         titles = [e["title"] for e in result["events"]]
         assert titles == ["全球变革事件", "国家级战略", "行业级事件"]
         assert result["events"][0]["impact_industries"] == ["半导体", "通信"]
+        # event_type 分类透传 (首次提出标记); 未输出时默认常规事件 (向后兼容)
+        assert result["events"][0]["event_type"] == "first_proposal"
+        assert result["events"][2]["event_type"] == "routine"
 
     def test_malformed_llm_output_is_tolerated(self, quant_env, monkeypatch):
         """JSON 解析/调用异常 → decision=empty, 不抛出阻断 Orchestrator."""
@@ -232,7 +239,7 @@ class TestMacroEventAgent:
 
 
 # ---------------------------------------------------------------------------
-# IndustryScanAgent (优化点 3: 动态加权 + 优化点 5: 涨停潮阶段修正器)
+# IndustryScanAgent (供需第一性原理 × 生命周期矩阵 × 上游传导 加权综合排名)
 # ---------------------------------------------------------------------------
 
 _SCAN_BOARDS = [
@@ -256,8 +263,9 @@ _SCAN_BOARDS = [
 
 @pytest.mark.unit
 class TestIndustryScanAgent:
-    def test_dynamic_priority_with_wave_stage_corrector(self, quant_env, monkeypatch):
-        """LLM 动态 priority 排序; 涨停潮将导入期强制升爆发前期 (优化点 3/5)."""
+    def test_weighted_composite_ranking(self, quant_env, monkeypatch):
+        """供需 40% + 阶段 30% + 上游传导 15% + 涨停潮 15% 加权综合排名;
+        上游传导加分/涨停潮加分/供需强势阶段上调均生效."""
         from ai_stock.quant.agents import selection
         from ai_stock.quant.agents.selection import (
             IndustryLifecycleList,
@@ -274,23 +282,43 @@ class TestIndustryScanAgent:
                 {"title": "碳中和推进", "level": "national",
                  "impact_industries": ["新能源", "电力"], "influence_score": 8.0},
             ]},
-            "limit_up_monitor": {"waves": [{"name": "半导体", "limit_up_count": 5}]},
+            "limit_up_monitor": {"waves": [{"name": "电力", "limit_up_count": 5}]},
         }
         monkeypatch.setattr(
             selection, "structured_invoke",
             lambda llm, schema, prompt, **kw: IndustryLifecycleList(industries=[
-                # 导入期 + 涨停潮 → 强制升爆发前期, priority 抬到下限 8.0 再 +1
-                IndustryLifecycleReport(name="半导体", stage="导入期",
-                                        analysis="政策催化", priority=2.0),
-                IndustryLifecycleReport(name="光伏设备", stage="爆发前期",
-                                        analysis="需求启动", priority=7.0),
-                IndustryLifecycleReport(name="电力", stage="爆发期",
-                                        analysis="供不应求", priority=8.5),
-                # priority=0 → 回退静态兜底表 (成熟期 0 / 衰退期 -1)
-                IndustryLifecycleReport(name="白酒", stage="成熟期",
-                                        analysis="增速放缓", priority=0.0),
-                IndustryLifecycleReport(name="房地产", stage="衰退期",
-                                        analysis="需求萎缩", priority=0.0),
+                # 供需 8.0×0.4 + 验证后期 5/5×0.3 + 长期 0 + 极高 +0.025 = 6.45;
+                # 点名上游"电力" → 电力获传导加分 (自身不受影响)
+                IndustryLifecycleReport(
+                    name="半导体", stage="验证后期", analysis="AI 算力需求爆发",
+                    imbalance_score=8.0, expansion_cycle="长期",
+                    entry_barrier="极高", transmission_upstream=["电力"],
+                    transmission_evidence="晶圆厂用电需求激增",
+                ),
+                # 供需 6.0×0.4 + 爆发前期 4/5×0.3 + 上游 1.5 + 涨停潮 1.5 +
+                # 中期 -0.025 + 高 0 = 5.00 (双加分生效)
+                IndustryLifecycleReport(
+                    name="电力", stage="爆发前期", analysis="用电缺口",
+                    imbalance_score=6.0, expansion_cycle="中期",
+                    entry_barrier="高",
+                ),
+                # 成熟期阶段分 0 但供需失衡 7.5 ≥ 6 → 强制上调爆发前期,
+                # 7.5×0.4 + 4/5×0.3 + 短期 -0.05 + 低 -0.05 = 4.40 (供需强势修正)
+                IndustryLifecycleReport(
+                    name="白酒", stage="成熟期", analysis="供需意外紧张",
+                    imbalance_score=7.5, expansion_cycle="短期",
+                    entry_barrier="低",
+                ),
+                # 供需 7.0×0.4 + 导入期 2/5×0.3 - 0.025 - 0.025 = 3.50 (无任何加分)
+                IndustryLifecycleReport(
+                    name="光伏设备", stage="导入期", analysis="需求启动",
+                    imbalance_score=7.0, expansion_cycle="中期",
+                    entry_barrier="中",
+                ),
+                # 衰退期负分 + 无失衡 → 综合分钉在 0 (低于光伏设备, 落选 Top 4)
+                IndustryLifecycleReport(
+                    name="房地产", stage="衰退期", analysis="需求萎缩",
+                ),
             ]),
         )
         agent = _make_agent(IndustryScanAgent, data)
@@ -299,16 +327,172 @@ class TestIndustryScanAgent:
         assert result["decision"] == "ok"
         top = result["top_industries"]
         assert len(top) == 4  # MAX_INDUSTRIES_OUTPUT
-        assert [i["name"] for i in top] == ["半导体", "电力", "光伏设备", "白酒"]
-        # 涨停潮修正器: 导入期 → 爆发前期, max(2.0, 8.0) + 1.0 = 9.0
-        assert top[0]["stage"] == "爆发前期"
-        assert top[0]["stage_corrected"] is True
-        assert top[0]["priority"] == 9.0
+        assert [i["name"] for i in top] == ["半导体", "电力", "白酒", "光伏设备"]
+        # 供需维度字段透传至 slim 输出
+        assert top[0]["priority"] == 6.45
+        assert top[0]["imbalance_score"] == 8.0
+        assert top[0]["expansion_cycle"] == "长期"
+        assert top[0]["entry_barrier"] == "极高"
+        assert top[0]["transmission_upstream"] == ["电力"]
+        assert top[0]["stage"] == "验证后期"
         assert top[0]["event_tag"] == "半导体"
-        assert top[1]["priority"] == 8.5
-        assert top[3]["priority"] == 0.0   # 白酒: LLM 未加权 → 静态兜底
+        # 上游传导加分 (被半导体点名) + 涨停潮加分 (右侧确认)
+        assert top[1]["upstream_bonus"] == 1.5
+        assert top[1]["wave_bonus"] == 1.5
+        assert top[1]["priority"] == 5.0
+        # 供需强势修正: 成熟期(阶段分 0) + 失衡 7.5 ≥ 6 → 爆发前期, stage_corrected 置位
+        assert top[2]["stage"] == "爆发前期"
+        assert top[2]["stage_corrected"] is True
+        assert top[2]["priority"] == 4.4
+        assert top[3]["upstream_bonus"] == 0
+        assert top[3]["wave_bonus"] == 0
+        assert top[3]["priority"] == 3.5
         assert result["industries"] == result["top_industries"]
         assert result["stage_distribution"]["爆发前期"] == 2
+
+    def test_transmission_master_match_and_hallucination_filter(
+        self, quant_env, monkeypatch,
+    ):
+        """上游传导二次验证: 未上榜上游匹配板块库 → 衰减建档附加展示在行业榜;
+        虚构上游丢弃 (幻觉抑制); 已上榜上游不重复; 条数上限生效."""
+        from ai_stock.quant.agents import selection
+        from ai_stock.quant.agents.selection import (
+            IndustryLifecycleList,
+            IndustryLifecycleReport,
+            IndustryScanAgent,
+        )
+
+        data = FakeDataService()
+        # 覆铜板/环氧树脂/玻纤布涨幅不足 → 落选候选池, 用于验证板块库建档路径
+        data.boards = _SCAN_BOARDS + [
+            {"code": "BK006", "name": "覆铜板", "change_pct": 0.1,
+             "main_net_inflow": 1e8, "up_count": 8, "down_count": 4,
+             "top_stock_name": "丁股", "top_stock_code": "600004",
+             "board_level": "industry"},
+            {"code": "BK007", "name": "银行", "change_pct": 0.2,
+             "main_net_inflow": 0.0, "up_count": 6, "down_count": 6,
+             "top_stock_name": "", "top_stock_code": "",
+             "board_level": "industry"},
+            {"code": "BK008", "name": "环氧树脂", "change_pct": 0.05,
+             "main_net_inflow": 0.0, "up_count": 3, "down_count": 3,
+             "top_stock_name": "", "top_stock_code": "",
+             "board_level": "industry"},
+            {"code": "BK009", "name": "玻纤布", "change_pct": 0.02,
+             "main_net_inflow": 0.0, "up_count": 2, "down_count": 2,
+             "top_stock_name": "", "top_stock_code": "",
+             "board_level": "industry"},
+        ]
+        monkeypatch.setattr(selection, "MAX_SCAN_CANDIDATES", 5)
+        context = {
+            "macro_event": {"events": [
+                {"title": "AI 算力政策", "level": "national",
+                 "impact_industries": ["半导体"], "influence_score": 9.0},
+                {"title": "碳中和推进", "level": "national",
+                 "impact_industries": ["新能源", "电力"], "influence_score": 8.0},
+            ]},
+        }
+        monkeypatch.setattr(
+            selection, "structured_invoke",
+            lambda llm, schema, prompt, **kw: IndustryLifecycleList(industries=[
+                IndustryLifecycleReport(
+                    name="半导体", stage="验证后期", analysis="AI 需求",
+                    imbalance_score=8.0, expansion_cycle="长期",
+                    entry_barrier="极高",
+                    # 电力已上榜 → 跳过; 量子材料 → 幻觉丢弃; 其余三个建档 (达上限)
+                    transmission_upstream=[
+                        "覆铜板", "量子材料", "电力", "环氧树脂", "玻纤布",
+                    ],
+                    transmission_evidence="XX 覆铜板厂商发布涨价函",
+                ),
+                IndustryLifecycleReport(name="电力", stage="爆发前期",
+                                        analysis="用电缺口", imbalance_score=6.0),
+                IndustryLifecycleReport(name="光伏设备", stage="导入期",
+                                        analysis="需求启动", imbalance_score=5.0),
+                IndustryLifecycleReport(name="白酒", stage="成熟期",
+                                        analysis="增速放缓", imbalance_score=1.0),
+            ]),
+        )
+        agent = _make_agent(IndustryScanAgent, data)
+        result = agent.handle(_task(context))
+
+        assert result["decision"] == "ok"
+        # Top 不受传导行影响 (二次验证仅行业榜附加展示)
+        assert [i["name"] for i in result["top_industries"]] == [
+            "半导体", "电力", "光伏设备", "银行",
+        ]
+        board_names = [i["name"] for i in result["board_industries"]]
+        # 传导行按综合分并入行业榜 (覆铜板等 2.94 > 光伏设备 2.7), 恰好 3 条达上限
+        assert board_names == [
+            "半导体", "电力", "覆铜板", "环氧树脂", "玻纤布",
+            "光伏设备", "银行", "白酒",
+        ]
+        rows = {i["name"]: i for i in result["board_industries"]}
+        assert rows["覆铜板"]["transmission_from"] == "半导体"
+        assert rows["覆铜板"]["code"] == "BK006"
+        assert rows["覆铜板"]["stage"] == "导入期"
+        # 失衡分按 TRANSMISSION_DECAY 衰减: 8.0×0.7 = 5.6, 保守计分 2.94
+        assert rows["覆铜板"]["imbalance_score"] == 5.6
+        assert rows["覆铜板"]["priority"] == 2.94
+        assert "涨价函" in rows["覆铜板"]["stage_analysis"]
+        # 虚构上游"量子材料"无法匹配板块库 → 丢弃 (幻觉抑制)
+        assert "量子材料" not in board_names
+        # 电力已上排名榜 → 不重复附加; 非传导行标记为空 (兼容存量展示)
+        assert board_names.count("电力") == 1
+        assert rows["半导体"]["transmission_from"] == ""
+
+    def test_transmission_promotes_offboard_candidate(self, quant_env, monkeypatch):
+        """上游传导二次验证: 上游为已评估但排在榜外的候选 → 擢升展示并保留完整评估;
+        已上榜上游不重复."""
+        from ai_stock.quant.agents import selection
+        from ai_stock.quant.agents.selection import (
+            IndustryLifecycleList,
+            IndustryLifecycleReport,
+            IndustryScanAgent,
+        )
+
+        data = FakeDataService()
+        data.boards = _SCAN_BOARDS
+        monkeypatch.setattr(selection, "INDUSTRY_BOARD_SIZE", 2)
+        context = {"macro_event": {"events": [
+            {"title": "AI 算力政策", "level": "national",
+             "impact_industries": ["半导体"], "influence_score": 9.0},
+        ]}}
+        monkeypatch.setattr(
+            selection, "structured_invoke",
+            lambda llm, schema, prompt, **kw: IndustryLifecycleList(industries=[
+                IndustryLifecycleReport(
+                    name="半导体", stage="验证后期", analysis="AI 需求",
+                    imbalance_score=8.0, expansion_cycle="长期",
+                    entry_barrier="极高",
+                    # 白酒为候选但排在榜外 → 擢升; 电力已上榜 → 不重复 (测试用例仅为验证机制)
+                    transmission_upstream=["白酒", "电力"],
+                    transmission_evidence="上游材料瓶颈",
+                ),
+                IndustryLifecycleReport(name="电力", stage="爆发前期",
+                                        analysis="用电缺口", imbalance_score=3.0),
+                IndustryLifecycleReport(name="光伏设备", stage="导入期",
+                                        analysis="需求启动", imbalance_score=2.0),
+                IndustryLifecycleReport(name="白酒", stage="成熟期",
+                                        analysis="增速放缓", imbalance_score=0.5),
+            ]),
+        )
+        agent = _make_agent(IndustryScanAgent, data)
+        result = agent.handle(_task(context))
+
+        assert result["decision"] == "ok"
+        board_names = [i["name"] for i in result["board_industries"]]
+        # 排名榜前 2 = 半导体/电力; 白酒排在榜外但作为上游被擢升展示 (附加在尾部)
+        assert board_names == ["半导体", "电力", "白酒"]
+        rows = {i["name"]: i for i in result["board_industries"]}
+        assert rows["白酒"]["transmission_from"] == "半导体"
+        # 擢升复用完整评估: 成熟期阶段分 0, 0.5×0.4 + 传导加分 0.0225 - 0.05 → 钉在 0.0
+        assert rows["白酒"]["stage"] == "成熟期"
+        assert rows["白酒"]["priority"] == 0.0
+        assert board_names.count("电力") == 1
+        # Top 不受擢升影响 (白酒综合分垫底, 房地产静态兜底 0.7 反超)
+        assert [i["name"] for i in result["top_industries"]] == [
+            "半导体", "电力", "光伏设备", "房地产",
+        ]
 
     def test_unknown_stage_normalized_to_import(self, quant_env, monkeypatch):
         """LLM 输出非八档阶段值时归一为 导入期, 不无声丢弃."""
@@ -355,9 +539,10 @@ class TestIndustryScanAgent:
         agent = _make_agent(IndustryScanAgent, data)
         result = agent.handle(_task())  # 空 context → 回退涨幅前 10 行业
         assert result["decision"] == "ok"
-        # priority 全为 0 → 静态兜底: 爆发期(3) > 导入期(2) > 成熟期(0) > 衰退期(-1)
+        # 无供需分项 → 纯阶段分 + 周期/壁垒默认微调:
+        # 爆发期 3/5×0.3 - 0.025 - 0.025 = 1.30, 仍居首 (阶段排序逻辑保留)
         assert result["top_industries"][0]["name"] == "电力"
-        assert result["top_industries"][0]["priority"] == 3.0
+        assert result["top_industries"][0]["priority"] == 1.3
 
     def test_llm_unavailable_returns_empty(self, quant_env):
         from ai_stock.quant.agents.selection import IndustryScanAgent
@@ -375,6 +560,67 @@ class TestIndustryScanAgent:
         agent = _make_agent(IndustryScanAgent, FakeDataService())
         result = agent.handle(_task())
         assert result["decision"] == "empty"
+
+    def test_first_proposal_hint_in_lifecycle_prompt(self, quant_env, monkeypatch):
+        """轻量级增强: first_proposal 事件透传新主题提示 + 业绩验证降级规则 +
+        机器人产业链细分示例进入生命周期 Prompt; 仅作提示, 不改变加权公式."""
+        from ai_stock.quant.agents import selection
+        from ai_stock.quant.agents.selection import (
+            IndustryLifecycleList,
+            IndustryLifecycleReport,
+            IndustryScanAgent,
+        )
+
+        data = FakeDataService()
+        data.boards = _SCAN_BOARDS + [
+            {"code": "BK006", "name": "机器人", "change_pct": 5.0,
+             "main_net_inflow": 4e8, "up_count": 30, "down_count": 2,
+             "top_stock_name": "某龙头", "top_stock_code": "600006",
+             "board_level": "industry"},
+        ]
+        context = {"macro_event": {"events": [
+            {"title": "人形机器人概念首次提出", "level": "national",
+             "event_type": "first_proposal",
+             "impact_industries": ["机器人"], "influence_score": 9.5},
+        ]}, "trade_date": "2026-08-28"}
+        captured: dict = {}
+
+        def _capture(llm, schema, prompt, **kw):
+            captured["prompt"] = prompt
+            return IndustryLifecycleList(industries=[
+                IndustryLifecycleReport(
+                    name="机器人", stage="爆发前期",
+                    analysis="全新题材, 预期 12-18 个月兑现",
+                    imbalance_score=7.0, expansion_cycle="长期",
+                    entry_barrier="高",
+                ),
+            ])
+
+        monkeypatch.setattr(selection, "structured_invoke", _capture)
+        agent = _make_agent(IndustryScanAgent, data)
+        result = agent.handle(_task(context))
+        assert result["decision"] == "ok"
+
+        prompt = captured["prompt"]
+        # 1) 当前评估日期明示 (时间感知: 供 LLM 判断距题材首提的跨度)
+        assert "当前评估日期: 2026-08-28" in prompt
+        # 2) 事件行与候选行均标注"首次提出"新主题标记 (供 LLM 识别)
+        assert "人形机器人概念首次提出 (首次提出)" in prompt
+        assert "关联事件标签: 机器人 (事件类型: 首次提出)" in prompt
+        # 3) 新主题特别规则: 想象力高阶段 + 要求声明兑现窗口 +
+        #    结合评估日期跨过业绩披露期无增长则主动降级 (25 年后淡出的规则载体)
+        assert "预期兑现的时间窗口" in prompt
+        assert "业绩披露期" in prompt
+        # 4) 产业链细分挖掘示例 (电机/丝杠/减速器) 引导传导发散
+        assert "伺服电机" in prompt
+        assert "滚珠丝杠" in prompt
+        assert "谐波减速器" in prompt
+        # 事件类型仅作提示不参与评分: 机器人综合分仍按原公式计算,
+        # 7.0×0.4 + 4/5×0.3 + 长期 0 + 高 0 = 5.20 (无额外加分)
+        robot = next(
+            i for i in result["top_industries"] if i["name"] == "机器人"
+        )
+        assert robot["priority"] == 5.2
 
 
 # ---------------------------------------------------------------------------
@@ -537,9 +783,12 @@ class TestFundMetricsExtraction:
         text = (
             "Name: 600519\nPE (TTM): 25.3\nPB: 3.1\nROE (%): 18.5\n"
             "PEG: 1.2\nForward PE (FY2026): 20.5x (price=10, EPS=0.5)\n"
-            "Market Cap (100M CNY): 2000.0"
+            "Market Cap (100M CNY): 2000.0\n"
+            "Financial Report Period (REPORT_DATE): 2025-06-30"
         )
         metrics = StockSelectionAgent._extract_fund_metrics(text)
+        # 报告期锚点放首位: 供 LLM 判断财务数据新鲜度 (滞后基本面防线)
+        assert metrics.startswith("报告期=2025-06-30")
         assert "PE(TTM)=25.3" in metrics
         assert "PB=3.1" in metrics
         assert "ROE%=18.5" in metrics
@@ -547,11 +796,107 @@ class TestFundMetricsExtraction:
         assert "FwdPE(FY2026)=20.5" in metrics
         assert "市值亿=2000.0" in metrics
 
+    def test_extract_metrics_without_report_period_still_works(self):
+        """旧格式基本面文本 (无报告期行) 提取不受影响 (向后兼容)."""
+        from ai_stock.quant.agents.selection import StockSelectionAgent
+
+        text = "Name: 600519\nPE (TTM): 25.3\nPB: 3.1"
+        metrics = StockSelectionAgent._extract_fund_metrics(text)
+        assert metrics == "PE(TTM)=25.3, PB=3.1"
+
+    def test_latest_report_date_from_em_f10(self, monkeypatch):
+        """报告期锚点: 东财 F10 利润表倒序首行 REPORT_DATE; 无数据返空串."""
+        from ai_stock.dataflows import a_stock
+
+        class _Resp:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def json(self):
+                return self._payload
+
+        monkeypatch.setattr(
+            a_stock, "_em_get",
+            lambda url, params=None, timeout=15, **kw: _Resp(
+                {"result": {"data": [
+                    {"REPORT_DATE": "2025-06-30T00:00:00"},
+                ]}},
+            ),
+        )
+        assert a_stock._em_latest_report_date("600519") == "2025-06-30"
+
+        monkeypatch.setattr(
+            a_stock, "_em_get",
+            lambda url, params=None, timeout=15, **kw: _Resp({"result": None}),
+        )
+        assert a_stock._em_latest_report_date("600519") == ""
+
     def test_extract_metrics_empty_on_bad_input(self):
         from ai_stock.quant.agents.selection import StockSelectionAgent
 
         assert StockSelectionAgent._extract_fund_metrics("") == ""
-        assert StockSelectionAgent._extract_fund_metrics("无指标文本") == ""
+        # 无指标文本 → 兜底原文首行摘要 (格式漂移时不丢基本面上下文)
+        assert StockSelectionAgent._extract_fund_metrics("无指标文本") == "无指标文本"
+        # 兜底跳过标题行/分隔行, 取首行实质内容并截断 80 字符
+        fallback = StockSelectionAgent._extract_fund_metrics(
+            "# Company Fundamentals for 600519 (A-stock)\n"
+            "--- Consensus EPS Forecast ---\n" + "长" * 100,
+        )
+        assert fallback == "长" * 80
+        assert StockSelectionAgent._extract_fund_metrics("# 仅标题\n---\n") == ""
+
+    def test_extract_report_period_label_variants(self):
+        """报告期锚点多写法容错: 英文标签/裸字段/中文标签 + 中英文冒号."""
+        from ai_stock.quant.agents.selection import StockSelectionAgent
+
+        for text in (
+            "Financial Report Period (REPORT_DATE): 2025-06-30",
+            "REPORT_DATE: 2025-03-31",
+            "报告期：2024-12-31",
+        ):
+            metrics = StockSelectionAgent._extract_fund_metrics(text)
+            assert metrics.startswith("报告期="), text
+
+
+# ---------------------------------------------------------------------------
+# 行业模糊匹配 (后缀剥离核心词, 替代字符集 rstrip)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestMatchTag:
+    def test_bidirectional_containment(self):
+        from ai_stock.quant.agents.selection import IndustryScanAgent
+
+        match = IndustryScanAgent._match_tag
+        assert match("半导体", "半导体") is True           # 全同包含 (原行为保留)
+        assert match("人形机器人", "机器人") is True      # tag 被板名包含 (原行为保留)
+        assert match("新能源车", "新能源") is True        # 后缀剥离: 新能源车→新能源 (原行为保留)
+        assert match("汽车", "汽车零部件") is True
+
+    def test_suffix_words_not_overstripped(self):
+        """旧字符集 rstrip 会把"机器人"剥空/"减速器"剥残 → 新实现核心词 ≥2 字."""
+        from ai_stock.quant.agents.selection import (
+            IndustryScanAgent,
+            _strip_industry_suffix,
+        )
+
+        # 过度剥离防护: 剩余长度永远 ≥2, "机器人"不会塌缩成空/"机"
+        assert _strip_industry_suffix("机器人") == "机器"
+        assert _strip_industry_suffix("减速器") == "减速"
+        assert _strip_industry_suffix("人形机器人") == "人形"
+        # 核心词双向包含生效: 机器 与 机器视觉 匹配 (旧实现剥空后漏配)
+        assert IndustryScanAgent._match_tag("机器视觉", "机器人") is True
+        # 防误伤: 单字残余不作为核心词 ("电机"不会因剥出"电"误配"电力")
+        assert IndustryScanAgent._match_tag("电力", "电机") is False
+
+    def test_short_and_empty_names(self):
+        from ai_stock.quant.agents.selection import IndustryScanAgent
+
+        match = IndustryScanAgent._match_tag
+        assert match("钢", "钢铁") is True                 # 短名走全名包含仍可匹配
+        assert match("", "半导体") is False
+        assert match("半导体", "") is False
 
 
 # ---------------------------------------------------------------------------

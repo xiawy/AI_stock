@@ -130,7 +130,7 @@ def init_quant_db() -> None:
     """建表 (幂等). 生产 schema 变更走 Alembic; 这里保持首跑零门槛.
 
     顺序: 建表 → 旧 quant.db 一次性搬运 → 多用户 schema 升级 →
-    删除废弃的旧榜单表。
+    行业榜 schema 升级 → 删除废弃的旧榜单表。
     """
     import ai_stock.quant.db_models  # noqa: F401  确保表已注册
 
@@ -140,6 +140,7 @@ def init_quant_db() -> None:
     if needs_merge:
         _merge_legacy_quant_db(engine)
     _migrate_multi_user_schema(engine)
+    _migrate_industry_board_schema(engine)
     _drop_legacy_ranking_tables(engine)
     logger.debug("Quant tables ensured on %s", engine.url)
 
@@ -212,6 +213,25 @@ def _drop_legacy_ranking_tables(engine) -> None:
         for table_name in stale:
             conn.execute(text(f'DROP TABLE IF EXISTS "{table_name}"'))
             logger.info("Dropped legacy ranking table: %s", table_name)
+
+
+def _migrate_industry_board_schema(engine) -> None:
+    """存量库升级 (幂等): ``quant_industry_board`` 补 transmission_from
+    (上游传导二次验证的来源行业标记, SQLite ADD COLUMN)."""
+    if not str(engine.url).startswith("sqlite"):
+        return
+    insp = inspect(engine)
+    if "quant_industry_board" not in set(insp.get_table_names()):
+        return
+    cols = {c["name"] for c in insp.get_columns("quant_industry_board")}
+    if "transmission_from" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE quant_industry_board ADD COLUMN "
+            "transmission_from VARCHAR(64) NOT NULL DEFAULT ''"
+        ))
+    logger.info("quant_industry_board migrated: +transmission_from")
 
 
 def _migrate_multi_user_schema(engine) -> None:

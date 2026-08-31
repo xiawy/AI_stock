@@ -51,6 +51,14 @@
                   <el-tag v-if="row.stage" size="small" effect="plain" type="success">
                     {{ row.stage }}
                   </el-tag>
+                  <el-tag
+                    v-if="row.transmission_from"
+                    size="small"
+                    effect="plain"
+                    type="warning"
+                  >
+                    上游传导·{{ row.transmission_from }}
+                  </el-tag>
                 </div>
                 <div class="industry-meta">
                   <span class="heat">优选级 {{ row.heat_score?.toFixed(1) }}</span>

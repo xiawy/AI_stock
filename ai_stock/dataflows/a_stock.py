@@ -1118,6 +1118,16 @@ def get_fundamentals(
         except Exception as e:
             logger.warning("mootdx finance failed for %s: %s", code, e)
 
+        # --- Eastmoney F10: 最新财报报告期 (滞后基本面锚点) ---
+        # mootdx 快照不携带报告期; 明示后下游才能判断财务数据是否为最新一期,
+        # 避免把旧财报当最新业绩 (业绩验证阶段误判), 失败不阻断主流程.
+        try:
+            report_date = _em_latest_report_date(code)
+            if report_date:
+                lines.append(f"Financial Report Period (REPORT_DATE): {report_date}")
+        except Exception as e:
+            logger.warning("latest report date failed for %s: %s", code, e)
+
         # --- Eastmoney push2: basic stock info (direct HTTP) ---
         try:
             market_code = 1 if code.startswith("6") else 0
@@ -1349,6 +1359,29 @@ def _em_fin_rows(secucode: str, report_name: str) -> list[dict]:
     r = _em_get(_EM_F10_FIN_URL, params=params, timeout=15)
     d = r.json()
     return ((d.get("result") or {}).get("data")) or []
+
+
+def _em_latest_report_date(code: str) -> str:
+    """东财 F10 最新已披露财报的 REPORT_DATE (如 2025-06-30), 失败返回空串.
+
+    mootdx 财务快照协议只回"最近一期"数值 (eps/roe 等) 且不携带报告期字段,
+    缺报告期锚点时, 下游 LLM 可能把滞后旧财报误当最新业绩 (题材炒作后业绩验证阶段的误判点),
+    故用 F10 倒序首行的 REPORT_DATE 锚定数据新鲜度.
+    """
+    params = {
+        "reportName": "RPT_F10_FINANCE_GINCOME",
+        "columns": "REPORT_DATE",
+        "filter": f'(SECUCODE="{_secucode(code)}")',
+        "pageNumber": "1",
+        "pageSize": "1",
+        "sortColumns": "REPORT_DATE",
+        "sortTypes": "-1",
+        "source": "HSF10",
+        "client": "PC",
+    }
+    r = _em_get(_EM_F10_FIN_URL, params=params, timeout=15)
+    rows = ((r.json().get("result") or {}).get("data")) or []
+    return str(rows[0].get("REPORT_DATE", "") or "")[:10] if rows else ""
 
 
 def _normalize_fin_rows(

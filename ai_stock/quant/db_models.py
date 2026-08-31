@@ -505,9 +505,10 @@ class QuantIndustryBoard(QuantBase):
     industry_level: Mapped[str] = mapped_column(String(16), default="")  # industry|concept
     stage: Mapped[str] = mapped_column(String(16), default="")          # 生命周期阶段
     event_tag: Mapped[str] = mapped_column(String(64), default="")      # 关联宏观事件标签
-    heat_score: Mapped[float] = mapped_column(Float, default=0.0)       # 阶段优选级 (含涨停潮加分)
+    heat_score: Mapped[float] = mapped_column(Float, default=0.0)       # 加权综合优先级 (供需/阶段/传导/涨停潮)
     change_pct: Mapped[float] = mapped_column(Float, nullable=True)     # 板块当日涨跌幅
     main_net_inflow: Mapped[float] = mapped_column(Float, nullable=True)  # 主力净流入 (元)
+    transmission_from: Mapped[str] = mapped_column(String(64), default="")  # 上游传导来源行业 (空=非传导行)
     leader_stocks_json: Mapped[str] = mapped_column(Text, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
@@ -530,6 +531,7 @@ class QuantIndustryBoard(QuantBase):
             "heat_score": self.heat_score,
             "change_pct": self.change_pct,
             "main_net_inflow": self.main_net_inflow,
+            "transmission_from": self.transmission_from,
             "leader_stocks": json.loads(self.leader_stocks_json or "[]"),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

@@ -250,6 +250,7 @@ def save_industry_board(rank_date: str, rows: list[dict]) -> int:
                     heat_score=float(row.get("heat_score", 0.0) or 0.0),
                     change_pct=row.get("change_pct"),
                     main_net_inflow=row.get("main_net_inflow"),
+                    transmission_from=row.get("transmission_from", ""),
                     leader_stocks_json=json.dumps(
                         row.get("leader_stocks", []), ensure_ascii=False,
                     ),

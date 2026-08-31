@@ -32,12 +32,27 @@ _NEWS_CONTENT_CHARS = 120
 # 上报 Context 的事件描述上限 (优化点 7: 只传结论不传原文)
 _DESCRIPTION_CHARS = 100
 
+# 事件类型分类 (轻量级增强: "首次提出→业绩验证"闭环的提示信号):
+# first_proposal 类事件映射的行业会在下游生命周期 Prompt 中被明确标记为"新主题",
+# 允许想象力驱动的高阶段判断; 业绩验证责任由后续评估期的 LLM 规则承担。
+# 仅增加提示信息, 不改变加权公式与已有字段。
+EVENT_TYPE_LABELS = {
+    "first_proposal": "首次提出",
+    "policy_support": "政策支持",
+    "tech_breakthrough": "技术突破",
+    "routine": "常规事件",
+}
+
 
 class MacroEvent(BaseModel):
     """单个宏观事件 (LLM 结构化输出)."""
 
     title: str = ""
     level: Literal["global", "national", "industry"] = "industry"
+    # 事件类型: 首次提出/政策支持/技术突破/常规 (默认常规, 向后兼容)
+    event_type: Literal[
+        "first_proposal", "policy_support", "tech_breakthrough", "routine",
+    ] = "routine"
     impact_industries: list[str] = Field(default_factory=list)
     description: str = ""
     influence_score: float = Field(default=5.0, ge=1, le=10)
@@ -134,13 +149,20 @@ class MacroEventAgent(BaseAgent):
             "- global: 全球性变革 (如 AI 技术革命、地缘冲突、全球货币政策转折)\n"
             "- national: 国家级战略/政策 (如碳中和、新质生产力、大规模设备更新)\n"
             "- industry: 行业级变化 (如产业链价格战、关键技术突破、行业监管变化)\n"
+            "同时为每个事件判断 event_type:\n"
+            "- first_proposal: 全新题材/赛道首次被提出或定义 "
+            "(如人形机器人概念首次提出), 市场尚处想象力阶段, 无业绩可验证\n"
+            "- policy_support: 既有方向的政策加码/落地\n"
+            "- tech_breakthrough: 既有产业的关键技术突破\n"
+            "- routine: 常规行业动态\n"
             "对每个事件，映射其最直接利好的 A 股行业名称 "
             "(如: 碳中和→新能源/电力; AI 大模型→半导体/通信/计算机)。\n"
             "impact_industries 必须有新闻原文依据, 禁止凭联想输出无关行业。\n"
             f"{kb_hint}"
             "influence_score 按 1-10 评估事件的持续性、覆盖广度与市场影响力。\n"
             "只保留对 A 股有实质影响的事件，逐条输出 "
-            "title/level/impact_industries/description/influence_score。\n\n"
+            "title/level/event_type/impact_industries/description/"
+            "influence_score。\n\n"
             "新闻列表:\n" + "\n".join(lines)
         )
         try:
