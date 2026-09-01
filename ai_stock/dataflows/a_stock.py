@@ -29,6 +29,7 @@ import socket
 import threading
 import time
 import uuid
+import urllib.parse
 import urllib.request
 
 import pandas as pd
@@ -568,6 +569,11 @@ _EM_RETRY = Retry(
 )
 _EM_SESSION.mount("https://", HTTPAdapter(max_retries=_EM_RETRY))
 _EM_SESSION.mount("http://", HTTPAdapter(max_retries=_EM_RETRY))
+# 环境性断连的主机 (如被风控拦掉的 push2 主域) 重试多少次都是死连接,
+# urllib3 还会白耗两次重放与退避; 对这类主机直接快速失败转回退.
+_EM_NO_RETRY_ADAPTER = HTTPAdapter(max_retries=0)
+_DEAD_HOSTS = set()
+_DEAD_HOSTS_LOCK = threading.Lock()
 # 两次东财请求最小间隔(秒)；批量多 Agent 场景可设环境变量 EM_MIN_INTERVAL=1.5~2 降速。
 _EM_MIN_INTERVAL = float(os.environ.get("EM_MIN_INTERVAL", "1.0"))
 _em_last_call = [0.0]  # 模块级上次东财请求时间戳
@@ -597,23 +603,69 @@ def _em_get(url, params=None, headers=None, timeout=15, **kwargs):
             _em_last_call[0] = time.time()
 
 
+def _mark_dead_host(url: str) -> None:
+    """把连接被直接断掉的主机标记为死主机, 后续请求不再做连接级重试."""
+    host = urllib.parse.urlsplit(url).hostname
+    if not host:
+        return
+    with _DEAD_HOSTS_LOCK:
+        if host in _DEAD_HOSTS:
+            return
+        _DEAD_HOSTS.add(host)
+        for scheme in ("https", "http"):
+            _EM_SESSION.mount(f"{scheme}://{host}", _EM_NO_RETRY_ADAPTER)
+    logger.info("Eastmoney host %s marked dead (no connection retries)", host)
+
+
 # 部分网络环境（公司代理/区域风控）会直接断连 push2 主域及数字镜像，
 # 但延迟行情域 push2delay 始终可达。个股级 push2 接口与板块资金流一样
 # 按序尝试两个域，首个可达主机生效（行情延迟分钟级，选股口径完全够用）。
 _EM_PUSH2_HOSTS = ("push2.eastmoney.com", "push2delay.eastmoney.com")
+# 主域被环境性封禁时每次请求都先白吃一次断连（延时 + 日志噪音）。
+# 记住上次可达的主机下标优先使用（粘性），失效时自动回到全量回退。
+# 跨线程只有整型下标的读写，最坏竞态是多探一次失效主机，无需加锁。
+_EM_PUSH2_LAST_OK = [0]
+
+
+def _push2_pick(hosts: tuple) -> tuple[int, ...]:
+    """按粘性状态给出 hosts 的尝试顺序 (上次可达者在前).
+
+    粘性序跨调用方共享 (模块级单例): quant 实时行情把序切到延迟域后,
+    板块资金流不再重探已封禁的主域. 首次探测前若主机已标记为死, 直接跳过.
+    """
+    idxs = tuple(range(len(hosts)))
+    first = _EM_PUSH2_LAST_OK[0]
+    if first in idxs:
+        idxs = (first,) + tuple(i for i in idxs if i != first)
+    with _DEAD_HOSTS_LOCK:
+        probe_first = [
+            i for i in idxs
+            if urllib.parse.urlsplit(hosts[i]).hostname not in _DEAD_HOSTS
+        ]
+    return tuple(probe_first or idxs)
+
+
+def _mark_dead_on_conn_error(exc: Exception, url: str) -> None:
+    """连接被直接断掉时把主机标记为死 (后续请求跳过连接级重试与探测)."""
+    if isinstance(exc, _requests.exceptions.ConnectionError):
+        _mark_dead_host(url)
 
 
 def _push2_get(path, params=None, timeout=15, **kwargs):
-    """push2 域 GET：主域不可达时自动回退延迟域 push2delay。"""
+    """push2 域 GET：粘性优先上次可达主机，失败自动回退另一个域。"""
     last_exc = None
-    for host in _EM_PUSH2_HOSTS:
+    for idx in _push2_pick(_EM_PUSH2_HOSTS):
+        host = _EM_PUSH2_HOSTS[idx]
+        host_url = f"https://{host}{path}"
         try:
-            return _em_get(
-                f"https://{host}{path}", params=params, timeout=timeout, **kwargs
-            )
+            resp = _em_get(host_url, params=params, timeout=timeout, **kwargs)
         except Exception as exc:
             last_exc = exc
+            _mark_dead_on_conn_error(exc, host_url)
             logger.warning("push2 host %s failed for %s: %s", host, path, exc)
+            continue
+        _EM_PUSH2_LAST_OK[0] = idx
+        return resp
     raise last_exc
 
 
@@ -1093,40 +1145,61 @@ def get_fundamentals(
         except Exception as e:
             logger.warning("Tencent quote failed for %s: %s", code, e)
 
-        # --- mootdx: financial snapshot (quarterly) ---
+        # --- 财务快照 (最新报告期): 东财 F10 主财务指标 (主源) → mootdx (后备) ---
+        # mootdx TCP 7709 在部分网络被协议层整体拦截 (端口可连、协议 RST),
+        # 此时每次调用只能快速失败; F10 与其他东财接口同域始终可达, 改为主源,
+        # 且自带 REPORT_DATE, 顺带省掉独立的报告期锚点请求. 失败不阻断主流程.
+        fin_row = None
         try:
-            fin = _mootdx_call("finance", symbol=code)
-            if fin is not None and not (
-                isinstance(fin, pd.DataFrame) and fin.empty
-            ):
-                row = fin.iloc[0] if isinstance(fin, pd.DataFrame) else fin
-                field_map = {
-                    "eps": "EPS (Quarterly)",
-                    "bvps": "Book Value Per Share",
-                    "roe": "ROE (%)",
-                    "profit": "Net Profit",
-                    "income": "Revenue",
-                    "liutongguben": "Float Shares",
-                    "zongguben": "Total Shares",
-                }
-                idx = row.index if hasattr(row, "index") else []
-                for field, label in field_map.items():
-                    if field in idx:
-                        val = row[field]
-                        if val is not None and str(val) != "nan":
-                            lines.append(f"{label}: {val}")
+            fin_row = _em_main_fin_data(code)
         except Exception as e:
-            logger.warning("mootdx finance failed for %s: %s", code, e)
+            logger.warning("Eastmoney F10 main finance failed for %s: %s", code, e)
 
-        # --- Eastmoney F10: 最新财报报告期 (滞后基本面锚点) ---
-        # mootdx 快照不携带报告期; 明示后下游才能判断财务数据是否为最新一期,
-        # 避免把旧财报当最新业绩 (业绩验证阶段误判), 失败不阻断主流程.
-        try:
-            report_date = _em_latest_report_date(code)
+        if fin_row:
+            report_date = str(fin_row.get("REPORT_DATE", "") or "")[:10]
             if report_date:
-                lines.append(f"Financial Report Period (REPORT_DATE): {report_date}")
-        except Exception as e:
-            logger.warning("latest report date failed for %s: %s", code, e)
+                lines.append(
+                    f"Financial Report Period (REPORT_DATE): {report_date}"
+                )
+            for field, label in _EM_MAIN_FIN_FIELDS.items():
+                val = fin_row.get(field)
+                if val is not None and str(val) != "nan":
+                    lines.append(f"{label}: {val}")
+        else:
+            # 后备: mootdx 财务快照 (协议可达的网络环境仍有效);
+            # 快照不携带报告期, 另用 F10 利润表锚定数据新鲜度,
+            # 避免把旧财报当最新业绩 (业绩验证阶段的误判点).
+            try:
+                fin = _mootdx_call("finance", symbol=code)
+                if fin is not None and not (
+                    isinstance(fin, pd.DataFrame) and fin.empty
+                ):
+                    row = fin.iloc[0] if isinstance(fin, pd.DataFrame) else fin
+                    field_map = {
+                        "eps": "EPS (Quarterly)",
+                        "bvps": "Book Value Per Share",
+                        "roe": "ROE (%)",
+                        "profit": "Net Profit",
+                        "income": "Revenue",
+                        "liutongguben": "Float Shares",
+                        "zongguben": "Total Shares",
+                    }
+                    idx = row.index if hasattr(row, "index") else []
+                    for field, label in field_map.items():
+                        if field in idx:
+                            val = row[field]
+                            if val is not None and str(val) != "nan":
+                                lines.append(f"{label}: {val}")
+            except Exception as e:
+                logger.warning("mootdx finance failed for %s: %s", code, e)
+            try:
+                report_date = _em_latest_report_date(code)
+                if report_date:
+                    lines.append(
+                        f"Financial Report Period (REPORT_DATE): {report_date}"
+                    )
+            except Exception as e:
+                logger.warning("latest report date failed for %s: %s", code, e)
 
         # --- Eastmoney push2: basic stock info (direct HTTP) ---
         try:
@@ -1382,6 +1455,35 @@ def _em_latest_report_date(code: str) -> str:
     r = _em_get(_EM_F10_FIN_URL, params=params, timeout=15)
     rows = ((r.json().get("result") or {}).get("data")) or []
     return str(rows[0].get("REPORT_DATE", "") or "")[:10] if rows else ""
+
+
+# F10 主财务指标宽表字段 → 基本面文本标签 (get_fundamentals 消费).
+# 营收/净利为报告期累计值, 同比与比率为衍生字段; 股本不在此处取 —
+# push2 stock/get 的 f84/f85 已提供实时口径.
+_EM_MAIN_FIN_FIELDS = {
+    "EPSJB": "EPS (Latest Period)",
+    "BPS": "Book Value Per Share",
+    "ROEJQ": "ROE (%)",
+    "TOTALOPERATEREVE": "Revenue (YTD)",
+    "PARENTNETPROFIT": "Net Profit (YTD)",
+    "TOTALOPERATEREVETZ": "Revenue YoY (%)",
+    "PARENTNETPROFITTZ": "Net Profit YoY (%)",
+    "XSMLL": "Gross Margin (%)",
+    "XSJLL": "Net Margin (%)",
+    "ZCFZL": "Debt to Asset (%)",
+}
+
+
+def _em_main_fin_data(code: str) -> dict:
+    """东财 F10 主财务指标最新一行 (REPORT_DATE 倒序), 无数据返回 {}.
+
+    mootdx TCP 财务快照的替代主源: 部分网络环境把通达信协议整体拦掉
+    (TCP 7709 端口可连、协议握手立即 RST), 此时 mootdx 完全不可用; 而
+    F10 接口与其他东财端点同域, 保持可达. 且本行自带 REPORT_DATE,
+    可顺带省掉 _em_latest_report_date 的独立一次请求.
+    """
+    rows = _em_fin_rows(_secucode(code), "RPT_F10_FINANCE_MAINFINADATA")
+    return rows[0] if rows else {}
 
 
 def _normalize_fin_rows(

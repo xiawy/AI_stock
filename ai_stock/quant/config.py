@@ -48,6 +48,12 @@ RISK_SCAN_INTERVAL_MINUTES = 5
 # 每日运行报告: 15:35 (收盘后)
 DAILY_REPORT_AT = (15, 35)
 
+# LLM 调用保护 (quant 子系统专用, 见 llm_helper.create_quant_llm):
+# 单次请求超时与重试上限 — 无超时的 invoke 可无限阻塞, 会把整个选股步骤
+# 拖到 3600s 流程超时熔断, 白白浪费整个调度槽位 (行业榜/自选池停更)
+LLM_REQUEST_TIMEOUT = 300    # 秒, 单次 LLM 请求总超时 (深析批量输出留足余量)
+LLM_MAX_RETRIES = 1          # 超时后重试 1 次, 失败即宁缺毋滥降级
+
 # A-share trading sessions (local time): 9:30-11:30 / 13:00-15:00
 MORNING_SESSION = (9, 30, 11, 30)
 AFTERNOON_SESSION = (13, 0, 15, 0)

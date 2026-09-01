@@ -34,8 +34,16 @@ class QuantLLM:
 
 
 def create_quant_llm(config: dict) -> QuantLLM:
-    """按全局 DEFAULT_CONFIG 创建 quant 用的双 LLM."""
+    """按全局 DEFAULT_CONFIG 创建 quant 用的双 LLM.
+
+    注入 ``timeout``/``max_retries`` 默认值 (config.py 常量): 各客户端的
+    白名单透传层均支持这两个参数 (openai/anthropic/google/azure), 无超时保护的
+    单次 invoke 可无限阻塞, 曾把 stock_selection 步拖到 3600s 流程熔断,
+    导致行业榜/自选池整槽停更。
+    """
     from ai_stock.llm_clients.factory import create_llm_client
+
+    from .config import LLM_MAX_RETRIES, LLM_REQUEST_TIMEOUT
 
     provider = config.get("llm_provider", "openai")
     backend_url = config.get("backend_url")
@@ -46,6 +54,7 @@ def create_quant_llm(config: dict) -> QuantLLM:
             return None
         client = create_llm_client(
             provider, model_name, base_url=backend_url, max_tokens=max_tokens,
+            timeout=LLM_REQUEST_TIMEOUT, max_retries=LLM_MAX_RETRIES,
         )
         return client.get_llm()
 

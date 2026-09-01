@@ -69,6 +69,38 @@ def trigger_selection(now: Optional[datetime] = None, force: bool = False) -> Op
     return task_id if created else None
 
 
+def catch_up_selection(now: Optional[datetime] = None) -> Optional[str]:
+    """启动/唤醒补跑 (§5.3 补充): 今天首槽已过点但行业榜尚未产出时,
+    补入队一次选股。
+
+    场景: 服务停机/机器休眠超过 APScheduler 的 30 分钟宽限窗后, 错过的
+    cron 不会自动补发 → 行业榜/自选池整槽停更。本函数轻量幂等,
+    除服务启动时调用外, 还注册为 10 分钟周期 job 兼顾长时间休眠唤醒。
+    判据用「今日行业榜是否已产出」而非槽位 flow_id: 补跑/手动触发的
+    flow_id 携带触发时刻而非槽位时刻, 按槽位查会重复补发; 而流程超时熔断时
+    行业榜不会落库, 榜缺失即代表当日数据确实未产出, 应重试。
+    """
+    now = now or datetime.now()
+    if not is_trading_day(now):
+        return None
+    from . import db_ops
+
+    first_hour, first_minute = (int(p) for p in SELECTION_SCHEDULE[0].split(":"))
+    if (now.hour, now.minute) < (first_hour, first_minute):
+        return None  # 首个槽位未到点, 盘前数据尚旧, 不提前跑
+    if db_ops.get_running_flows("selection"):
+        return None  # 已有选股流程在跑, 避免并行重复执行
+    trade_date = get_trade_date()
+    if db_ops.get_industry_board_by_date(trade_date):
+        return None  # 今日行业榜已产出 (cron/手动/先前补跑)
+    task_id = trigger_selection(now=now)
+    if task_id:
+        logger.info(
+            "Selection catch-up enqueued for %s (no board today)", trade_date,
+        )
+    return task_id
+
+
 def trigger_buy_scan(now: Optional[datetime] = None, force: bool = False) -> Optional[str]:
     """自选买入扫描 (开盘期间每 30 分钟): 入队 buy_scan."""
     now = now or datetime.now()
@@ -360,6 +392,8 @@ class QuantScheduler:
             {"name": "pool_expire", "kind": "daily",
              "at": _shifted_time(*DAILY_REPORT_AT, delta_minutes=5), "fn": trigger_pool_expire},
             {"name": "cleanup", "kind": "daily", "at": dtime(3, 0), "fn": trigger_cleanup},
+            {"name": "selection_catch_up", "kind": "interval",
+             "minutes": 10, "fn": catch_up_selection},
         ]
         return jobs
 
@@ -407,5 +441,11 @@ class QuantScheduler:
         aps.add_job(
             trigger_cleanup, "cron", hour=3, minute=0,
             id="maintenance_cleanup", replace_existing=True, **grace,
+        )
+        # 选股补跑巡检: 轻量幂等 (查行业榜是否已产出), 兼顾长时间休眠唤醒后
+        # 错过超过 30 分钟宽限窗的槽位 (见 catch_up_selection)
+        aps.add_job(
+            catch_up_selection, "interval", minutes=10,
+            id="selection_catch_up", replace_existing=True, **grace,
         )
 

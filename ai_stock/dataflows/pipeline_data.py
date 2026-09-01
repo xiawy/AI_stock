@@ -338,6 +338,9 @@ _EM_PUSH2_BASES = (
     "https://push2.eastmoney.com",
     "https://push2delay.eastmoney.com",
 )
+# 与 a_stock._push2_get 共用同一套粘性/死主机状态 (_push2_pick 读全局单例):
+# 主域被环境性封禁时不再每请求白吃一次断连, 任一调用方探测到可达主机后,
+# 另一调用方直接沿用, 不重复探死主机.
 _EM_BOARD_HEADERS = {
     "User-Agent": _UA,
     "Referer": "https://quote.eastmoney.com/",
@@ -345,17 +348,31 @@ _EM_BOARD_HEADERS = {
 
 
 def _push2_get(path: str, params: dict):
-    """GET a push2 API path with host fallback (main → delay mirror)."""
+    """GET a push2 API path with sticky host fallback (main ↔ delay mirror)."""
+    from .a_stock import _mark_dead_on_conn_error, _push2_pick
+
     last_exc: Exception | None = None
-    for base in _EM_PUSH2_BASES:
+    for idx in _push2_pick(_EM_PUSH2_BASES):
+        base = _EM_PUSH2_BASES[idx]
+        full_url = f"{base}{path}"
         try:
-            return _em_get(
-                f"{base}{path}", params=params,
+            resp = _em_get(
+                full_url, params=params,
                 headers=_EM_BOARD_HEADERS, timeout=15,
             )
         except Exception as exc:
             last_exc = exc
+            _mark_dead_on_conn_error(exc, full_url)
+            continue
+        _mark_push2_last_ok(idx)
+        return resp
     raise last_exc
+
+
+def _mark_push2_last_ok(idx: int) -> None:
+    """把可达主机下标写回 a_stock 的全局粘性状态 (两模块共用一份)."""
+    from .a_stock import _EM_PUSH2_LAST_OK
+    _EM_PUSH2_LAST_OK[0] = idx
 
 
 # 东财 push2 板块口径：

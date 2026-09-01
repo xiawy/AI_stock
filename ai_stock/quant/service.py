@@ -9,7 +9,7 @@
    (§7), risk 队列并入维护任务 handler (日报/清理/超时巡检/到期出池)
 4. 启动延迟任务迁移线程 + 超时巡检线程 (§6.4)
 5. 重启恢复: Orchestrator 扫描 running flow (§8.1)
-6. 启动定时调度层: 回调仅入队 (§5)
+6. 启动定时调度层: 回调仅入队 (§5), 并补跑停机/休眠错过的选股槽位
 
 启动入口: ``python -m ai_stock.quant`` 或 ``run_service()``.
 """
@@ -33,7 +33,7 @@ from .mq_worker import (
 )
 from .orchestrator import get_orchestrator
 from .rules_engine import seed_rules_and_cases
-from .scheduler import QuantScheduler, build_maintenance_handlers
+from .scheduler import QuantScheduler, build_maintenance_handlers, catch_up_selection
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,12 @@ class QuantService:
             if self.with_scheduler:
                 self.scheduler = QuantScheduler()
                 scheduler_backend = self.scheduler.start()
+                # 停机/休眠错过超过 30 分钟宽限窗的选股槽位不会被 cron 补发,
+                # 启动时检查并补跑一次 (幂等, 失败不影响启动主链)
+                try:
+                    catch_up_selection()
+                except Exception as exc:
+                    logger.warning("Selection catch-up failed: %s", exc)
             else:
                 scheduler_backend = "disabled"
 

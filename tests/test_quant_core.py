@@ -182,3 +182,96 @@ class TestRulePipeline:
         })
         # 上线流水线强制单测: 无用例直接失败 (§10.2 不可跳过)
         assert outcome["status"] == "test_failed"
+
+
+@pytest.mark.unit
+class TestCatchUpSelection:
+    """启动/唤醒补跑: 停机/休眠错过的选股槽位在服务启动时补发一次."""
+
+    def _patch_calendar(self, monkeypatch, trading_day=True, trade_date="2026-08-31"):
+        from ai_stock.quant import scheduler
+
+        monkeypatch.setattr(scheduler, "is_trading_day", lambda dt=None: trading_day)
+        monkeypatch.setattr(scheduler, "get_trade_date", lambda: trade_date)
+
+    def test_catch_up_fires_when_slot_missing(self, quant_env, monkeypatch):
+        """今日行业榜未产出且无在跑流程 → 首槽过点后补发一次."""
+        from ai_stock.quant import scheduler
+
+        self._patch_calendar(monkeypatch)
+        task_id = scheduler.catch_up_selection(now=datetime(2026, 8, 31, 12, 30))
+        assert task_id is not None
+
+    def test_catch_up_skipped_when_board_exists(self, quant_env, monkeypatch):
+        """今日行业榜已产出 (cron/手动) → 不重复补发."""
+        from ai_stock.quant import db_ops, scheduler
+
+        self._patch_calendar(monkeypatch)
+        monkeypatch.setattr(
+            db_ops, "get_industry_board_by_date",
+            lambda date_str: {"date": date_str, "rows": []},
+        )
+        assert scheduler.catch_up_selection(now=datetime(2026, 8, 31, 12, 30)) is None
+
+    def test_catch_up_skipped_when_running_flow_exists(self, quant_env, monkeypatch):
+        """已有选股 flow 在跑 (如超时尚未巡检) → 不并发补发."""
+        from ai_stock.quant import db_ops, scheduler
+
+        self._patch_calendar(monkeypatch)
+        db_ops.create_flow("selection_2026-08-31_0700", "selection", 3600)  # running
+        assert scheduler.catch_up_selection(now=datetime(2026, 8, 31, 12, 30)) is None
+
+    def test_catch_up_skipped_before_any_slot(self, quant_env, monkeypatch):
+        """当前时刻早于首个槽位 → 无已过槽位, 不补发."""
+        from ai_stock.quant import scheduler
+
+        self._patch_calendar(monkeypatch)
+        assert scheduler.catch_up_selection(now=datetime(2026, 8, 31, 6, 30)) is None
+
+    def test_catch_up_skipped_on_non_trading_day(self, quant_env, monkeypatch):
+        from ai_stock.quant import scheduler
+
+        self._patch_calendar(monkeypatch, trading_day=False)
+        assert scheduler.catch_up_selection(now=datetime(2026, 8, 30, 12, 30)) is None
+
+    def test_catch_up_idempotent(self, quant_env, monkeypatch):
+        """同一时刻重复补发被幂等 key 去重."""
+        from ai_stock.quant import scheduler
+
+        self._patch_calendar(monkeypatch)
+        now = datetime(2026, 8, 31, 12, 30)
+        assert scheduler.catch_up_selection(now=now) is not None
+        # 第二次: 榜仍未产出且无在跑 flow → 仍尝试入队, 但同一 HHMM 的
+        # 幂等 key 已存在, enqueue 拒绝重复 → 返回 None (10 分钟巡检周期安全)
+        assert scheduler.catch_up_selection(now=now) is None
+
+
+@pytest.mark.unit
+class TestQuantLLMTimeoutGuard:
+    """quant LLM 必须带超时/重试: 无超时的 invoke 曾把选股步拖到 3600s 熔断."""
+
+    def test_create_quant_llm_injects_timeout_and_retries(self, monkeypatch):
+        from ai_stock.quant import llm_helper
+        from ai_stock.quant.config import LLM_MAX_RETRIES, LLM_REQUEST_TIMEOUT
+
+        captured: list[dict] = []
+
+        class _FakeClient:
+            def get_llm(self):
+                return object()
+
+        def fake_factory(provider, model, base_url=None, **kwargs):
+            captured.append(kwargs)
+            return _FakeClient()
+
+        monkeypatch.setattr(
+            "ai_stock.llm_clients.factory.create_llm_client", fake_factory,
+        )
+        llm_helper.create_quant_llm(
+            {"quick_think_llm": "q-model", "deep_think_llm": "d-model"},
+        )
+        # quick + deep 两个模型均注入超时保护
+        assert len(captured) == 2
+        for kw in captured:
+            assert kw["timeout"] == LLM_REQUEST_TIMEOUT
+            assert kw["max_retries"] == LLM_MAX_RETRIES
