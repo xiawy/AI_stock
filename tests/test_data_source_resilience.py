@@ -1,4 +1,6 @@
-"""数据源韧性单元测试: push2 粘性主机序 + F10 财务主源替换 (离线, 不打真实网络)."""
+"""数据源韧性单元测试: push2 粘性主机序 + F10 财务主源替换 + mootdx 负缓存窗口 (离线, 不打真实网络)."""
+
+import time
 
 import pandas as pd
 import pytest
@@ -163,3 +165,67 @@ def test_get_fundamentals_falls_back_to_mootdx(monkeypatch):
     assert "EPS (Quarterly): 1.2" in out
     assert "ROE (%): 9.9" in out
     assert "Financial Report Period (REPORT_DATE): 2026-03-31" in out
+
+
+# ---------------------------------------------------------------------------
+# mootdx 负缓存窗口: 协议层被拦时窗口内不探测、不逐股刷告警
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _mootdx_dead_window(monkeypatch):
+    """把 mootdx 置于负缓存窗口内 (协议封锁形态), 并重置一次性提示标志."""
+    monkeypatch.setattr(a_stock, "_mootdx_client", None)
+    monkeypatch.setattr(a_stock, "_mootdx_unavailable_until", time.time() + 3600)
+    monkeypatch.setattr(a_stock, "_mootdx_skip_announced", [False])
+
+
+@pytest.mark.unit
+def test_mootdx_unavailable_predicate(monkeypatch, _mootdx_dead_window):
+    """窗口内判不可用; 窗口过期后恢复可探测."""
+    assert a_stock._mootdx_unavailable() is True
+    monkeypatch.setattr(a_stock, "_mootdx_unavailable_until", time.time() - 1)
+    assert a_stock._mootdx_unavailable() is False
+
+
+@pytest.mark.unit
+def test_get_stock_data_skips_mootdx_when_unavailable(monkeypatch, _mootdx_dead_window):
+    """负缓存窗口内 K 线直达新浪: 不探 mootdx, 只留一条一次性提示."""
+    def no_mootdx(method, **kwargs):
+        raise AssertionError("负缓存窗口内不应探测 mootdx")
+
+    kline = pd.DataFrame({
+        "Date": pd.to_datetime(["2026-08-28", "2026-08-29"]),
+        "Open": [10.0, 10.5], "High": [10.6, 11.0],
+        "Low": [9.9, 10.4], "Close": [10.5, 10.9], "Volume": [1000, 1200],
+    })
+    monkeypatch.setattr(a_stock, "_mootdx_call", no_mootdx)
+    monkeypatch.setattr(a_stock, "_sina_kline_fallback", lambda *a, **k: kline)
+    monkeypatch.setattr(
+        a_stock, "_supplement_stale_ohlcv_with_sina",
+        lambda code, df, *a, **k: (df, False),
+    )
+
+    out = a_stock.get_stock_data("688111", "2026-08-01", "2026-08-31")
+    assert "sina HTTP (fallback)" in out
+    assert "2026-08-29" in out
+    assert a_stock._mootdx_skip_announced[0] is True  # 已记一次性 info
+
+
+@pytest.mark.unit
+def test_get_fundamentals_skips_mootdx_fallback_when_unavailable(
+    monkeypatch, _mootdx_dead_window
+):
+    """F10 无数据且窗口内: mootdx 后备同样跳过, 报告期锚点 (HTTP) 照走."""
+    def no_mootdx(method, **kwargs):
+        raise AssertionError("负缓存窗口内不应探测 mootdx")
+
+    monkeypatch.setattr(a_stock, "_tencent_quote", lambda codes: {})
+    monkeypatch.setattr(a_stock, "_em_main_fin_data", lambda code: {})
+    monkeypatch.setattr(a_stock, "_mootdx_call", no_mootdx)
+    monkeypatch.setattr(a_stock, "_em_latest_report_date", lambda code: "2026-06-30")
+    monkeypatch.setattr(a_stock, "_push2_get", _dead_push2)
+    monkeypatch.setattr(a_stock, "_ths_eps_forecast", lambda code: pd.DataFrame())
+
+    out = a_stock.get_fundamentals("688111")
+    assert "Financial Report Period (REPORT_DATE): 2026-06-30" in out

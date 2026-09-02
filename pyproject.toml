@@ -35,6 +35,9 @@ dependencies = [
     "yfinance>=0.2.63",
     "fpdf2>=2.8.6",
     "python-dotenv>=1.1.0",
+    # pd.read_html 解析同花顺一致预期页（HTML5）必需；缺失时每次
+    # get_fundamentals/get_profit_forecast 都报 "Import html5lib failed"。
+    "html5lib>=1.1",
     # 0.11.7 是首个兼容 pandas>=2.3 的版本；放宽到 0.10.x 会让 uv 回溯到
     # 要求 pandas<1.3.5 的远古版本，报出与真实成因无关的 pandas 冲突（#87）。
     "mootdx>=0.11.7",

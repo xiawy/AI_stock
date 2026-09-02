@@ -263,6 +263,10 @@ _TDX_CANARY_SYMBOL = "600519"
 # 每一次取数都会把整张服务器表重探一遍（10 台 × TCP 超时），把"取不到数"
 # 放大成"每个请求卡几十秒"。
 _MOOTDX_RETRY_AFTER_S = 300.0
+# 协议层被拦（TCP 可连、通达信协议 RST）是环境问题（代理/防火墙拦 7709），
+# 不会五分钟后自愈——短窗内反复重探整表纯属浪费（一轮数十秒），还会让
+# 每只股票的取数都刷一条告警。这类失败把负缓存拉长到 6 小时。
+_MOOTDX_PROTOCOL_BLOCK_RETRY_S = 6 * 3600.0
 _mootdx_unavailable_until = 0.0
 
 # ⚠️ 曾经加过「连续 N 台协议失败就停手」的提前退出，已移除：三台远端拒绝**证明不了**
@@ -340,6 +344,29 @@ def reset_mootdx_client() -> None:
     global _mootdx_client, _mootdx_unavailable_until
     _mootdx_client = None
     _mootdx_unavailable_until = 0.0
+    _mootdx_skip_announced[0] = False
+
+
+def _mootdx_unavailable() -> bool:
+    """负缓存窗口内 mootdx 视为整体不可用: 调用方应跳过探测直接走 HTTP 备源.
+
+    窗口内每次 _mootdx_call 只能快速失败并刷一条告警, 批量选股几十只
+    股票就是几十条重复日志; 跳过探测后数据链路不变 (备源本来就会接管).
+    """
+    return _mootdx_client is None and time.time() < _mootdx_unavailable_until
+
+
+_mootdx_skip_announced = [False]
+
+
+def _announce_mootdx_skip() -> None:
+    """负缓存窗口内只在首次记一条 info, 避免逐股刷屏."""
+    if not _mootdx_skip_announced[0]:
+        _mootdx_skip_announced[0] = True
+        logger.info(
+            "mootdx 处于不可用窗口, K线/财务直接走 HTTP 备源(新浪/东财), "
+            "不再逐次探测与告警"
+        )
 
 
 @contextlib.contextmanager
@@ -451,7 +478,10 @@ def _get_mootdx_client():
             _mootdx_client = candidate
             return _mootdx_client
 
-    _mootdx_unavailable_until = time.time() + _MOOTDX_RETRY_AFTER_S
+    retry_after = (
+        _MOOTDX_PROTOCOL_BLOCK_RETRY_S if tcp_ok_but_dead else _MOOTDX_RETRY_AFTER_S
+    )
+    _mootdx_unavailable_until = time.time() + retry_after
     if tcp_ok_but_dead:
         # 说清楚是"协议被拒"而不是"连不上"——这两者的排查方向完全不同。
         cause = (
@@ -464,7 +494,7 @@ def _get_mootdx_client():
     raise RuntimeError(
         "mootdx 通达信服务器不可用：%s"
         "可改用 6 位股票代码直接查询。%.0f 秒内将直接快速失败、不再逐台重探。"
-        % (cause, _MOOTDX_RETRY_AFTER_S)
+        % (cause, retry_after)
     )
 
 
@@ -713,7 +743,12 @@ def _ths_eps_forecast(code: str) -> pd.DataFrame:
     }
     r = _requests.get(url, headers=headers, timeout=15)
     r.encoding = "gbk"
-    dfs = pd.read_html(io.StringIO(r.text))
+    try:
+        dfs = pd.read_html(io.StringIO(r.text))
+    except ValueError:
+        # "No tables found": 页面上没有估值表 (常见于无机构覆盖的小盘股),
+        # 按"无覆盖"处理返回空表, 而不是抛错让调用方刷告警日志.
+        return pd.DataFrame()
     # Find the table containing EPS data
     for df in dfs:
         cols = [str(c) for c in df.columns]
@@ -896,29 +931,37 @@ def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
         # 可能读到本线程 to_csv 写到一半的文件。同一标的缓存 miss 后
         # 串行等待是期望行为（第二次进来直接命中缓存）；锁序恒定
         # OHLCV → MOOTDX，无死锁。
-        try:
-            df = _mootdx_call("bars", symbol=code, category=4, offset=800)
+        # 负缓存窗口内跳过 mootdx 探测直接走新浪 (不刷逐股告警).
+        df = None
+        if _mootdx_unavailable():
+            _announce_mootdx_skip()
+        else:
+            try:
+                df = _mootdx_call("bars", symbol=code, category=4, offset=800)
 
-            if df is None or df.empty:
-                raise ValueError(f"No OHLCV data from mootdx for {code}")
+                if df is None or df.empty:
+                    raise ValueError(f"No OHLCV data from mootdx for {code}")
 
-            # mootdx returns index named 'datetime' AND a column named 'datetime'
-            # (plus year/month/day/hour/minute/volume). Drop duplicates before reset.
-            df = df.drop(columns=["datetime", "year", "month", "day", "hour", "minute"], errors="ignore")
-            df = df.reset_index()  # moves index 'datetime' → column 'datetime'
-            rename_map = {
-                "datetime": "Date",
-                "open": "Open",
-                "close": "Close",
-                "high": "High",
-                "low": "Low",
-                "volume": "Volume",
-            }
-            df = df.rename(columns=rename_map)
-            df = df[["Date", "Open", "High", "Low", "Close", "Volume"]]
-            df = _normalize_ohlcv_dates(df)
-        except Exception as e:
-            logger.warning("mootdx OHLCV failed for %s: %s, trying sina HTTP fallback", code, e)
+                # mootdx returns index named 'datetime' AND a column named 'datetime'
+                # (plus year/month/day/hour/minute/volume). Drop duplicates before reset.
+                df = df.drop(columns=["datetime", "year", "month", "day", "hour", "minute"], errors="ignore")
+                df = df.reset_index()  # moves index 'datetime' → column 'datetime'
+                rename_map = {
+                    "datetime": "Date",
+                    "open": "Open",
+                    "close": "Close",
+                    "high": "High",
+                    "low": "Low",
+                    "volume": "Volume",
+                }
+                df = df.rename(columns=rename_map)
+                df = df[["Date", "Open", "High", "Low", "Close", "Volume"]]
+                df = _normalize_ohlcv_dates(df)
+            except Exception as e:
+                logger.warning("mootdx OHLCV failed for %s: %s, trying sina HTTP fallback", code, e)
+                df = None
+
+        if df is None or df.empty:
             # Fallback: Sina direct HTTP API
             try:
                 df = _sina_kline_fallback(code)
@@ -954,33 +997,41 @@ def get_stock_data(
     code = _normalize_ticker(symbol)
 
     data_source = "mootdx (TCP)"
-    try:
-        df = _mootdx_call("bars", symbol=code, category=4, offset=800)
+    # 负缓存窗口内跳过 mootdx 探测直接走新浪 (不刷逐股告警).
+    df = None
+    if _mootdx_unavailable():
+        _announce_mootdx_skip()
+    else:
+        try:
+            df = _mootdx_call("bars", symbol=code, category=4, offset=800)
 
-        if df is None or df.empty:
-            raise ValueError(f"No data from mootdx for {code}")
+            if df is None or df.empty:
+                raise ValueError(f"No data from mootdx for {code}")
 
-        # Drop duplicate datetime column + extra columns before reset_index
-        df = df.drop(
-            columns=["datetime", "year", "month", "day", "hour", "minute"],
-            errors="ignore",
-        )
-        df = df.reset_index()  # index 'datetime' → column 'datetime'
-        df = df.rename(
-            columns={
-                "datetime": "Date",
-                "open": "Open",
-                "close": "Close",
-                "high": "High",
-                "low": "Low",
-                "volume": "Volume",
-                "amount": "Amount",
-            }
-        )
-        df = _normalize_ohlcv_dates(df)
+            # Drop duplicate datetime column + extra columns before reset_index
+            df = df.drop(
+                columns=["datetime", "year", "month", "day", "hour", "minute"],
+                errors="ignore",
+            )
+            df = df.reset_index()  # index 'datetime' → column 'datetime'
+            df = df.rename(
+                columns={
+                    "datetime": "Date",
+                    "open": "Open",
+                    "close": "Close",
+                    "high": "High",
+                    "low": "Low",
+                    "volume": "Volume",
+                    "amount": "Amount",
+                }
+            )
+            df = _normalize_ohlcv_dates(df)
 
-    except Exception as e:
-        logger.warning("mootdx K-line failed for %s: %s, trying sina HTTP fallback", code, e)
+        except Exception as e:
+            logger.warning("mootdx K-line failed for %s: %s, trying sina HTTP fallback", code, e)
+            df = None
+
+    if df is None or df.empty:
         # Fallback: Sina direct HTTP API
         try:
             df = _sina_kline_fallback(code, start_date, end_date)
@@ -1169,29 +1220,33 @@ def get_fundamentals(
             # 后备: mootdx 财务快照 (协议可达的网络环境仍有效);
             # 快照不携带报告期, 另用 F10 利润表锚定数据新鲜度,
             # 避免把旧财报当最新业绩 (业绩验证阶段的误判点).
-            try:
-                fin = _mootdx_call("finance", symbol=code)
-                if fin is not None and not (
-                    isinstance(fin, pd.DataFrame) and fin.empty
-                ):
-                    row = fin.iloc[0] if isinstance(fin, pd.DataFrame) else fin
-                    field_map = {
-                        "eps": "EPS (Quarterly)",
-                        "bvps": "Book Value Per Share",
-                        "roe": "ROE (%)",
-                        "profit": "Net Profit",
-                        "income": "Revenue",
-                        "liutongguben": "Float Shares",
-                        "zongguben": "Total Shares",
-                    }
-                    idx = row.index if hasattr(row, "index") else []
-                    for field, label in field_map.items():
-                        if field in idx:
-                            val = row[field]
-                            if val is not None and str(val) != "nan":
-                                lines.append(f"{label}: {val}")
-            except Exception as e:
-                logger.warning("mootdx finance failed for %s: %s", code, e)
+            # 负缓存窗口内跳过 mootdx 探测 (必然快速失败, 不刷告警).
+            if _mootdx_unavailable():
+                _announce_mootdx_skip()
+            else:
+                try:
+                    fin = _mootdx_call("finance", symbol=code)
+                    if fin is not None and not (
+                        isinstance(fin, pd.DataFrame) and fin.empty
+                    ):
+                        row = fin.iloc[0] if isinstance(fin, pd.DataFrame) else fin
+                        field_map = {
+                            "eps": "EPS (Quarterly)",
+                            "bvps": "Book Value Per Share",
+                            "roe": "ROE (%)",
+                            "profit": "Net Profit",
+                            "income": "Revenue",
+                            "liutongguben": "Float Shares",
+                            "zongguben": "Total Shares",
+                        }
+                        idx = row.index if hasattr(row, "index") else []
+                        for field, label in field_map.items():
+                            if field in idx:
+                                val = row[field]
+                                if val is not None and str(val) != "nan":
+                                    lines.append(f"{label}: {val}")
+                except Exception as e:
+                    logger.warning("mootdx finance failed for %s: %s", code, e)
             try:
                 report_date = _em_latest_report_date(code)
                 if report_date:
@@ -1922,8 +1977,9 @@ def get_insider_transactions(
             sections.append(text)
             used_sources.append(name)
 
-    if not sections:
-        # 备源: mootdx F10 股东研究 (TCP 依赖, 仅在直连源全部失效时兑底)
+    if not sections and not _mootdx_unavailable():
+        # 备源: mootdx F10 股东研究 (TCP 依赖, 仅在直连源全部失效时兑底;
+        # 负缓存窗口内 mootdx 必然不可用, 不再白探一次)
         try:
             raw = _mootdx_call("F10", symbol=code, name="股东研究")
             if raw and raw.strip():

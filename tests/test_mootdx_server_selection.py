@@ -151,6 +151,34 @@ def test_get_client_failure_does_not_clear_negative_cache(fake_tdx):
     assert len(fake_tdx["probe_calls"]) == probes
 
 
+def test_protocol_block_uses_extended_negative_cache(handshake_fails):
+    """协议层被拦是环境问题（代理/防火墙拦 7709），不会五分钟自愈：
+    负缓存应用 6 小时长窗，短窗内反复重探整表只是白耗几十秒×每 5 分钟一轮。"""
+    import time
+
+    with pytest.raises(RuntimeError, match="21600 秒"):
+        a_stock._get_mootdx_client()
+
+    remaining = a_stock._mootdx_unavailable_until - time.time()
+    assert remaining > a_stock._MOOTDX_RETRY_AFTER_S
+    assert remaining <= a_stock._MOOTDX_PROTOCOL_BLOCK_RETRY_S + 5
+
+
+def test_network_unreachable_keeps_short_negative_cache(fake_tdx):
+    """全网连不上（非协议封锁）可能是临时抖动：维持 5 分钟短窗，
+    网络恢复后能尽快重新用上 mootdx。"""
+    import time
+
+    fake_tdx["tcp_open"] = set()
+    fake_tdx["protocol_ok"] = set()
+
+    with pytest.raises(RuntimeError):
+        a_stock._get_mootdx_client()
+
+    remaining = a_stock._mootdx_unavailable_until - time.time()
+    assert remaining <= a_stock._MOOTDX_RETRY_AFTER_S + 5
+
+
 # ---------------------------------------------------------------------------
 # 协议层失败的真实形态：握手在 Quotes.factory 内部就炸，根本走不到取数验证。
 # 只统计"取数失败"会让计数恒为 0，快速失败判断随之失效（实测踩过）。
