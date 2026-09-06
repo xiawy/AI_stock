@@ -12,10 +12,48 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# 新浪 rich_text 等常把真标题包在开头【】里、后接正文; 取【】内主标题做去重键。
+_LEAD_BRACKET_RE = re.compile(r"^【(.+?)】")
+# 去重键剔除所有非「字母/数字/汉字/下划线」字符 (空白 + 中英文标点)。
+_NON_WORD_RE = re.compile(r"\W+", re.UNICODE)
+
+
+def normalize_title(title: str) -> str:
+    """标题规范化去重键: 提取开头【】内主标题 → 去空白与标点 → 小写。
+
+    用于识别「同一新闻多源转发」的重复: 各源标题常仅在标点、空格、
+    【来源】前缀上有差异 (如东财「…竞争秩序 加强…」与同花顺「…竞争秩序，加强…」)。
+    """
+    text = (title or "").strip()
+    m = _LEAD_BRACKET_RE.match(text)
+    if m:
+        text = m.group(1).strip()
+    return _NON_WORD_RE.sub("", text).lower()
+
+
+def dedup_news(items: list[dict], title_key: str = "title") -> list[dict]:
+    """按规范化标题去重, 保留首次出现者 (调用方负责先按优先级排序)。
+
+    规范化键为空的条目 (无有效标题) 原样保留、不参与去重, 避免误删。
+    只对「标题规范化后完全相等」去重 (标点/空格/【】前缀差异);
+    措辞改写的相似新闻不合并, 以免误删不同新闻。
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    for item in items or []:
+        key = normalize_title(str(item.get(title_key, "")))
+        if key:
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(item)
+    return out
 
 
 def select_top_news(
@@ -26,6 +64,7 @@ def select_top_news(
 
     排序: 政策类优先 (policy > 其它), 同类内按 ``time`` 字符串倒序
     (格式统一为 "YYYY-MM-DD HH:MM", 字典序即时间序). 无标题的条目剔除.
+    同一新闻多源转发的重复标题 (仅标点/空格/【】前缀差异) 按规范化标题去重.
     返回的是原始 dict 的浅拷贝列表, 不修改入参.
     """
     valid = [
@@ -39,6 +78,7 @@ def select_top_news(
         ),
         reverse=True,
     )
+    valid = dedup_news(valid)
     top = valid[:top_n]
     for i, item in enumerate(top, 1):
         item["rank"] = i

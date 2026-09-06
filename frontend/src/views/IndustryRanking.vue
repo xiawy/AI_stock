@@ -152,20 +152,20 @@
         top="8vh"
       >
         <div v-loading="newsLoading" class="news-list">
-          <div v-for="n in newsItems" :key="n.id" class="news-item">
+          <div v-for="n in newsItems" :key="n.id" class="news-item" @click="selectedNews = n; detailVisible = true">
             <div class="news-head">
               <el-tag size="small" :type="biasType(n.bull_bear_bias)">
                 {{ biasLabel(n.bull_bear_bias) }}
               </el-tag>
               <span class="news-title">{{ n.title }}</span>
-              <span class="news-score">{{ n.composite_score?.toFixed(1) }}</span>
+              <span v-if="n.composite_score > 0" class="news-score">{{ n.composite_score?.toFixed(1) }}</span>
             </div>
             <div class="news-meta">
               <span v-if="n.source">{{ n.source }}</span>
               <span v-if="n.pub_time">{{ n.pub_time }}</span>
               <span v-if="n.category === 'policy'" class="news-cat">政策</span>
             </div>
-            <p v-if="n.debate_summary" class="news-summary">{{ n.debate_summary }}</p>
+            <p v-if="n.debate_summary || n.content" class="news-summary">{{ n.debate_summary || n.content }}</p>
           </div>
           <el-empty
             v-if="!newsLoading && !newsItems.length"
@@ -174,6 +174,9 @@
           />
         </div>
       </el-dialog>
+
+      <!-- 新闻详情弹窗（复用新闻榜的 ImpactDetail） -->
+      <ImpactDetail v-model="detailVisible" :news="selectedNews" />
     </div>
   </div>
 </template>
@@ -187,6 +190,7 @@ import { industryApi } from '../api/industry'
 import { recommendationApi } from '../api/recommendation'
 import { analysisApi } from '../api/analysis'
 import AppHeader from '../components/AppHeader.vue'
+import ImpactDetail from '../components/ImpactDetail.vue'
 
 const router = useRouter()
 const loading = ref(false)
@@ -200,6 +204,8 @@ const newsVisible = ref(false)
 const newsLoading = ref(false)
 const newsIndustry = ref('')
 const newsItems = ref([])
+const detailVisible = ref(false)
+const selectedNews = ref(null)
 
 const leaders = computed(() => selected.value?.leader_stocks || [])
 
@@ -355,9 +361,23 @@ onMounted(loadData)
   gap: 16px;
   align-items: start;
 }
-@media (max-width: 1100px) {
+@media (max-width: 820px) {
   .tri-board {
     grid-template-columns: 1fr;
+  }
+}
+@media (min-width: 1101px) and (max-width: 1400px) {
+  /* 中等宽度屏幕：保持三栏但压缩列间距，避免挤成换行 */
+  .tri-board {
+    grid-template-columns: 1fr 0.8fr 1fr;
+    gap: 10px;
+  }
+  .industry-name {
+    font-size: 0.9rem;
+    gap: 4px;
+  }
+  .industry-meta {
+    font-size: 0.8rem;
   }
 }
 .board {
@@ -410,6 +430,7 @@ onMounted(loadData)
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .industry-meta {
   display: flex;
@@ -537,6 +558,11 @@ onMounted(loadData)
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.news-item:hover {
+  border-color: var(--brand);
 }
 .news-head {
   display: flex;

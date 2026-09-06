@@ -130,6 +130,18 @@ def reconcile(llm_industries: list[str], kb_industries: list[str]) -> list[str]:
     return list(kb_industries)
 
 
+def industry_matches_any(name: str, candidates: list[str]) -> bool:
+    """行业名 *name* 是否与 *candidates* 中任一项模糊匹配 (跨粒度容错).
+
+    用于「行业榜细分板块名 ↔ 知识库粗粒度行业名」的关联: 例如榜单行业
+    「锂电池」/「电池化学品」可命中新闻标签「电池」, 「半导体材料」可命中
+    「半导体」。空名或空候选返回 False。
+    """
+    if not name:
+        return False
+    return any(_fuzzy_match(name, c) for c in (candidates or []))
+
+
 def _fuzzy_match(a: str, b: str) -> bool:
     """双向包含, 或核心词 (去通用后缀, ≥2字) 双向包含."""
     if not a or not b:

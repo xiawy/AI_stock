@@ -13,7 +13,7 @@
 
       <el-divider />
 
-      <div class="scores-grid">
+      <div v-if="hasScores" class="scores-grid">
         <div class="score-cell">
           <div class="score-num">{{ news.policy_score?.toFixed(1) }}</div>
           <div class="score-name">政策影响力</div>
@@ -32,7 +32,7 @@
         </div>
       </div>
 
-      <div class="composite">
+      <div v-if="hasScores" class="composite">
         综合评分：<strong>{{ news.composite_score?.toFixed(2) }}</strong>
       </div>
 
@@ -103,6 +103,17 @@ const biasLabel = computed(() => {
   if (b === 'bullish') return '偏多'
   if (b === 'bearish') return '偏空'
   return '中性'
+})
+
+// 新闻榜重构后已移除多 Agent 评分, 各分值恒为 0;
+// 无真实评分时隐藏评分区, 让新闻正文成为详情焦点。
+const hasScores = computed(() => {
+  const n = props.news
+  if (!n) return false
+  return [
+    n.policy_score, n.news_score, n.capital_score,
+    n.sentiment_score, n.composite_score,
+  ].some((v) => typeof v === 'number' && v > 0)
 })
 </script>
 

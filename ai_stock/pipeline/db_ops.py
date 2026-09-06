@@ -166,13 +166,20 @@ def save_news_items(snapshot_id: int, news_items: list[dict]) -> int:
 def get_news_by_industry_ranking(board_id: int) -> Optional[dict]:
     """Get the news items related to an industry-board row (行业榜→新闻).
 
-    行业榜本身由 quant 选股流程产出 (quant_industry_board); 这里用榜行的行业名,
-    在最新一份完成的新闻影响力快照中匹配主/副行业 (``industries_json``)
-    包含该名称的新闻, 供前端「行业榜→相关新闻」联动展示。
+    行业榜由 quant 选股流程产出 (quant_industry_board), 行业名为东财细分
+    板块名 (如「半导体材料」「锂电池」); 新闻榜重构后不再写 industries_json,
+    故这里对最新一份完成快照的每条新闻, 用事件-行业知识库 (match_industries)
+    从标题+正文现算行业标签, 再与榜行行业名做跨粒度模糊匹配
+    (industry_matches_any), 并以「行业名直接出现在新闻文本」作为兜底。
     无快照或无匹配新闻时返回空列表。
     """
     from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem
+    from ai_stock.pipeline.news_board import dedup_news
     from ai_stock.quant import db_ops as quant_db_ops
+    from ai_stock.quant.event_industry_kb import (
+        industry_matches_any,
+        match_industries,
+    )
 
     session = _get_session()
     if session is None:
@@ -195,26 +202,38 @@ def get_news_by_industry_ranking(board_id: int) -> Optional[dict]:
         if snapshot is None:
             return {"industry": industry, "snapshot_id": None, "news_items": []}
 
-        # Escape LIKE wildcards inside the industry name (defense in depth;
-        # board names are Chinese and normally contain none).
-        escaped = (
-            industry
-            .replace("\\", "\\\\")
-            .replace("%", "\\%")
-            .replace("_", "\\_")
-        )
-        needle = f'%"{escaped}"%'
         rows = (
             session.query(NewsItem)
             .filter(NewsItem.snapshot_id == snapshot.id)
-            .filter(NewsItem.industries_json.like(needle, escape="\\"))
-            .order_by(NewsItem.composite_score.desc())
+            .order_by(NewsItem.rank.asc())
             .all()
         )
+        news_items: list[dict] = []
+        for r in rows:
+            # 行业标签: 优先用已存 industries_json, 为空则用知识库现算
+            # (新闻榜重构后该字段恒空, 现算保证存量/新数据联动都可用)。
+            tags: list[str] = []
+            if r.industries_json:
+                try:
+                    parsed = json.loads(r.industries_json)
+                    if isinstance(parsed, list):
+                        tags = [str(x) for x in parsed if x]
+                except (ValueError, TypeError):
+                    tags = []
+            # 标题 + 正文前段 (控制成本/聚焦导语, 避免长尾过度打标)
+            text = f"{r.title or ''} {(r.content or '')[:500]}"
+            if not tags:
+                tags = match_industries(text)
+            if not (industry_matches_any(industry, tags) or industry in text):
+                continue
+            item = r.to_dict()
+            if not item.get("industries"):
+                item["industries"] = tags
+            news_items.append(item)
         return {
             "industry": industry,
             "snapshot_id": snapshot.id,
-            "news_items": [r.to_dict() for r in rows],
+            "news_items": dedup_news(news_items),
         }
     except Exception as exc:
         logger.error("Failed to get news for board %s: %s", board_id, exc)
@@ -226,6 +245,7 @@ def get_news_by_industry_ranking(board_id: int) -> Optional[dict]:
 def get_latest_snapshot() -> Optional[dict]:
     """Get the latest completed snapshot with its data."""
     from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem
+    from ai_stock.pipeline.news_board import dedup_news
 
     session = _get_session()
     if session is None:
@@ -250,7 +270,7 @@ def get_latest_snapshot() -> Optional[dict]:
 
         return {
             "snapshot": snapshot.to_dict(),
-            "news_items": [n.to_dict() for n in news_items],
+            "news_items": dedup_news([n.to_dict() for n in news_items]),
         }
     except Exception as exc:
         logger.error("Failed to get latest snapshot: %s", exc)
@@ -262,6 +282,7 @@ def get_latest_snapshot() -> Optional[dict]:
 def get_snapshot_by_date(date_str: str) -> Optional[dict]:
     """Get snapshots for a specific date (YYYY-MM-DD)."""
     from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem
+    from ai_stock.pipeline.news_board import dedup_news
 
     session = _get_session()
     if session is None:
@@ -296,7 +317,7 @@ def get_snapshot_by_date(date_str: str) -> Optional[dict]:
 
         return {
             "snapshot": snapshot.to_dict(),
-            "news_items": [n.to_dict() for n in news_items],
+            "news_items": dedup_news([n.to_dict() for n in news_items]),
         }
     except Exception as exc:
         logger.error("Failed to get snapshot for %s: %s", date_str, exc)

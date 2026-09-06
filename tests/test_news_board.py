@@ -7,7 +7,13 @@ Covers:
 
 from __future__ import annotations
 
-from ai_stock.pipeline.news_board import _to_news_row, save_news_board, select_top_news
+from ai_stock.pipeline.news_board import (
+    _to_news_row,
+    dedup_news,
+    normalize_title,
+    save_news_board,
+    select_top_news,
+)
 
 
 def _item(title, time, category="news"):
@@ -127,3 +133,53 @@ def test_to_news_row_maps_time_to_pub_time():
     assert row["category"] == "policy"
     assert row["rank"] == 3
     assert row["bull_bear_bias"] == "neutral"
+
+
+# ---------------------------------------------------------------------------
+# normalize_title / dedup_news (同一新闻多源转发去重)
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_title_ignores_punct_space_and_brackets():
+    # 仅标点差异 (同花顺逗号 vs 东财空格) → 同一去重键
+    assert normalize_title(
+        "工信部：规范动力电池竞争秩序，加强监测"
+    ) == normalize_title("工信部：规范动力电池竞争秩序 加强监测")
+    # 新浪【标题】正文 vs 其它源纯标题 → 同一去重键
+    assert normalize_title(
+        "【零售试点城市名单公布】记者3日从商务部获悉"
+    ) == normalize_title("零售试点城市名单公布")
+
+
+def test_dedup_removes_multisource_duplicates_keeps_first():
+    news = [
+        _item("动力电池竞争秩序，加强监测", "2026-08-30 09:00"),
+        _item("动力电池竞争秩序 加强监测", "2026-08-30 08:00"),
+    ]
+    out = dedup_news(news)
+    assert len(out) == 1
+    # 保留首次出现者 (调用方已按优先级排序)
+    assert out[0]["time"] == "2026-08-30 09:00"
+
+
+def test_dedup_keeps_rewritten_titles():
+    # 措辞改写的相似新闻 (非完全重复) 保守保留, 避免误删不同新闻
+    news = [
+        _item("华康洁净：中标项目遭废标", "2026-08-30 09:00"),
+        _item("华康洁净：9018.65万元中标项目被废标", "2026-08-30 08:00"),
+    ]
+    assert len(dedup_news(news)) == 2
+
+
+def test_select_top_news_dedups_then_ranks_contiguous():
+    news = [
+        _item("动力电池竞争秩序，加强监测", "2026-08-30 09:00"),
+        _item("动力电池竞争秩序 加强监测", "2026-08-30 08:00"),
+        _item("另一条独立新闻", "2026-08-30 07:00"),
+    ]
+    top = select_top_news(news, top_n=20)
+    assert [n["title"] for n in top] == [
+        "动力电池竞争秩序，加强监测", "另一条独立新闻",
+    ]
+    # 去重在编 rank 之前 → rank 连续无跳号
+    assert [n["rank"] for n in top] == [1, 2]

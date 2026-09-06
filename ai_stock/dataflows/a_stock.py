@@ -269,6 +269,76 @@ _MOOTDX_RETRY_AFTER_S = 300.0
 _MOOTDX_PROTOCOL_BLOCK_RETRY_S = 6 * 3600.0
 _mootdx_unavailable_until = 0.0
 
+# 负缓存原本只在内存里 → 每个新进程都要重探一轮(实测被拦网络 ~65s)才重新记下窗口。
+# 落盘到 cache_dir 后, 同机新进程一启动就读到窗口, 直接跳过探测走 HTTP 备源(H1)。
+# 文件只存一个"不可用截止时间戳", 与内存态同源; 探测成功 / reset 时清除, 过期自动失效。
+_MOOTDX_NEGCACHE_LOCK = threading.Lock()
+_mootdx_negcache_loaded = [False]
+
+
+def _mootdx_negcache_path() -> str | None:
+    """负缓存落盘文件路径; 解析不到 cache_dir 时返回 None(退化为纯内存)."""
+    try:
+        from .config import get_config
+        cache_dir = get_config().get(
+            "data_cache_dir", os.path.expanduser("~/.tradingagents/cache")
+        )
+        os.makedirs(cache_dir, exist_ok=True)
+        return os.path.join(cache_dir, "mootdx-unavailable.until")
+    except Exception as e:  # 配置/磁盘异常不该拖垮主流程, 降级为纯内存负缓存
+        logger.debug("mootdx 负缓存路径解析失败, 退化为纯内存: %s", e)
+        return None
+
+
+def _load_mootdx_negcache() -> None:
+    """进程内首次访问时从磁盘恢复负缓存窗口(只读一次, 之后走内存短路)."""
+    global _mootdx_unavailable_until
+    if _mootdx_negcache_loaded[0]:
+        return
+    with _MOOTDX_NEGCACHE_LOCK:
+        if _mootdx_negcache_loaded[0]:
+            return
+        _mootdx_negcache_loaded[0] = True
+        path = _mootdx_negcache_path()
+        if not path or not os.path.exists(path):
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                until = float((f.read() or "").strip() or 0)
+        except (ValueError, OSError) as e:
+            logger.debug("读取 mootdx 负缓存失败, 忽略: %s", e)
+            return
+        if until > time.time():
+            # 只采纳仍在未来的窗口, 且取内存/磁盘里更晚的那个(不缩短已有窗口)。
+            if until > _mootdx_unavailable_until:
+                _mootdx_unavailable_until = until
+            logger.info(
+                "mootdx 负缓存命中(剩 %.0f 秒), 本进程跳过通达信探测直接走 HTTP 备源",
+                until - time.time(),
+            )
+        elif until:
+            _clear_mootdx_negcache()  # 已过期, 顺手清掉文件
+
+
+def _save_mootdx_negcache(until_ts: float) -> None:
+    """把负缓存窗口截止时间写盘, 供同机其它进程 / 下次启动复用."""
+    path = _mootdx_negcache_path()
+    if not path:
+        return
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(str(until_ts))
+    except OSError as e:
+        logger.debug("写入 mootdx 负缓存失败, 忽略: %s", e)
+
+
+def _clear_mootdx_negcache() -> None:
+    """清除落盘负缓存(探测成功或 reset 时调用)."""
+    path = _mootdx_negcache_path()
+    if path:
+        with contextlib.suppress(OSError):
+            os.remove(path)
+
 # ⚠️ 曾经加过「连续 N 台协议失败就停手」的提前退出，已移除：三台远端拒绝**证明不了**
 # 本地网络封了协议，而列表里靠后的服务器完全可能是好的。提前收手会让那台可用服务器
 # 永远试不到，还顺手记下 5 分钟负缓存。省下的十几秒不值得换这个风险——真正的耗时
@@ -345,6 +415,7 @@ def reset_mootdx_client() -> None:
     _mootdx_client = None
     _mootdx_unavailable_until = 0.0
     _mootdx_skip_announced[0] = False
+    _clear_mootdx_negcache()   # 内存窗口清零时同步清掉落盘窗口(H1)
 
 
 def _mootdx_unavailable() -> bool:
@@ -353,6 +424,7 @@ def _mootdx_unavailable() -> bool:
     窗口内每次 _mootdx_call 只能快速失败并刷一条告警, 批量选股几十只
     股票就是几十条重复日志; 跳过探测后数据链路不变 (备源本来就会接管).
     """
+    _load_mootdx_negcache()   # 首访恢复落盘窗口(H1); 之后内存短路, 无额外开销
     return _mootdx_client is None and time.time() < _mootdx_unavailable_until
 
 
@@ -424,6 +496,9 @@ def _get_mootdx_client():
     if _mootdx_client is not None:
         return _mootdx_client
 
+    # 进程内首次访问: 从磁盘恢复负缓存窗口, 命中则下面的 now<until 直接快速失败,
+    # 省掉被拦网络里 ~65s 的整表重探(H1)。
+    _load_mootdx_negcache()
     now = time.time()
     if now < _mootdx_unavailable_until:
         raise RuntimeError(
@@ -459,6 +534,7 @@ def _get_mootdx_client():
                     logger.info("mootdx server selected: %s:%s", ip, port)
                     keep_bestip()   # 这次的覆写正是我们想要的，别还原
                     _mootdx_client = candidate
+                    _clear_mootdx_negcache()   # 探测成功: 清除落盘负缓存(H1)
                     return _mootdx_client
                 tcp_ok_but_dead += 1
                 logger.debug("mootdx %s:%s 建连成功但取不到数，换下一台", ip, port)
@@ -476,12 +552,14 @@ def _get_mootdx_client():
         if _tdx_client_works(candidate):
             logger.info("mootdx client from 裸 factory（用户已有配置）")
             _mootdx_client = candidate
+            _clear_mootdx_negcache()   # 探测成功: 清除落盘负缓存(H1)
             return _mootdx_client
 
     retry_after = (
         _MOOTDX_PROTOCOL_BLOCK_RETRY_S if tcp_ok_but_dead else _MOOTDX_RETRY_AFTER_S
     )
     _mootdx_unavailable_until = time.time() + retry_after
+    _save_mootdx_negcache(_mootdx_unavailable_until)   # 落盘: 同机新进程免于重探(H1)
     if tcp_ok_but_dead:
         # 说清楚是"协议被拒"而不是"连不上"——这两者的排查方向完全不同。
         cause = (
@@ -731,10 +809,40 @@ def _eastmoney_datacenter(
 # ---------------------------------------------------------------------------
 
 
+# 同花顺一致预期"取不到"有两种成因, 必须区分(H2):
+#   - 个股真无机构覆盖(小盘股常态) → 正常, 静默返回空表;
+#   - 被反爬 / 页面改版(整站返回非 200 或无表格页) → 系统性问题, 前瞻PE/PEG 会整体缺失.
+# 单只无法判定, 用"连续多只都落空"作启发式: 连续 >= 阈值只才判为疑似封锁, 只告警一次,
+# 不改变返回(仍是空表, 保持优雅降级), 只把原本静默的退化暴露到日志.
+_THS_CONSECUTIVE_MISS_LIMIT = 8
+_ths_miss_streak = [0]
+_ths_block_warned = [False]
+
+
+def _ths_note_result(hit: bool) -> None:
+    """记录一次同花顺一致预期取数结果; 连续落空过多时告警疑似整站被拦/改版."""
+    if hit:
+        _ths_miss_streak[0] = 0
+        _ths_block_warned[0] = False
+        return
+    _ths_miss_streak[0] += 1
+    if (
+        _ths_miss_streak[0] >= _THS_CONSECUTIVE_MISS_LIMIT
+        and not _ths_block_warned[0]
+    ):
+        _ths_block_warned[0] = True
+        logger.warning(
+            "同花顺一致预期已连续 %d 只取不到表格: 若这些股票不可能全无机构覆盖, "
+            "则疑似被反爬拦截或页面改版(而非个股无覆盖), 前瞻PE/PEG 将整体缺失, 请留意.",
+            _ths_miss_streak[0],
+        )
+
+
 def _ths_eps_forecast(code: str) -> pd.DataFrame:
     """Fetch consensus EPS forecast from 同花顺 (direct HTTP).
 
     Returns DataFrame with columns roughly: 年度, 预测机构数, 最小值, 均值, 最大值.
+    取不到时返回空表(优雅降级); 空表成因(无覆盖 vs 被拦)由 _ths_note_result 计数区分.
     """
     url = f"https://basic.10jqka.com.cn/new/{code}/worth.html"
     headers = {
@@ -743,19 +851,32 @@ def _ths_eps_forecast(code: str) -> pd.DataFrame:
     }
     r = _requests.get(url, headers=headers, timeout=15)
     r.encoding = "gbk"
+    # 非 200(4xx/5xx/反爬拦截页)是硬失败, 与"个股无覆盖"分开记, 不再静默当空表.
+    if r.status_code != 200:
+        logger.warning(
+            "同花顺一致预期 HTTP %s for %s (非无覆盖, 疑似限流/拦截)",
+            r.status_code, code,
+        )
+        _ths_note_result(False)
+        return pd.DataFrame()
     try:
         dfs = pd.read_html(io.StringIO(r.text))
     except ValueError:
-        # "No tables found": 页面上没有估值表 (常见于无机构覆盖的小盘股),
-        # 按"无覆盖"处理返回空表, 而不是抛错让调用方刷告警日志.
+        # "No tables found": 页面无估值表 → 空表优雅降级(不抛错刷调用方告警);
+        # 是否"整站被反爬"单只判不了, 交给连续落空计数去发现(H2).
+        _ths_note_result(False)
         return pd.DataFrame()
-    # Find the table containing EPS data
-    for df in dfs:
-        cols = [str(c) for c in df.columns]
-        if any("每股收益" in c or "均值" in c for c in cols):
-            return df
-    # Fallback: return first table if exists
-    return dfs[0] if dfs else pd.DataFrame()
+    # 取含 EPS 的表(列里有"每股收益"/"均值"), 否则退回首表.
+    result = next(
+        (
+            df
+            for df in dfs
+            if any("每股收益" in str(c) or "均值" in str(c) for c in df.columns)
+        ),
+        dfs[0] if dfs else pd.DataFrame(),
+    )
+    _ths_note_result(result is not None and not result.empty)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -847,8 +968,49 @@ def _needs_sina_supplement(df: pd.DataFrame, target_date: str | None) -> bool:
     return last_date < target
 
 
+def _align_volume_units(
+    primary: pd.DataFrame, supplement: pd.DataFrame
+) -> pd.DataFrame:
+    """把 supplement 的成交量量纲对齐到 primary, 防跨源拼接污染量能指标(H4).
+
+    mootdx 与 sina 的日线成交量实测同为"股"(sina 2,030,845 ≈ 腾讯 20,308 手 ×100),
+    正常不触发. 但若将来任一源改口径(手↔股, 相差 100 倍), _merge_ohlcv 直接拼接会让
+    VWMA/MFI 在衔接处畸变. 这里只在两源中位量比 ≈100 或 ≈0.01(几乎只可能是单位差,
+    而非真实量能差)时才缩放 supplement 并告警, 保守自愈; 其余情况原样返回.
+    """
+    if (
+        primary is None
+        or supplement is None
+        or primary.empty
+        or supplement.empty
+        or "Volume" not in primary.columns
+        or "Volume" not in supplement.columns
+    ):
+        return supplement
+    p_med = pd.to_numeric(primary["Volume"], errors="coerce").median()
+    s_med = pd.to_numeric(supplement["Volume"], errors="coerce").median()
+    if not p_med or not s_med or p_med <= 0 or s_med <= 0:
+        return supplement
+    ratio = s_med / p_med
+    if 50 <= ratio <= 200:
+        factor = 1 / 100.0   # supplement 比 primary 大 ~100 倍 → 缩到 primary 口径
+    elif 1 / 200 <= ratio <= 1 / 50:
+        factor = 100.0       # supplement 比 primary 小 ~100 倍 → 放大到 primary 口径
+    else:
+        return supplement
+    logger.warning(
+        "补充源与主源成交量中位量比 %.3f (疑似手/股口径不一致), 已按 ×%.3f 缩放对齐补充源",
+        ratio, factor,
+    )
+    aligned = supplement.copy()
+    aligned["Volume"] = pd.to_numeric(aligned["Volume"], errors="coerce") * factor
+    return aligned
+
+
 def _merge_ohlcv(primary: pd.DataFrame, supplement: pd.DataFrame) -> pd.DataFrame:
     """Merge OHLCV frames, preferring supplement rows on duplicate dates."""
+    # 跨源拼接前先对齐成交量量纲(H4); 任一源为空时 _align 原样返回 supplement.
+    supplement = _align_volume_units(primary, supplement)
     frames = [frame for frame in (primary, supplement) if frame is not None and not frame.empty]
     if not frames:
         return pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"])
@@ -1257,6 +1419,10 @@ def get_fundamentals(
                 logger.warning("latest report date failed for %s: %s", code, e)
 
         # --- Eastmoney push2: basic stock info (direct HTTP) ---
+        # push2 行情域(主域+延迟域)在部分网络被整体断连; 行业/上市日期/股本 若没从
+        # push2 拿到, 下面用同域可达的东财 F10(datacenter) 兜底(H3). 总市值/流通市值
+        # 已由上面的腾讯行情覆盖, 不在此列.
+        got_industry = got_listing = got_shares = False
         try:
             market_code = 1 if code.startswith("6") else 0
             _info_params = {
@@ -1270,8 +1436,10 @@ def get_fundamentals(
             if d:
                 if d.get("f127"):
                     lines.append(f"行业: {d['f127']}")
+                    got_industry = True
                 if d.get("f84"):
                     lines.append(f"总股本: {d['f84']}")
+                    got_shares = True
                 if d.get("f85"):
                     lines.append(f"流通股本: {d['f85']}")
                 if d.get("f116"):
@@ -1280,8 +1448,35 @@ def get_fundamentals(
                     lines.append(f"流通市值: {d['f117']}")
                 if d.get("f189"):
                     lines.append(f"上市日期: {d['f189']}")
+                    got_listing = True
         except Exception as e:
             logger.warning("eastmoney push2 stock info failed for %s: %s", code, e)
+
+        # H3 兜底: push2 未给出 行业/上市日期 时改用东财 F10 公司基本资料(同 datacenter
+        # 域, 本网络可达); 股本优先复用已取到的 fin_row(TOTAL_SHARE/A_FREE_SHARE), 免额外请求.
+        if not got_industry or not got_listing:
+            org = _em_org_basic_info(code)
+            if org:
+                if not got_industry:
+                    industry = (
+                        org.get("EM2016")
+                        or org.get("CSRC_INDUSTRY_NAME")
+                        or org.get("BOARD_NAME_2LEVEL")
+                    )
+                    if industry and str(industry) not in ("None", "nan"):
+                        lines.append(f"行业: {str(industry)[:80]}")
+                        got_industry = True
+                if not got_listing:
+                    listing = str(org.get("LISTING_DATE", "") or "")[:10]
+                    if listing:
+                        lines.append(f"上市日期: {listing}")
+        if not got_shares and fin_row:
+            total_share = fin_row.get("TOTAL_SHARE")
+            free_share = fin_row.get("A_FREE_SHARE")
+            if total_share is not None and str(total_share) not in ("", "None", "nan"):
+                lines.append(f"总股本: {total_share}")
+            if free_share is not None and str(free_share) not in ("", "None", "nan"):
+                lines.append(f"流通股本(A股): {free_share}")
 
         # --- 同花顺 direct HTTP: consensus EPS forecast ---
         try:
@@ -1538,6 +1733,33 @@ def _em_main_fin_data(code: str) -> dict:
     可顺带省掉 _em_latest_report_date 的独立一次请求.
     """
     rows = _em_fin_rows(_secucode(code), "RPT_F10_FINANCE_MAINFINADATA")
+    return rows[0] if rows else {}
+
+
+def _em_org_basic_info(code: str) -> dict:
+    """东财 F10 公司基本资料(RPT_F10_ORG_BASICINFO)一行, 无数据返回 {}.
+
+    提供 行业(EM2016/CSRC)/上市日期 等与 push2 stock/get 同口径的字段. 走 datacenter
+    主机 —— 部分网络只封 push2(行情域)而 datacenter(F10 域)始终可达, 故用作 H3 备源.
+    """
+    try:
+        r = _em_get(
+            _EM_F10_FIN_URL,
+            params={
+                "reportName": "RPT_F10_ORG_BASICINFO",
+                "columns": "ALL",
+                "filter": f'(SECUCODE="{_secucode(code)}")',
+                "pageNumber": "1",
+                "pageSize": "1",
+                "source": "HSF10",
+                "client": "PC",
+            },
+            timeout=15,
+        )
+        rows = ((r.json().get("result") or {}).get("data")) or []
+    except Exception as e:
+        logger.debug("东财 F10 公司基本资料取数失败 for %s: %s", code, e)
+        return {}
     return rows[0] if rows else {}
 
 

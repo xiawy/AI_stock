@@ -31,6 +31,24 @@ def _dummy_api_keys(monkeypatch):
         monkeypatch.setenv(env_var, os.environ.get(env_var, "placeholder"))
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_dataflow_state(monkeypatch):
+    """隔离 a_stock 里会跨用例/跨进程泄漏的全局态, 保证测试离线且互不污染.
+
+    - mootdx 负缓存落盘(H1): 不隔离的话, 某用例写下的"不可用截止时间戳"会被后续
+      用例 _load 进来, 使 _get_mootdx_client 跳过探测直接抛错, 选服务器用例全挂,
+      还会写脏用户真实 cache_dir. 这里把路径置 None → 退化为纯内存负缓存.
+      (专门验证落盘行为的用例自行把 _mootdx_negcache_path 覆盖到 tmp_path.)
+    - 同花顺一致预期"连续落空"计数(H2): 一次性全局态, 逐用例复位防串味.
+    """
+    from ai_stock.dataflows import a_stock
+
+    monkeypatch.setattr(a_stock, "_mootdx_negcache_path", lambda: None)
+    monkeypatch.setattr(a_stock, "_mootdx_negcache_loaded", [False])
+    monkeypatch.setattr(a_stock, "_ths_miss_streak", [0])
+    monkeypatch.setattr(a_stock, "_ths_block_warned", [False])
+
+
 @pytest.fixture()
 def mock_llm_client():
     client = MagicMock()

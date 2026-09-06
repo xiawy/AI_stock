@@ -1,5 +1,6 @@
 """数据源韧性单元测试: push2 粘性主机序 + F10 财务主源替换 + mootdx 负缓存窗口 (离线, 不打真实网络)."""
 
+import logging
 import time
 
 import pandas as pd
@@ -139,6 +140,7 @@ def test_get_fundamentals_uses_em_f10_as_primary(monkeypatch):
     monkeypatch.setattr(a_stock, "_em_latest_report_date", fake_report_date)
     monkeypatch.setattr(a_stock, "_push2_get", _dead_push2)
     monkeypatch.setattr(a_stock, "_ths_eps_forecast", lambda code: pd.DataFrame())
+    monkeypatch.setattr(a_stock, "_em_org_basic_info", lambda code: {})
 
     out = a_stock.get_fundamentals("600519")
     assert "Financial Report Period (REPORT_DATE): 2026-06-30" in out
@@ -160,6 +162,7 @@ def test_get_fundamentals_falls_back_to_mootdx(monkeypatch):
     monkeypatch.setattr(a_stock, "_em_latest_report_date", lambda code: "2026-03-31")
     monkeypatch.setattr(a_stock, "_push2_get", _dead_push2)
     monkeypatch.setattr(a_stock, "_ths_eps_forecast", lambda code: pd.DataFrame())
+    monkeypatch.setattr(a_stock, "_em_org_basic_info", lambda code: {})
 
     out = a_stock.get_fundamentals("000566")
     assert "EPS (Quarterly): 1.2" in out
@@ -226,6 +229,330 @@ def test_get_fundamentals_skips_mootdx_fallback_when_unavailable(
     monkeypatch.setattr(a_stock, "_em_latest_report_date", lambda code: "2026-06-30")
     monkeypatch.setattr(a_stock, "_push2_get", _dead_push2)
     monkeypatch.setattr(a_stock, "_ths_eps_forecast", lambda code: pd.DataFrame())
+    monkeypatch.setattr(a_stock, "_em_org_basic_info", lambda code: {})
 
     out = a_stock.get_fundamentals("688111")
     assert "Financial Report Period (REPORT_DATE): 2026-06-30" in out
+
+
+# ---------------------------------------------------------------------------
+# H1: mootdx 负缓存落盘 —— 同机新进程免于重探整表 (被拦网络实测 ~65s)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _negcache_tmp(monkeypatch, tmp_path):
+    """把负缓存落盘路径指向 tmp, 并复位一次性加载标志/内存窗口, 模拟干净进程."""
+    path = tmp_path / "mootdx-unavailable.until"
+    monkeypatch.setattr(a_stock, "_mootdx_negcache_path", lambda: str(path))
+    monkeypatch.setattr(a_stock, "_mootdx_negcache_loaded", [False])
+    monkeypatch.setattr(a_stock, "_mootdx_unavailable_until", 0.0)
+    monkeypatch.setattr(a_stock, "_mootdx_client", None)
+    return path
+
+
+@pytest.mark.unit
+def test_mootdx_negcache_save_load_roundtrip(monkeypatch, _negcache_tmp):
+    """写盘的窗口能被"新进程"(内存清零+未加载)读回来, 时间戳一致."""
+    until = time.time() + 1234
+    a_stock._save_mootdx_negcache(until)
+    assert _negcache_tmp.exists()
+
+    monkeypatch.setattr(a_stock, "_mootdx_unavailable_until", 0.0)
+    monkeypatch.setattr(a_stock, "_mootdx_negcache_loaded", [False])
+    a_stock._load_mootdx_negcache()
+    assert a_stock._mootdx_unavailable_until == pytest.approx(until, abs=1)
+
+
+@pytest.mark.unit
+def test_mootdx_negcache_expired_is_discarded(monkeypatch, _negcache_tmp):
+    """过期窗口不采纳, 且顺手清掉残留文件 (否则文件永远躺在 cache_dir)."""
+    a_stock._save_mootdx_negcache(time.time() - 10)
+    monkeypatch.setattr(a_stock, "_mootdx_negcache_loaded", [False])
+    a_stock._load_mootdx_negcache()
+    assert a_stock._mootdx_unavailable_until == 0.0
+    assert not _negcache_tmp.exists()
+
+
+@pytest.mark.unit
+def test_mootdx_negcache_clear_removes_file(_negcache_tmp):
+    """探测成功/reset 时清除落盘窗口."""
+    a_stock._save_mootdx_negcache(time.time() + 100)
+    assert _negcache_tmp.exists()
+    a_stock._clear_mootdx_negcache()
+    assert not _negcache_tmp.exists()
+
+
+@pytest.mark.unit
+def test_mootdx_negcache_load_does_not_shorten_existing_window(monkeypatch, _negcache_tmp):
+    """磁盘窗口比内存已有窗口早时, 不缩短内存窗口 (取更晚者)."""
+    a_stock._save_mootdx_negcache(time.time() + 100)
+    monkeypatch.setattr(a_stock, "_mootdx_unavailable_until", time.time() + 9999)
+    monkeypatch.setattr(a_stock, "_mootdx_negcache_loaded", [False])
+    a_stock._load_mootdx_negcache()
+    assert a_stock._mootdx_unavailable_until > time.time() + 9000
+
+
+@pytest.mark.unit
+def test_get_mootdx_client_fast_fails_from_persisted_window(monkeypatch, _negcache_tmp):
+    """H1 的核心收益: 命中落盘窗口的新进程直接快速失败, 一台服务器都不探."""
+    a_stock._save_mootdx_negcache(time.time() + 3600)
+    monkeypatch.setattr(a_stock, "_mootdx_negcache_loaded", [False])
+    monkeypatch.setattr(a_stock, "_mootdx_unavailable_until", 0.0)
+
+    def no_probe(*args, **kwargs):
+        raise AssertionError("命中落盘负缓存时不应再探测服务器")
+
+    monkeypatch.setattr(a_stock, "_reachable_tdx_servers", no_probe)
+
+    with pytest.raises(RuntimeError, match="不再重试"):
+        a_stock._get_mootdx_client()
+
+
+# ---------------------------------------------------------------------------
+# H2: 同花顺一致预期"落空"计数 —— 区分个股无覆盖 vs 整站被反爬/改版
+# ---------------------------------------------------------------------------
+
+
+class _FakeThsResponse:
+    def __init__(self, status_code=200, text=""):
+        self.status_code = status_code
+        self.text = text
+        self.encoding = None
+
+
+@pytest.mark.unit
+def test_ths_note_result_warns_once_after_consecutive_misses(caplog):
+    """连续落空达阈值 → 只告警一次 (疑似整站被拦), 之后不重复刷屏."""
+    with caplog.at_level(logging.WARNING):
+        for _ in range(a_stock._THS_CONSECUTIVE_MISS_LIMIT):
+            a_stock._ths_note_result(False)
+    assert sum("疑似被反爬" in r.getMessage() for r in caplog.records) == 1
+    assert a_stock._ths_block_warned[0] is True
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        a_stock._ths_note_result(False)
+    assert sum("疑似被反爬" in r.getMessage() for r in caplog.records) == 0
+
+
+@pytest.mark.unit
+def test_ths_note_result_below_limit_stays_silent(caplog):
+    """未达阈值(可能只是几只小盘股无覆盖) → 不告警, 避免误报."""
+    with caplog.at_level(logging.WARNING):
+        for _ in range(a_stock._THS_CONSECUTIVE_MISS_LIMIT - 1):
+            a_stock._ths_note_result(False)
+    assert sum("疑似被反爬" in r.getMessage() for r in caplog.records) == 0
+    assert a_stock._ths_block_warned[0] is False
+
+
+@pytest.mark.unit
+def test_ths_note_result_hit_resets_streak():
+    """命中一次即清零连续计数, 并复位告警标志 (间歇性可达不该累积成"封锁")."""
+    for _ in range(3):
+        a_stock._ths_note_result(False)
+    assert a_stock._ths_miss_streak[0] == 3
+    a_stock._ths_note_result(True)
+    assert a_stock._ths_miss_streak[0] == 0
+    assert a_stock._ths_block_warned[0] is False
+
+
+@pytest.mark.unit
+def test_ths_eps_forecast_non_200_counts_as_miss(monkeypatch):
+    """整站非 200(限流/拦截) 是硬失败, 记为落空 —— 不再静默当成"个股无覆盖"."""
+    monkeypatch.setattr(
+        a_stock._requests, "get",
+        lambda *a, **k: _FakeThsResponse(status_code=503, text=""),
+    )
+    out = a_stock._ths_eps_forecast("002882")
+    assert out.empty
+    assert a_stock._ths_miss_streak[0] == 1
+
+
+@pytest.mark.unit
+def test_ths_eps_forecast_no_tables_counts_as_miss(monkeypatch):
+    """页面 200 但无估值表 → 空表优雅降级, 同时记一次落空供计数判定."""
+    monkeypatch.setattr(
+        a_stock._requests, "get",
+        lambda *a, **k: _FakeThsResponse(200, "<html><body>没有表格</body></html>"),
+    )
+    out = a_stock._ths_eps_forecast("002882")
+    assert out.empty
+    assert a_stock._ths_miss_streak[0] == 1
+
+
+@pytest.mark.unit
+def test_ths_eps_forecast_parses_table_and_resets_streak(monkeypatch):
+    """正常取到估值表 → 非空, 且清零之前的落空计数."""
+    html = (
+        "<table><tr><th>年度</th><th>预测机构数</th><th>最小值</th>"
+        "<th>每股收益均值</th><th>最大值</th></tr>"
+        "<tr><td>2026</td><td>5</td><td>1.0</td><td>1.2</td><td>1.5</td></tr></table>"
+    )
+    monkeypatch.setattr(
+        a_stock._requests, "get", lambda *a, **k: _FakeThsResponse(200, html),
+    )
+    a_stock._ths_miss_streak[0] = 2
+    out = a_stock._ths_eps_forecast("600519")
+    assert not out.empty
+    assert a_stock._ths_miss_streak[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# H3: push2 行情域被拦时, 行业/上市日期/股本改用东财 F10(datacenter)兜底
+# ---------------------------------------------------------------------------
+
+
+class _FakeEmResponse:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+@pytest.mark.unit
+def test_em_org_basic_info_parses_first_row(monkeypatch):
+    monkeypatch.setattr(
+        a_stock, "_em_get",
+        lambda *a, **k: _FakeEmResponse(
+            {"result": {"data": [{"EM2016": "白酒", "LISTING_DATE": "2001-08-27 00:00:00"}]}}
+        ),
+    )
+    org = a_stock._em_org_basic_info("600519")
+    assert org["EM2016"] == "白酒"
+    assert org["LISTING_DATE"].startswith("2001-08-27")
+
+
+@pytest.mark.unit
+def test_em_org_basic_info_returns_empty_on_error(monkeypatch):
+    def boom(*a, **k):
+        raise ConnectionError("datacenter down")
+
+    monkeypatch.setattr(a_stock, "_em_get", boom)
+    assert a_stock._em_org_basic_info("600519") == {}
+
+
+@pytest.mark.unit
+def test_em_org_basic_info_returns_empty_when_no_data(monkeypatch):
+    monkeypatch.setattr(
+        a_stock, "_em_get",
+        lambda *a, **k: _FakeEmResponse({"result": {"data": []}}),
+    )
+    assert a_stock._em_org_basic_info("000001") == {}
+
+
+@pytest.mark.unit
+def test_get_fundamentals_uses_f10_org_info_when_push2_dead(monkeypatch):
+    """push2 被拦时: 行业/上市日期取自 F10 公司资料, 股本复用已取的 fin_row(H3)."""
+    monkeypatch.setattr(a_stock, "_tencent_quote", lambda codes: {})
+    monkeypatch.setattr(a_stock, "_em_main_fin_data", lambda code: {
+        "REPORT_DATE": "2026-06-30 00:00:00",
+        "TOTAL_SHARE": 1256197800,
+        "A_FREE_SHARE": 1256190000,
+    })
+    monkeypatch.setattr(a_stock, "_em_latest_report_date", lambda code: "")
+    monkeypatch.setattr(a_stock, "_push2_get", _dead_push2)
+    monkeypatch.setattr(a_stock, "_em_org_basic_info", lambda code: {
+        "EM2016": "白酒",
+        "LISTING_DATE": "2001-08-27 00:00:00",
+    })
+    monkeypatch.setattr(a_stock, "_ths_eps_forecast", lambda code: pd.DataFrame())
+
+    def no_mootdx(method, **kwargs):
+        raise AssertionError("F10 主源有数据时不应探 mootdx")
+
+    monkeypatch.setattr(a_stock, "_mootdx_call", no_mootdx)
+
+    out = a_stock.get_fundamentals("600519")
+    assert "行业: 白酒" in out
+    assert "上市日期: 2001-08-27" in out
+    assert "总股本: 1256197800" in out
+    assert "流通股本(A股): 1256190000" in out
+
+
+@pytest.mark.unit
+def test_get_fundamentals_skips_f10_org_info_when_push2_ok(monkeypatch):
+    """push2 正常给出行业/上市日期时, 不再多打一次 F10 公司资料请求(省一次网络)."""
+    org_calls = {"n": 0}
+
+    class _Push2Resp:
+        def json(self):
+            return {"data": {"f127": "白酒", "f189": "20010827", "f84": 1256197800}}
+
+    def count_org(code):
+        org_calls["n"] += 1
+        return {}
+
+    monkeypatch.setattr(a_stock, "_tencent_quote", lambda codes: {})
+    monkeypatch.setattr(a_stock, "_em_main_fin_data", lambda code: {})
+    monkeypatch.setattr(a_stock, "_em_latest_report_date", lambda code: "")
+    monkeypatch.setattr(a_stock, "_push2_get", lambda *a, **k: _Push2Resp())
+    monkeypatch.setattr(a_stock, "_em_org_basic_info", count_org)
+    monkeypatch.setattr(a_stock, "_ths_eps_forecast", lambda code: pd.DataFrame())
+    monkeypatch.setattr(a_stock, "_mootdx_call", lambda method, **kw: pd.DataFrame())
+
+    out = a_stock.get_fundamentals("600519")
+    assert "行业: 白酒" in out
+    assert "上市日期: 20010827" in out
+    assert org_calls["n"] == 0, "push2 已给全行业+上市日期, 不该再打 F10 公司资料"
+
+
+# ---------------------------------------------------------------------------
+# H4: 跨源拼接前的成交量量纲一致性守卫
+# ---------------------------------------------------------------------------
+
+
+def _ohlcv(volumes):
+    n = len(volumes)
+    return pd.DataFrame({
+        "Date": pd.to_datetime([f"2026-08-{i + 1:02d}" for i in range(n)]),
+        "Open": [10.0] * n, "High": [11.0] * n,
+        "Low": [9.0] * n, "Close": [10.5] * n,
+        "Volume": list(volumes),
+    })
+
+
+@pytest.mark.unit
+def test_align_volume_units_scales_down_100x():
+    """补充源比主源大 ~100 倍(疑似手当成股) → 缩到主源口径."""
+    primary = _ohlcv([1_000_000, 1_200_000, 900_000])
+    supplement = _ohlcv([100_000_000, 120_000_000, 90_000_000])
+    aligned = a_stock._align_volume_units(primary, supplement)
+    assert aligned["Volume"].median() == pytest.approx(1_000_000, rel=0.2)
+
+
+@pytest.mark.unit
+def test_align_volume_units_scales_up_100x():
+    """补充源比主源小 ~100 倍 → 放大到主源口径."""
+    primary = _ohlcv([100_000_000, 120_000_000, 90_000_000])
+    supplement = _ohlcv([1_000_000, 1_200_000, 900_000])
+    aligned = a_stock._align_volume_units(primary, supplement)
+    assert aligned["Volume"].median() == pytest.approx(100_000_000, rel=0.2)
+
+
+@pytest.mark.unit
+def test_align_volume_units_leaves_same_scale_untouched():
+    """仅 2 倍差异是真实量能差(不是单位差) → 原样返回, 不做缩放."""
+    primary = _ohlcv([1_000_000, 1_200_000])
+    supplement = _ohlcv([2_000_000, 2_400_000])
+    aligned = a_stock._align_volume_units(primary, supplement)
+    assert aligned["Volume"].median() == pytest.approx(2_200_000, rel=0.2)
+
+
+@pytest.mark.unit
+def test_align_volume_units_no_volume_column_returns_supplement():
+    """任一源缺 Volume 列 → 无法比对, 原样返回补充源(交由下游处理)."""
+    primary = pd.DataFrame({"Close": [1, 2]})
+    supplement = pd.DataFrame({"Close": [3, 4]})
+    assert a_stock._align_volume_units(primary, supplement) is supplement
+
+
+@pytest.mark.unit
+def test_merge_ohlcv_applies_volume_alignment():
+    """拼接路径确实经过量纲守卫: 100 倍差异被拉平后再合并."""
+    primary = _ohlcv([1_000_000, 1_200_000])
+    supplement = _ohlcv([100_000_000, 120_000_000])
+    merged = a_stock._merge_ohlcv(primary, supplement)
+    # 重叠日期保留 supplement(已缩放), 量级应与 primary 一致而非大 100 倍
+    assert merged["Volume"].max() < 5_000_000

@@ -4,16 +4,17 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="删除不通数据源">
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources/12e0b82a-c4ae-4091-8f8f-4b9ff2f91db1.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources/12e0b82a-c4ae-4091-8f8f-4b9ff2f91db1/storage_v2/_src_/schema/main.uQUzAA.meta" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources/89e0c46a-9407-4466-8d42-ba0fbdd5efda.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dataSources/89e0c46a-9407-4466-8d42-ba0fbdd5efda/storage_v2/_src_/schema/main.uQUzAA.meta" beforeDir="false" />
+    <list default="true" id="f9503082-1935-49c0-985c-8e4eaa43505d" name="Changes" comment="数据源修复">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/ai_stock/dataflows/a_stock.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/dataflows/a_stock.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pyproject.toml" beforeDir="false" afterPath="$PROJECT_DIR$/pyproject.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/db_ops.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/db_ops.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/pipeline/news_board.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/pipeline/news_board.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/ai_stock/quant/event_industry_kb.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai_stock/quant/event_industry_kb.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/components/ImpactDetail.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/components/ImpactDetail.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/views/IndustryRanking.vue" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/views/IndustryRanking.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/conftest.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/conftest.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/tests/test_data_source_resilience.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_data_source_resilience.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tests/test_mootdx_server_selection.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_mootdx_server_selection.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/tests/test_news_board.py" beforeDir="false" afterPath="$PROJECT_DIR$/tests/test_news_board.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -125,7 +126,7 @@
       <workItem from="1788055714015" duration="3824000" />
       <workItem from="1788061326653" duration="41813000" />
       <workItem from="1788358834682" duration="81000" />
-      <workItem from="1788358950125" duration="1961000" />
+      <workItem from="1788358950125" duration="11249000" />
     </task>
     <task id="LOCAL-00001" summary="迁移项目为web项目">
       <option name="closed" value="true" />
@@ -343,11 +344,30 @@
       <option name="project" value="LOCAL" />
       <updated>1788275461902</updated>
     </task>
-    <option name="localTasksCounter" value="28" />
+    <task id="LOCAL-00028" summary="数据源修复">
+      <option name="closed" value="true" />
+      <created>1788361436359</created>
+      <option name="number" value="00028" />
+      <option name="presentableId" value="LOCAL-00028" />
+      <option name="project" value="LOCAL" />
+      <updated>1788361436360</updated>
+    </task>
+    <option name="localTasksCounter" value="29" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="迁移项目为web项目" />
@@ -371,9 +391,10 @@
     <MESSAGE value="优化新闻榜" />
     <MESSAGE value="优化选股逻辑" />
     <MESSAGE value="删除不通数据源" />
-    <option name="LAST_COMMIT_MESSAGE" value="删除不通数据源" />
+    <MESSAGE value="数据源修复" />
+    <option name="LAST_COMMIT_MESSAGE" value="数据源修复" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
-    <SUITE FILE_PATH="coverage/AI_stock$ai_stock_backend.coverage" NAME="ai_stock backend Coverage Results" MODIFIED="1788275429976" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="D:\code\AI_stock\backend" />
+    <SUITE FILE_PATH="coverage/AI_stock$ai_stock_backend.coverage" NAME="ai_stock backend Coverage Results" MODIFIED="1788446093138" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="D:\code\AI_stock\backend" />
   </component>
 </project>
