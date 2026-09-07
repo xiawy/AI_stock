@@ -22,6 +22,7 @@ from .buy import (
     PositionOpenAgent,
     SecondVerificationAgent,
     TechSignalAgent,
+    WatchlistKickerAgent,
     handle_buy_scan,
 )
 from .hold import (
@@ -33,6 +34,7 @@ from .hold import (
 )
 from .risk import RiskScanAgent, handle_force_reduce
 from .macro_event import MacroEventAgent
+from .radar import ConfidenceMaintainAgent, ThemeRadarAgent
 from .selection import (
     IndustryScanAgent,
     LimitUpMonitorAgent,
@@ -46,6 +48,9 @@ __all__ = [
     "IndustryScanAgent",
     "LimitUpMonitorAgent",
     "StockSelectionAgent",
+    "ThemeRadarAgent",
+    "ConfidenceMaintainAgent",
+    "WatchlistKickerAgent",
     "LogicCollapseAgent",
     "TechSignalAgent",
     "CatalystAgent",
@@ -73,12 +78,18 @@ def build_handlers() -> dict[str, dict[str, Callable[[dict], dict]]]:
 
     selection_agents = {
         "macro_event": MacroEventAgent().handle,
+        # 主题雷达 (旁路): 微观异动扫描, radar_alerts 注入 industry_scan 候选池
+        "theme_radar": ThemeRadarAgent().handle,
         "industry_scan": IndustryScanAgent().handle,
         "limit_up_monitor": LimitUpMonitorAgent().handle,
         # 深度分析已合并入 stock_selection (优化点 1), 无独立 deep_analysis 步
         "stock_selection": StockSelectionAgent().handle,
+        # 动态置信度维护官 (旁路): 选股末步衰减/增强/鱼尾标记/衰竭踢出
+        "confidence_maintain": ConfidenceMaintainAgent().handle,
     }
     buy_agents = {
+        # 自选池清理官 (旁路): 买入首步硬性过滤 (置信度衰竭/鱼尾), 不经 LLM
+        "watchlist_kicker": WatchlistKickerAgent().handle,
         "logic_collapse_check": LogicCollapseAgent().handle,
         "tech_signal": TechSignalAgent().handle,
         "catalyst_event": CatalystAgent().handle,

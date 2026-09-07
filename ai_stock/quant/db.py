@@ -141,6 +141,7 @@ def init_quant_db() -> None:
         _merge_legacy_quant_db(engine)
     _migrate_multi_user_schema(engine)
     _migrate_industry_board_schema(engine)
+    _migrate_pool_radar_schema(engine)
     _drop_legacy_ranking_tables(engine)
     logger.debug("Quant tables ensured on %s", engine.url)
 
@@ -232,6 +233,35 @@ def _migrate_industry_board_schema(engine) -> None:
             "transmission_from VARCHAR(64) NOT NULL DEFAULT ''"
         ))
     logger.info("quant_industry_board migrated: +transmission_from")
+
+
+def _migrate_pool_radar_schema(engine) -> None:
+    """存量库升级 (幂等): ``quant_stock_pool_optional`` 补主题雷达动态字段
+    (dyn_confidence / stage_batch / last_confirmed / radar_theme / kicked_reason).
+
+    旁路注入增强: 原 confidence (0-10 LLM 分) 语义不变; 新增列均带 DEFAULT,
+    旧行自动获得退化基准值 (dyn_confidence=0.5, stage_batch='BODY')。
+    """
+    if not str(engine.url).startswith("sqlite"):
+        return
+    insp = inspect(engine)
+    if "quant_stock_pool_optional" not in set(insp.get_table_names()):
+        return
+    cols = {c["name"] for c in insp.get_columns("quant_stock_pool_optional")}
+    adds = [
+        ("dyn_confidence", "FLOAT NOT NULL DEFAULT 0.5"),
+        ("stage_batch", "VARCHAR(8) NOT NULL DEFAULT 'BODY'"),
+        ("last_confirmed", "DATETIME"),
+        ("radar_theme", "VARCHAR(100) NOT NULL DEFAULT ''"),
+        ("kicked_reason", "VARCHAR(200) NOT NULL DEFAULT ''"),
+    ]
+    with engine.begin() as conn:
+        for col, ddl in adds:
+            if col not in cols:
+                conn.execute(text(
+                    f"ALTER TABLE quant_stock_pool_optional ADD COLUMN {col} {ddl}"
+                ))
+                logger.info("quant_stock_pool_optional migrated: +%s", col)
 
 
 def _migrate_multi_user_schema(engine) -> None:

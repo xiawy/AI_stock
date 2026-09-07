@@ -110,6 +110,54 @@ MAX_TRANSMISSION_BOARDS = 3
 TRANSMISSION_DECAY = 0.7
 
 # ---------------------------------------------------------------------------
+# 主题雷达 + 动态置信度 + 鱼尾清理 (旁路注入增强, 全部可降级)
+# ---------------------------------------------------------------------------
+
+# 微观异动雷达: 全市场扫描 "放量 + 温和上涨" 的细分主题隐形冠军 (scan_micro_anomalies)
+RADAR_CHANGE_PCT_MIN = 3.0        # 涨幅下沿 (%): 低于此非异动
+RADAR_CHANGE_PCT_MAX = 8.0        # 涨幅上沿 (%): 高于此已透支, 不追
+RADAR_VOLUME_RATIO_MIN = 2.0      # 量比门槛 (>2 视为显著放量)
+RADAR_MARKET_CAP_MAX = 300e8      # 总市值上限 (元): 只嗅探中小市值弹性标的
+RADAR_MIN_CLUSTER = 2             # 单主题最少异动家数 (少于此不成气候, 丢弃)
+RADAR_MAX_THEMES = 6              # 雷达最多保留主题数 (控制注入体量)
+RADAR_STRONG_CLUSTER = 6          # 簇规模归一基准: strength=min(1, 家数/该值)
+
+# 动态置信度 dyn_confidence (0-1, 旁路字段; 原 confidence 0-10 LLM 分不动):
+# 入池时 dyn = (LLM分/10)*W_LLM + 雷达强度*W_RADAR; 之后每日衰减/增强
+CONF_DEFAULT = 0.5                # 缺省值 (旧数据/字段缺失退化基准)
+CONF_LLM_WEIGHT = 0.6             # LLM 综合置信度权重
+CONF_RADAR_WEIGHT = 0.4           # 雷达强度权重
+CONF_DECAY_FACTOR = 0.95          # 超期未验证的衰减系数
+CONF_REINFORCE_FACTOR = 1.1       # 主题今日再现雷达的增强系数
+CONF_DECAY_AFTER_DAYS = 5         # 距上次确认超过该天数才衰减
+CONF_KICK_THRESHOLD = 0.3         # 低于该值自动移出自选池 (置信度衰竭)
+CONF_BREAKOUT_THRESHOLD = 0.7     # 主线突破通道开启的最低 dyn_confidence
+
+# 动态仓位系数 (在原 BUY_POSITION_RATIO 基础上叠加, 只影响总额度):
+# pool_conf>=POS_HIGH_CONF 且 stage=BODY -> 1.2; >=POS_MID_CONF -> 1.0; 否则 0.5
+# POS_MID_CONF 与 CONF_DEFAULT 对齐 (0.5): 保证旧池行/字段缺失的默认档退化为
+# 原 20% 固定仓位 (§9 兼容保证), 仅被维护官衰减到默认档以下 (<0.5) 才减半。
+POS_HIGH_CONF = 0.8
+POS_MID_CONF = 0.5
+POS_COEF_HIGH = 1.2
+POS_COEF_MID = 1.0
+POS_COEF_LOW = 0.5
+
+# 阶段批次 stage_batch: HEAD(鱼头)/BODY(鱼身)/TAIL(鱼尾)
+STAGE_HEAD_CHANGE_PCT_MAX = 15.0  # 新主题且当日涨幅<此值 -> HEAD, 否则 BODY
+
+# 精准鱼尾检测 (is_tail_phase): 高位放量滞涨, 四条同时成立才判鱼尾
+# 注: 旧版第 4 条 "MA5 单日上移 > 1.5%" 与第 2 条 "近 5 日滞涨 < 3%" 在真实价格
+# 序列上数学互斥 (需 close[-6] 暴跌后拉回), 检测器几乎永不触发。改为用 "已大涨
+# (鱼身已成) + 现价贴窗口最高 (仍在顶部)" 两条刻画 "高位", 去掉与滞涨冲突的门槛。
+TAIL_LOOKBACK_BARS = 30           # 判定回看 K 线数 (覆盖一轮完整拉升, 作 "已大涨" 基线)
+TAIL_VOLUME_SURGE = 1.5           # 末根量能 > 前 7 日均量 * 该倍数 (放量)
+TAIL_TURNOVER_MIN = 20.0          # 换手率门槛 (%) (可得时校验, 缺失退化为量能代理)
+TAIL_GAIN_MAX = 0.03              # 近 5 日涨幅 < 3% (滞涨)
+TAIL_PRIOR_RUNUP_MIN = 0.20       # 现价较窗口最低收盘累计涨幅 >= 20% (鱼身已成 = 真高位)
+TAIL_HIGH_DIST_MAX = 0.03         # 现价距窗口最高 < 3% (仍贴顶, 未明显回落)
+
+# ---------------------------------------------------------------------------
 # Stop-loss / take-profit rules (multi-bar confirmed, never intraday spikes)
 # ---------------------------------------------------------------------------
 
@@ -202,12 +250,12 @@ CAPITAL_FILE_ENV = "QUANT_CAPITAL_FILE"
 
 # 实施步骤 §15-1: 初始化后 global_trade_enable=0 默认关闭交易。
 SYSTEM_CONFIG_SEED = {
-    "global_trade_enable": ("0", "全局交易开关: 0=禁止全部下单(一键熔断), 1=允许"),
+    "global_trade_enable": ("1", "全局交易开关: 0=禁止全部下单(一键熔断), 1=允许"),
     "max_daily_orders": ("50", "单日最大委托笔数"),
     "max_order_value": ("200000", "单笔最大委托金额(元)"),
     "allowed_symbols": ("", "允许交易的股票白名单(逗号分隔, 空=不限制)"),
     "initial_cash": ("1000000", "模拟盘初始资金(元)"),
-    "max_drawdown_pct": ("0.10", "账户总回撤阈值(触发冻结新建仓)"),
+    "max_drawdown_pct": ("0.20", "账户总回撤阈值(触发冻结新建仓)"),
     "max_daily_loss_pct": ("0.03", "单日最大亏损阈值(触发冻结新建仓)"),
     "trade_frozen": ("0", "账户级风控冻结: 1=只允许卖出, 0=正常"),
 }

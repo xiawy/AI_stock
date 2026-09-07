@@ -29,8 +29,20 @@ from ..broker import (
     get_broker,
     round_lot,
 )
-from ..config import BUY_POSITION_RATIO, MAX_HOLDING_COUNT
+from ..config import (
+    BUY_POSITION_RATIO,
+    CONF_BREAKOUT_THRESHOLD,
+    CONF_DEFAULT,
+    CONF_KICK_THRESHOLD,
+    MAX_HOLDING_COUNT,
+    POS_COEF_HIGH,
+    POS_COEF_LOW,
+    POS_COEF_MID,
+    POS_HIGH_CONF,
+    POS_MID_CONF,
+)
 from ..llm_helper import structured_invoke
+from ..market_utils import is_tail_phase
 from ..news_store import get_news_store
 from ..orchestrator import get_orchestrator
 from ..risk_control import account_snapshot, pre_trade_check
@@ -107,6 +119,9 @@ def handle_buy_scan(task: dict) -> dict:
                 "symbol": symbol,
                 "name": stock.get("name", ""),
                 "industry": stock.get("industry", ""),
+                # 主题雷达旁路动态字段 (清理官/突破通道/动态仓位消费; 缺失退化为默认)
+                "pool_confidence": stock.get("dyn_confidence", CONF_DEFAULT),
+                "pool_stage": stock.get("stage_batch", "BODY"),
                 "pool": {  # 入选时的分析结论 (崩塌检测基准)
                     "reason": stock.get("reason", ""),
                     "bull_factors": stock.get("bull_factors", []),
@@ -118,6 +133,85 @@ def handle_buy_scan(task: dict) -> dict:
         )
         started.append(symbol)
     return {"started_flows": started, "pool_size": len(pool)}
+
+
+# ---------------------------------------------------------------------------
+# 7.2.-1 自选池清理官 (买入流程第一步: 硬性过滤, 不经 LLM)
+# ---------------------------------------------------------------------------
+
+class WatchlistKickerAgent(BaseAgent):
+    """自选池清理官: 买入流程首步硬性过滤 (数据驱动, 不经 LLM)。
+
+    - ``dyn_confidence < CONF_KICK_THRESHOLD`` -> 移出 (置信度衰竭) + abort;
+    - ``stage_batch == 'TAIL'`` 或 ``is_tail_phase`` 命中 -> 置 TAIL + 移出 (鱼尾) + abort;
+    - 否则放行。字段缺失退化为 CONF_DEFAULT (0.5), 绝不误踢 (§9 兼容保证)。
+    """
+
+    agent_name = "watchlist_kicker"
+
+    def handle(self, task: dict) -> dict:
+        flow_id, flow_type, step, context = self.extract_flow(task.get("payload", {}))
+        task_id = task.get("task_id", "")
+        symbol = context.get("symbol", "")
+        if not symbol:
+            return {"decision": "ignored", "reason": "no symbol"}
+
+        pool = db_ops.get_optional_stock(symbol)
+        if pool is None:
+            # 已不在自选池 (可能已被前序移出): 终止本 flow, 不算失败
+            result = {
+                "decision": "gone", "passed": False, "abort": True,
+                "abort_reason": "标的已不在自选池, 跳过买入流程",
+            }
+            self.report(flow_type, flow_id, step, result)
+            return result
+
+        dyn = float(pool.get("dyn_confidence", CONF_DEFAULT) or CONF_DEFAULT)
+        stage = pool.get("stage_batch", "BODY") or "BODY"
+
+        # 1) 置信度衰竭
+        if dyn < CONF_KICK_THRESHOLD:
+            return self._kick(
+                symbol, task_id, flow_id, flow_type, step,
+                kicked_reason="置信度衰竭",
+                reason=f"dyn_confidence {dyn:.3f} < {CONF_KICK_THRESHOLD}",
+            )
+
+        # 2) 鱼尾 (已标记 TAIL 或实时检测命中): 置 TAIL 后移出
+        if stage == "TAIL" or is_tail_phase(self.data, symbol):
+            db_ops.update_optional_dynamic(symbol, stage_batch="TAIL")
+            return self._kick(
+                symbol, task_id, flow_id, flow_type, step,
+                kicked_reason="鱼尾",
+                reason="高位放量滞涨 (鱼尾阶段), 拒绝追高",
+            )
+
+        result = {
+            "decision": "active", "passed": True,
+            "dyn_confidence": round(dyn, 3), "stage_batch": stage,
+        }
+        self.report(flow_type, flow_id, step, result)
+        return result
+
+    def _kick(
+        self, symbol: str, task_id: str, flow_id: str,
+        flow_type: str, step: str, *, kicked_reason: str, reason: str,
+    ) -> dict:
+        db_ops.update_optional_status(
+            symbol, "removed",
+            remove_reason=kicked_reason, kicked_reason=kicked_reason,
+        )
+        self.log(
+            "watchlist_kick", symbol=symbol, task_id=task_id, flow_id=flow_id,
+            reason=f"清理官移出({kicked_reason}): {reason}",
+        )
+        result = {
+            "decision": "kicked", "passed": False, "abort": True,
+            "kicked_reason": kicked_reason,
+            "abort_reason": f"清理官移出: {kicked_reason} ({reason})",
+        }
+        self.report(flow_type, flow_id, step, result)
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +233,13 @@ class LogicCollapseAgent(BaseAgent):
         pool = context.get("pool") or {}
         if not symbol:
             return {"decision": "ignored", "reason": "no symbol"}
+
+        # 0) 鱼尾硬拦截 (数据驱动, 不经 LLM): 高位放量滞涨直接移出自选池
+        if is_tail_phase(self.data, symbol):
+            return self._collapse(
+                symbol, task_id, flow_id, flow_type, step,
+                "鱼尾高位放量滞涨",
+            )
 
         # 1) 硬规则: 技术面长期破位 (跌破年线且无反弹迹象)
         indicators = self.data.get_stock_indicators(symbol)
@@ -258,20 +359,41 @@ class TechSignalAgent(BaseAgent):
         }
         triggered = {k: v for k, v in signals.items() if v.get("triggered")}
         passed = bool(triggered)
+        channel = "standard" if passed else "none"
+
+        # 主线突破通道 (旁路): 标准三信号均未触发时, 高置信度主线标的
+        # (dyn_confidence>=CONF_BREAKOUT_THRESHOLD 且处于 HEAD/BODY) 可凭放量突破放行
+        if not passed:
+            pool = db_ops.get_optional_stock(symbol) or {}
+            dyn = float(pool.get("dyn_confidence", CONF_DEFAULT) or CONF_DEFAULT)
+            stage = pool.get("stage_batch", "BODY") or "BODY"
+            if (
+                dyn >= CONF_BREAKOUT_THRESHOLD
+                and stage in ("HEAD", "BODY")
+                and self._check_breakout(indicators)
+            ):
+                passed = True
+                channel = "breakout"
 
         result = {
             "decision": "signal" if passed else "no_signal",
             "passed": passed,
+            "channel": channel,
             "signals": signals,
             "close": (indicators.get("close_series") or [None])[-1],
         }
+        if channel == "breakout":
+            log_reason = "主线突破通道触发: 高置信度主线放量突破前高/跳空 (标准三信号未过)"
+        elif passed:
+            log_reason = "触发: " + "; ".join(
+                f"{k} ({v['detail']})" for k, v in triggered.items()
+            )
+        else:
+            log_reason = "三种技术形态均未触发"
         self.log(
             "tech_signal" if passed else "tech_no_signal",
             symbol=symbol, task_id=task_id, flow_id=flow_id,
-            reason=(
-                "触发: " + "; ".join(f"{k} ({v['detail']})" for k, v in triggered.items())
-                if passed else "三种技术形态均未触发"
-            ),
+            reason=log_reason,
             detail=signals,
         )
         # 无论是否触发都正常上报 — 催化事件步骤做最终触发综合判断
@@ -362,6 +484,34 @@ class TechSignalAgent(BaseAgent):
                 f"回踩={pullback}, 缩量={shrinking}"
             ),
         }
+
+    # -- 主线突破通道判定 (旁路, 高置信度主线专用) -----------------------------
+
+    @staticmethod
+    def _check_breakout(ind: dict) -> bool:
+        """主线突破: 放量跳空 (向上缺口 + 量能放大) 或 突破前高
+        (close > 前 10 日最高 且量能 > 1.5x 均量)。数据不足返回 False。
+
+        突破前高口径与 AddPositionAgent 一致 (high_series[-11:-1])。
+        """
+        high = ind.get("high_series") or []
+        low = ind.get("low_series") or []
+        close = ind.get("close_series") or []
+        vol = ind.get("volume_series") or []
+        if len(close) < 2 or len(vol) < 2:
+            return False
+        # 量能放大代理: 末根量 > 前几根均量 * 1.5 (volume_series 为近 5 根)
+        prev_vol = vol[:-1]
+        avg_vol = sum(prev_vol) / len(prev_vol) if prev_vol else 0.0
+        if avg_vol <= 0 or vol[-1] <= 1.5 * avg_vol:
+            return False
+        # A) 放量跳空: 末根最低 > 前一根最高 (向上缺口)
+        if len(low) >= 2 and len(high) >= 2 and low[-1] > high[-2]:
+            return True
+        # B) 突破前高: close > max(high[-11:-1])
+        if len(high) >= 11 and close[-1] > max(high[-11:-1]):
+            return True
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -579,9 +729,23 @@ class PositionOpenAgent(BaseAgent):
             self.report(flow_type, flow_id, step, result)
             return result
 
-        # 1) 计算买入金额: 可用资金 × 20% (§2.2)
+        # 1) 计算买入金额: 可用资金 × 20% × 动态仓位系数 (§2.2 旁路增强)
+        # 系数分档: dyn>=POS_HIGH_CONF 且 stage=BODY -> 1.2; dyn>=POS_MID_CONF -> 1.0;
+        # 否则 -> 0.5; pool_confidence 字段缺失 -> 1.0 (退化为原 20% 固定仓位, §9 兼容保证)
         snapshot = account_snapshot()
-        budget = snapshot.get("available_cash", 0.0) * BUY_POSITION_RATIO
+        pool_conf = context.get("pool_confidence")
+        stage = context.get("pool_stage") or "BODY"
+        if pool_conf is None:
+            coef = POS_COEF_MID
+        else:
+            pool_conf = float(pool_conf)
+            if pool_conf >= POS_HIGH_CONF and stage == "BODY":
+                coef = POS_COEF_HIGH
+            elif pool_conf >= POS_MID_CONF:
+                coef = POS_COEF_MID
+            else:
+                coef = POS_COEF_LOW
+        budget = snapshot.get("available_cash", 0.0) * BUY_POSITION_RATIO * coef
         try:
             quote = self.data.get_realtime_quote(symbol)
         except Exception as exc:

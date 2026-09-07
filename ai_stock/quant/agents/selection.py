@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime
+from functools import lru_cache
 
 from pydantic import BaseModel, Field
 
@@ -41,6 +42,9 @@ from ..calendar_utils import get_trade_date
 from ..config import (
     BONUS_UPSTREAM,
     BONUS_WAVE,
+    CONF_DEFAULT,
+    CONF_LLM_WEIGHT,
+    CONF_RADAR_WEIGHT,
     IMBALANCE_STAGE_ESCALATION,
     INDUSTRY_BOARD_SIZE,
     INDUSTRY_STOCK_POOL_SIZE,
@@ -51,6 +55,7 @@ from ..config import (
     MAX_TRANSMISSION_BOARDS,
     MIN_ENTRY_CONFIDENCE,
     MIN_STOCK_COMPREHENSIVE_SCORE,
+    STAGE_HEAD_CHANGE_PCT_MAX,
     STOCK_SELECT_INDUSTRIES,
     STOCKS_PER_INDUSTRY,
     TRANSMISSION_DECAY,
@@ -101,8 +106,13 @@ _TAG_SUFFIXES = (
 )
 
 
+@lru_cache(maxsize=2048)
 def _strip_industry_suffix(name: str) -> str:
-    """行业名后缀剥离 → 核心词; 每步保证剩余长度 ≥2, 避免过度剥离塌缩."""
+    """行业名后缀剥离 → 核心词; 每步保证剩余长度 ≥2, 避免过度剥离塌缩.
+
+    lru_cache: _match_tag 在 候选×涨停潮 / 候选×上游 / 板块×标签 / 雷达主题×
+    板块 等嵌套循环高频调用, 同名重复剥离纯浪费 (板块名集合有界, 命中率高).
+    """
     core = name
     while len(core) > 2:
         for suf in _TAG_SUFFIXES:
@@ -214,7 +224,9 @@ class IndustryScanAgent(BaseAgent):
         }
 
         boards = self.data.get_all_industries()
-        candidates = self._collect_candidates(boards, events)
+        # 主题雷达旁路注入 (theme_radar 步产出): 空/降级时为 [], 选股退化为原版
+        radar_alerts = (context.get("theme_radar") or {}).get("radar_alerts") or []
+        candidates = self._collect_candidates(boards, events, radar_alerts)
         if not candidates:
             result = {
                 "decision": "empty",
@@ -274,7 +286,7 @@ class IndustryScanAgent(BaseAgent):
         # 第一遍: 收集所有被点名的上游行业 (上游传导发散加分依据)
         upstream_set: set[str] = set()
         for cand in candidates:
-            for up in (stage_map.get(cand["name"]) or {}).get(
+            for up in self._resolve_view(stage_map, cand["name"]).get(
                 "transmission_upstream", [],
             ):
                 if up and str(up).strip():
@@ -284,7 +296,7 @@ class IndustryScanAgent(BaseAgent):
         stage_distribution: dict[str, int] = {}
         for cand in candidates:
             name = cand.get("name", "")
-            view = stage_map.get(name) or {}
+            view = self._resolve_view(stage_map, name)
             stage = view.get("stage") or "导入期"
             if stage not in STAGE_DEFAULT_PRIORITY:
                 stage = "导入期"
@@ -299,8 +311,14 @@ class IndustryScanAgent(BaseAgent):
                 stage = "爆发前期"
                 stage_score = float(STAGE_DEFAULT_PRIORITY[stage])
                 corrected = True
-            # 上游传导加分: 该行业被其他候选行业点名为上游 (快人一步)
-            upstream_bonus = BONUS_UPSTREAM if name in upstream_set else 0.0
+            # 上游传导加分: 该行业被其他候选行业点名为上游 (快人一步);
+            # 与 _transmission_rows 同口径用模糊匹配, 防 LLM 上游名与板块名
+            # 微小漂移 (如 "电力" vs "电力设备") 导致加分静默漏发
+            upstream_bonus = (
+                BONUS_UPSTREAM
+                if any(self._match_tag(name, u) for u in upstream_set)
+                else 0.0
+            )
             # 涨停潮右侧确认加分 (市场资金已完成基本面验证)
             in_wave = any(self._match_tag(name, w) for w in wave_names)
             wave_bonus = BONUS_WAVE if in_wave else 0.0
@@ -407,6 +425,9 @@ class IndustryScanAgent(BaseAgent):
             "upstream_bonus": ind.get("upstream_bonus", 0),
             "wave_bonus": ind.get("wave_bonus", 0),
             "transmission_from": ind.get("transmission_from", ""),
+            # 主题雷达旁路标记透传 (映射为下游公开键 radar_theme/radar_conf)
+            "radar_theme": ind.get("_radar_theme", ""),
+            "radar_conf": ind.get("_radar_conf", 0),
         }
 
     # -- 上游传导二次验证 (行业榜附加展示, 不入 Top) -------------------------
@@ -516,10 +537,26 @@ class IndustryScanAgent(BaseAgent):
                          (core_tag, core_board))
         )
 
+    def _resolve_view(self, stage_map: dict[str, dict], name: str) -> dict:
+        """按行业名回填 LLM 生命周期评估: 精确命中优先; LLM 名称漂移 (加"概念/
+        板块"等后缀) 时用 _match_tag 模糊兜底, 避免整块评估丢失退化为
+        导入期 / 供需失衡 0 (与上游传导、候选收集同一模糊匹配口径)."""
+        view = stage_map.get(name)
+        if view is not None:
+            return view
+        return next(
+            (v for k, v in stage_map.items() if self._match_tag(name, k)),
+            {},
+        )
+
     def _collect_candidates(
         self, boards: list[dict], events: list[dict],
+        radar_alerts: list[dict] | None = None,
     ) -> list[dict]:
-        """事件映射行业 ∪ 涨幅榜补足 → 候选板块 (去重, 上限内)."""
+        """事件映射行业 ∪ 涨幅榜补足 ∪ 主题雷达注入 → 候选板块 (去重, 上限内).
+
+        radar_alerts 为空/None 时雷达注入整段跳过, 行为与原版完全一致 (天然降级)。
+        """
         by_code: dict[str, dict] = {
             b.get("code", ""): b for b in boards
             if b.get("code") and b.get("name")
@@ -572,23 +609,76 @@ class IndustryScanAgent(BaseAgent):
                         continue
                     picked[code] = {**board, "event_tag": ""}
 
+        # 主题雷达旁路注入: 微观异动簇 → 匹配/反查所属细分板块 → 注入候选池
+        # (radar_alerts 为空则整段跳过, 选股退化为原版; 命中已在池板块仅增强标记)
+        if radar_alerts:
+            name_to_code: dict[str, str] = {}
+            for code, board in by_code.items():
+                nm = board.get("name", "")
+                if nm:
+                    name_to_code.setdefault(nm, code)
+            for alert in radar_alerts:
+                theme = alert.get("theme", "")
+                if not theme:
+                    continue
+                strength = float(alert.get("strength", 0) or 0)
+                # 1) 先按主题名匹配板块库 (精确优先, 再模糊兜底: 短主题如 "AI"
+                #    对 400+ 板块全表模糊取首命中易选中任意/低流动板块);
+                # 2) 仍未命中则用簇内个股反查所属板块
+                hit_code = name_to_code.get(theme, "")
+                if not hit_code:
+                    hit_code = next(
+                        (c for nm, c in name_to_code.items()
+                         if self._match_tag(nm, theme)),
+                        "",
+                    )
+                if not hit_code:
+                    for sc in alert.get("codes") or []:
+                        rc = self.data.get_stock_industry_code(sc)
+                        if rc and rc in by_code:
+                            hit_code = rc
+                            break
+                if not hit_code:
+                    continue
+                if hit_code in picked:
+                    # 已在候选池: 仅补充/增强雷达标记 (不重复注入)
+                    picked[hit_code].setdefault("_radar_theme", theme)
+                    picked[hit_code]["_radar_conf"] = max(
+                        float(picked[hit_code].get("_radar_conf", 0) or 0), strength,
+                    )
+                    continue
+                picked[hit_code] = {
+                    **by_code[hit_code], "event_tag": "",
+                    "_radar_theme": theme, "_radar_conf": strength,
+                }
+
         candidates: list[dict] = []
         for board in picked.values():
-            detail = self.data.get_industry_detail(board.get("code", "")) or board
-            candidates.append({
-                "code": detail.get("code", board.get("code", "")),
-                "name": detail.get("name", board.get("name", "")),
-                "change_pct": float(detail.get("change_pct", 0) or 0),
+            # board 即 get_all_industries() 快照中的板块 (已含 change_pct/up_count/
+            # top_stock/board_level 等全部字段), 无需再 get_industry_detail 重读
+            # 缓存 + 对全板块 O(N) 线性扫描 (fund_flow TTL 过期时甚至会触发分页
+            # 限流回源), 直接复用快照既省调用又保证与候选排序同一份数据
+            cand = {
+                "code": board.get("code", ""),
+                "name": board.get("name", ""),
+                "change_pct": float(board.get("change_pct", 0) or 0),
                 "main_net_inflow": round(
-                    float(detail.get("main_net_inflow", 0) or 0), 0,
+                    float(board.get("main_net_inflow", 0) or 0), 0,
                 ),
-                "up_count": detail.get("up_count", 0),
-                "down_count": detail.get("down_count", 0),
-                "top_stock_name": detail.get("top_stock_name", ""),
-                "top_stock_code": detail.get("top_stock_code", ""),
-                "board_level": detail.get("board_level", ""),
+                "up_count": board.get("up_count", 0),
+                "down_count": board.get("down_count", 0),
+                "top_stock_name": board.get("top_stock_name", ""),
+                "top_stock_code": board.get("top_stock_code", ""),
+                "board_level": board.get("board_level", ""),
                 "event_tag": board.get("event_tag", ""),
-            })
+            }
+            # 雷达标记透传 (仅注入命中的板块携带, 供下游 dyn_confidence/stage 计算)
+            if board.get("_radar_theme"):
+                cand["_radar_theme"] = board.get("_radar_theme", "")
+                cand["_radar_conf"] = float(board.get("_radar_conf", 0) or 0)
+            candidates.append(cand)
+        # 雷达注入板块优先保留 (稳定排序, 无雷达时为空操作, 不被截断挤掉)
+        candidates.sort(key=lambda c: not c.get("_radar_theme"))
         return candidates[:MAX_SCAN_CANDIDATES]
 
     # -- LLM 生命周期诊断 ------------------------------------------------------
@@ -894,6 +984,19 @@ class StockSelectionAgent(BaseAgent):
                     task_id=task_id, flow_id=flow_id,
                 )
                 continue
+            # 动态置信度旁路计算 (原 confidence 0-10 门槛与写入完全不变):
+            # dyn = (LLM分/10)*W_LLM + 雷达强度*W_RADAR; 新主题且未透支 -> HEAD
+            llm_conf = float(pick.get("confidence", 0) or 0)
+            radar_conf = float(pick.get("radar_conf", 0) or 0)
+            pick["dyn_confidence"] = max(0.0, min(1.0, (
+                (llm_conf / 10.0) * CONF_LLM_WEIGHT + radar_conf * CONF_RADAR_WEIGHT
+            )))
+            radar_theme = pick.get("radar_theme", "") or ""
+            change_pct = float(pick.get("change_pct", 0) or 0)
+            pick["stage_batch"] = (
+                "HEAD" if (radar_theme and change_pct < STAGE_HEAD_CHANGE_PCT_MAX)
+                else "BODY"
+            )
             try:
                 db_ops.upsert_optional_stock(self._pool_entry(pick))
                 self._ingest_news(pick["symbol"])
@@ -1020,6 +1123,12 @@ class StockSelectionAgent(BaseAgent):
             "rise_trigger": pick.get("rise_trigger", ""),
             "risk_tags": pick.get("risk_tags") or [],
             "confidence": float(pick.get("confidence", 0) or 0),
+            # 主题雷达旁路动态字段 (缺省退化: dyn=CONF_DEFAULT, stage=BODY)
+            "dyn_confidence": float(
+                pick.get("dyn_confidence", CONF_DEFAULT) or CONF_DEFAULT
+            ),
+            "stage_batch": pick.get("stage_batch", "BODY") or "BODY",
+            "radar_theme": pick.get("radar_theme", "") or "",
             "report": (
                 f"入选理由: {pick.get('reason', '')}\n"
                 f"利多: {'; '.join(bull)}\n利空: {'; '.join(bear)}\n"
@@ -1112,6 +1221,10 @@ class StockSelectionAgent(BaseAgent):
                 "stage_judgement": cand.get("stage_judgement", ""),
                 "rise_trigger": cand.get("rise_trigger", ""),
                 "risk_tags": sorted(set(base_risk + llm_risk)),
+                # 主题雷达旁路: 所属板块雷达标记 + 个股当日涨幅 (下游算 dyn/stage)
+                "radar_theme": industry.get("radar_theme", ""),
+                "radar_conf": float(industry.get("radar_conf", 0) or 0),
+                "change_pct": float(cand.get("change_pct", 0) or 0),
             })
 
         # 行业榜龙头股: 全部受评股排序取前 N, 精选入池的打 "精选" 标 (§7.1)
@@ -1217,35 +1330,40 @@ class StockSelectionAgent(BaseAgent):
         ]
 
     def _stock_profiles(self, candidates: list[dict]) -> list[dict]:
-        """候选股实时行情 + 预提取核心财务指标 (优化点 4: 表格化喂 LLM)."""
+        """候选股行情 + 预提取核心财务指标 (优化点 4: 表格化喂 LLM).
+
+        成分股接口 (get_board_constituents) 已随板块一次性返回 change_pct/
+        market_cap 等实时字段 (与逐股 get_realtime_quote 同源 push2), 故两者齐备
+        时直接复用, 跳过逐股 quote —— 否则每行业 20 只 × N 行业的东财请求全部
+        串行走全局限流锁 (_em_get 的 _EM_LOCK + 最小间隔), 是选股 flow 的最大
+        延迟源; 仅在成分股缺这些键时才回退逐股 quote。
+        """
         profiles: list[dict] = []
         for cand in candidates[:INDUSTRY_STOCK_POOL_SIZE]:
             code = cand.get("code", "")
+            # 键存在判断 (0.0 是有效涨幅/市值, 不能用 or 判缺失)
+            has_rt = "change_pct" in cand and "market_cap" in cand
             quote = None
-            try:
-                quote = self.data.get_realtime_quote(code)
-            except Exception as exc:
-                logger.warning("quote fetch failed for %s: %s", code, exc)
+            if not has_rt:
+                try:
+                    quote = self.data.get_realtime_quote(code)
+                except Exception as exc:
+                    logger.warning("quote fetch failed for %s: %s", code, exc)
             fundamentals = ""
             try:
                 fundamentals = self.data.get_fundamentals_text(code) or ""
             except Exception as exc:
                 logger.warning("fundamentals fetch failed for %s: %s", code, exc)
+            # 行情来源: 成分股齐备则用成分股; 否则回退逐股 quote (再兜底成分股)。
+            # 末尾 or 0 保证 None 安全 (quote 缺字段/为 None 时不抛 TypeError)
+            src = cand if has_rt else (quote or cand)
             profiles.append({
                 "code": code,
                 "name": cand.get("name", "") or (quote or {}).get("name", ""),
-                "change_pct": float(
-                    (quote or {}).get("change_pct")
-                    if quote else cand.get("change_pct", 0)
-                    or 0
-                ),
+                "change_pct": float(src.get("change_pct") or 0),
                 "turnover_rate": float(cand.get("turnover_rate", 0) or 0),
                 "volume_ratio": float(cand.get("volume_ratio", 0) or 0),
-                "market_cap": float(
-                    (quote or {}).get("market_cap")
-                    if quote else cand.get("market_cap", 0)
-                    or 0
-                ),
+                "market_cap": float(src.get("market_cap") or 0),
                 "amount": float(cand.get("amount", 0) or 0),
                 "main_net_inflow": float(cand.get("main_net_inflow", 0) or 0),
                 "fund_metrics": self._extract_fund_metrics(fundamentals),

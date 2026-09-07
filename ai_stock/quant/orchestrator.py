@@ -51,21 +51,27 @@ EVENT_DEDUPE_MAX_ENTRIES = 4096
 FLOW_DEFINITIONS: dict[str, dict] = {
     "selection": {
         "description": (
-            "选股流程: 宏观事件解析 → 涨停潮监控 → 行业生命周期定位 → "
-            "个股精选+深度分析(合并, 直接入自选池)"
+            "选股流程: 宏观事件解析 → 主题雷达 → 涨停潮监控 → 行业生命周期定位 → "
+            "个股精选+深度分析(合并, 直接入自选池) → 动态置信度维护"
         ),
         "steps": (
             {"step": "macro_event", "queue": SELECTION_QUEUE, "task_type": "macro_event"},
+            # 主题雷达前置: 微观异动扫描, radar_alerts 供 industry_scan 候选池注入 (旁路)
+            {"step": "theme_radar", "queue": SELECTION_QUEUE, "task_type": "theme_radar"},
             # 涨停潮监控前置: 其 waves 结果供 industry_scan 阶段修正/排序引用 (§7.1.1)
             {"step": "limit_up_monitor", "queue": SELECTION_QUEUE, "task_type": "limit_up_monitor"},
             {"step": "industry_scan", "queue": SELECTION_QUEUE, "task_type": "industry_scan"},
             # 优化点 1: 深度分析合并入选股步, 无独立 deep_analysis 步
             {"step": "stock_selection", "queue": SELECTION_QUEUE, "task_type": "stock_selection"},
+            # 动态置信度维护官: 选股末步, 衰减/增强/鱼尾标记/衰竭踢出 (旁路)
+            {"step": "confidence_maintain", "queue": SELECTION_QUEUE, "task_type": "confidence_maintain"},
         ),
     },
     "buy": {
-        "description": "单股票买入: 崩塌复核 → 技术信号 → 催化事件 → 二次验证 → 建仓",
+        "description": "单股票买入: 自选池清理 → 崩塌复核 → 技术信号 → 催化事件 → 二次验证 → 建仓",
         "steps": (
+            # 自选池清理官前置: 置信度衰竭/鱼尾硬性过滤 (不经 LLM), 不通过则终止流程
+            {"step": "watchlist_kicker", "queue": BUY_QUEUE, "task_type": "watchlist_kicker"},
             {"step": "logic_collapse_check", "queue": BUY_QUEUE, "task_type": "logic_collapse_check"},
             {"step": "tech_signal", "queue": BUY_QUEUE, "task_type": "tech_signal"},
             {"step": "catalyst_event", "queue": BUY_QUEUE, "task_type": "catalyst_event"},

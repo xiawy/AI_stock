@@ -114,9 +114,11 @@ class TestSelectionFlowDefinition:
         steps = [s["step"] for s in FLOW_DEFINITIONS["selection"]["steps"]]
         assert steps == [
             "macro_event",
+            "theme_radar",       # 旁路: 全市场微观异动雷达, radar_alerts 供候选池注入
             "limit_up_monitor",  # 前置: 涨停潮信号供行业扫描阶段修正引用
             "industry_scan",
             "stock_selection",   # 合并深度分析, 直接入自选池
+            "confidence_maintain",  # 旁路: 选股末步, 维护自选池 dyn_confidence
         ]
 
     def test_macro_event_handler_registered(self, quant_env):

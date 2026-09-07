@@ -9,8 +9,9 @@ from ai_stock.quant.orchestrator import FLOW_DEFINITIONS
 steps = [s["step"] for s in FLOW_DEFINITIONS["selection"]["steps"]]
 print("FSM steps:", steps)
 assert steps == [
-    "macro_event", "limit_up_monitor", "industry_scan", "stock_selection",
-]  # 优化点 1: 深度分析已合并入 stock_selection
+    "macro_event", "theme_radar", "limit_up_monitor", "industry_scan",
+    "stock_selection", "confidence_maintain",
+]  # 优化点 1: 深度分析合并入 stock_selection; 旁路增强: theme_radar 前置 + confidence_maintain 末置
 
 from ai_stock.quant.agents import build_handlers
 from ai_stock.quant.config import SELECTION_QUEUE

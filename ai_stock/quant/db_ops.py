@@ -113,6 +113,13 @@ def upsert_optional_stock(item: dict) -> bool:
         row.report = item.get("report", "")
         row.risk_tags_json = json.dumps(item.get("risk_tags", []), ensure_ascii=False)
         row.confidence = float(item.get("confidence", 0.0))
+        # 主题雷达旁路动态字段 (缺省退化: dyn_confidence=0.5, stage_batch=BODY);
+        # 原 confidence (0-10 LLM 分) 写入不变
+        row.dyn_confidence = max(0.0, min(1.0, float(item.get("dyn_confidence", 0.5))))
+        row.stage_batch = item.get("stage_batch", "BODY") or "BODY"
+        row.radar_theme = item.get("radar_theme", "") or ""
+        row.last_confirmed = _now()
+        row.kicked_reason = ""
         row.status = "active"
         row.add_time = _now()
         row.remove_reason = ""
@@ -180,8 +187,13 @@ def update_optional_status(
     symbol: str,
     status: str,
     remove_reason: str = "",
+    kicked_reason: str = "",
 ) -> bool:
-    """更新自选池状态 (removed / expired / bought / active)."""
+    """更新自选池状态 (removed / expired / bought / active).
+
+    kicked_reason: 清理官/维护官/鱼尾拦截踢出时记录的理由 (与 remove_reason 并存,
+    便于区分"逻辑崩塌移出"与"置信度衰竭/鱼尾踢出")。
+    """
     with session_scope() as s:
         row = s.get(StockPoolOptional, symbol)
         if row is None:
@@ -190,6 +202,41 @@ def update_optional_status(
         if status in ("removed", "expired"):
             row.remove_reason = remove_reason
             row.remove_time = _now()
+            if kicked_reason:
+                row.kicked_reason = kicked_reason
+        s.commit()
+        return True
+
+
+def update_optional_dynamic(
+    symbol: str,
+    *,
+    dyn_confidence: Optional[float] = None,
+    stage_batch: Optional[str] = None,
+    radar_theme: Optional[str] = None,
+    last_confirmed: Optional[datetime] = None,
+    kicked_reason: Optional[str] = None,
+) -> bool:
+    """部分更新自选池的主题雷达动态字段 (仅写入传入的非 None 项).
+
+    供 ConfidenceMaintainAgent (衰减/增强/刷新确认时间) 与 WatchlistKickerAgent /
+    鱼尾拦截 (置 TAIL) 调用; 不触碰原 confidence (0-10) 与 status。
+    dyn_confidence 写入前 clamp 到 [0, 1]。
+    """
+    with session_scope() as s:
+        row = s.get(StockPoolOptional, symbol)
+        if row is None:
+            return False
+        if dyn_confidence is not None:
+            row.dyn_confidence = max(0.0, min(1.0, float(dyn_confidence)))
+        if stage_batch is not None:
+            row.stage_batch = stage_batch
+        if radar_theme is not None:
+            row.radar_theme = radar_theme
+        if last_confirmed is not None:
+            row.last_confirmed = last_confirmed
+        if kicked_reason is not None:
+            row.kicked_reason = kicked_reason
         s.commit()
         return True
 

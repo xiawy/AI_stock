@@ -110,6 +110,12 @@ class StockPoolOptional(QuantBase):
     report: Mapped[str] = mapped_column(Text, default="")           # 完整分析报告
     risk_tags_json: Mapped[str] = mapped_column(Text, default="[]")
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    # ---- 主题雷达旁路注入的动态字段 (原 confidence 0-10 LLM 分保持不动) ----
+    dyn_confidence: Mapped[float] = mapped_column(Float, default=0.5)     # 0-1 动态置信度
+    stage_batch: Mapped[str] = mapped_column(String(8), default="BODY")   # HEAD/BODY/TAIL
+    last_confirmed: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    radar_theme: Mapped[str] = mapped_column(String(100), default="")     # 入池时关联的雷达主题
+    kicked_reason: Mapped[str] = mapped_column(String(200), default="")   # 清理官/维护官踢出理由
     # active / removed / expired / bought
     status: Mapped[str] = mapped_column(String(16), default="active")
     observe_expire: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -132,6 +138,13 @@ class StockPoolOptional(QuantBase):
             "report": self.report,
             "risk_tags": json.loads(self.risk_tags_json or "[]"),
             "confidence": self.confidence,
+            "dyn_confidence": self.dyn_confidence,
+            "stage_batch": self.stage_batch,
+            "last_confirmed": (
+                self.last_confirmed.isoformat() if self.last_confirmed else None
+            ),
+            "radar_theme": self.radar_theme,
+            "kicked_reason": self.kicked_reason,
             "status": self.status,
             "observe_expire": self.observe_expire.isoformat() if self.observe_expire else None,
             "remove_reason": self.remove_reason,

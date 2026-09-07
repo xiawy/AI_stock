@@ -17,7 +17,15 @@ from io import StringIO
 from typing import Optional
 
 from .cache_manager import get_breaker, get_cache_manager
-from .config import CACHE_TTL
+from .config import (
+    CACHE_TTL,
+    RADAR_CHANGE_PCT_MAX,
+    RADAR_CHANGE_PCT_MIN,
+    RADAR_MARKET_CAP_MAX,
+    RADAR_MAX_THEMES,
+    RADAR_MIN_CLUSTER,
+    RADAR_VOLUME_RATIO_MIN,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -507,6 +515,130 @@ class DataService:
             breaker=get_breaker("concepts"),
             allow_fallback_stale=True,
         ) or []
+
+    # ------------------------------------------------------------------
+    # 主题雷达 (旁路注入): 个股反查行业 + 全市场微观异动扫描
+    # ------------------------------------------------------------------
+
+    def get_stock_industry_code(self, code: str) -> Optional[str]:
+        """个股反查所属最细分板块代码 (雷达注入候选池用).
+
+        用个股概念/行业板块名 (get_concept_blocks) 与全板块库 (含 code+name)
+        做名称匹配: 概念级板块 (更细分, 如 电源电容/液冷) 优先命中并直接返回;
+        否则退回首个行业级命中。无命中/异常返回 None (天然降级, 不阻断主流程)。
+        """
+        if not code:
+            return None
+        try:
+            names = self.get_concept_blocks(code)
+            if not names:
+                return None
+            boards = self.get_all_board_fund_flow()
+            if not boards:
+                return None
+            best: Optional[str] = None
+            for board in boards:
+                bcode = board.get("code", "")
+                bname = board.get("name", "")
+                if not bcode or not bname:
+                    continue
+                if any(_name_match(bname, n) for n in names):
+                    if board.get("board_level") == "concept":
+                        return bcode  # 概念级最细分, 直接采用
+                    best = best or bcode
+            return best
+        except Exception as exc:
+            logger.warning("get_stock_industry_code failed for %s: %s", code, exc)
+            return None
+
+    def scan_micro_anomalies(self) -> dict[str, list[str]]:
+        """全市场微观异动扫描: 放量(量比>2) + 温和上涨(3%~8%) + 中小市值(<300亿),
+        按概念/行业板块聚类, 返回 {主题名: [异动个股代码]} (捕捉大主题下的隐形冠军)。
+
+        仅扫描主力资金净流入靠前且当日上涨的"温热"板块 (控制在有限板块内, 成分股
+        取数走同一缓存)。任何异常/无数据降级为空 dict — 雷达挂掉时选股退化为原版涨幅榜。
+        """
+        def _fetch() -> dict[str, list[str]]:
+            boards = self.get_all_board_fund_flow()
+            if not boards:
+                return {}
+            # 温热板块: 当日上涨(0 < change < 涨幅上沿*2), 主力净流入降序, 概念级更细分
+            warm = [
+                b for b in boards
+                if b.get("code") and b.get("name")
+                and 0 < float(b.get("change_pct", 0) or 0) < RADAR_CHANGE_PCT_MAX * 2
+            ]
+            warm.sort(
+                key=lambda b: (
+                    b.get("board_level") == "concept",
+                    float(b.get("main_net_inflow", 0) or 0),
+                ),
+                reverse=True,
+            )
+            clusters: dict[str, list[str]] = {}
+            for board in warm[: RADAR_MAX_THEMES * 6]:
+                bcode = board.get("code", "")
+                bname = board.get("name", "")
+                try:
+                    stocks = self.get_industry_stocks(bcode, top_n=30)
+                except Exception as exc:
+                    logger.warning("radar constituents failed for %s: %s", bcode, exc)
+                    continue
+                hits: list[str] = []
+                for s in stocks:
+                    scode = str(s.get("code", "") or "")
+                    sname = str(s.get("name", "") or "")
+                    if not scode or _is_excluded_symbol(scode, sname):
+                        continue
+                    chg = float(s.get("change_pct", 0) or 0)
+                    vr = float(s.get("volume_ratio", 0) or 0)
+                    mcap = float(s.get("market_cap", 0) or 0)
+                    if (
+                        RADAR_CHANGE_PCT_MIN <= chg <= RADAR_CHANGE_PCT_MAX
+                        and vr > RADAR_VOLUME_RATIO_MIN
+                        and 0 < mcap < RADAR_MARKET_CAP_MAX
+                    ):
+                        hits.append(scode)
+                if len(hits) >= RADAR_MIN_CLUSTER:
+                    clusters[bname] = hits
+            # 家数降序, 截断到 RADAR_MAX_THEMES
+            ranked = sorted(clusters.items(), key=lambda kv: len(kv[1]), reverse=True)
+            return {name: codes for name, codes in ranked[:RADAR_MAX_THEMES]}
+
+        try:
+            return self.cache.get_or_fetch(
+                "micro_anomalies",
+                _fetch,
+                ttl=CACHE_TTL["fund_flow"],
+                category="fund_flow",
+                breaker=get_breaker("micro_anomalies"),
+                allow_fallback_stale=True,
+            ) or {}
+        except Exception as exc:
+            logger.warning("scan_micro_anomalies degraded to empty: %s", exc)
+            return {}
+
+
+# 北交所代码前缀 (4/8/92) — 与选股硬过滤口径一致, ST/退市/北交所排除
+_EXCLUDED_PREFIX = ("4", "8", "92")
+
+
+def _is_excluded_symbol(code: str, name: str) -> bool:
+    """ST / 退市风险 / 北交所排除 (雷达扫描硬过滤)."""
+    code = str(code)
+    name = str(name)
+    return (
+        code.startswith(_EXCLUDED_PREFIX)
+        or "ST" in name.upper()
+        or "退" in name
+    )
+
+
+def _name_match(board_name: str, tag: str) -> bool:
+    """板块名与主题/概念名的宽松匹配 (双向包含)."""
+    if not board_name or not tag:
+        return False
+    return tag in board_name or board_name in tag
 
 
 def _to_float(value) -> float:
