@@ -117,7 +117,7 @@ class TestSeedAndGates:
 
         result = tr.validate_theme("集中主题（测试）")
         assert result["passed"] is False
-        assert any("CR5" in r for r in result["reasons"])
+        assert any("单票权重" in r or "前两大" in r for r in result["reasons"])
 
     def test_rejects_illiquid_theme(self, theme_env, monkeypatch):
         from ai_stock.quant import theme_registry as tr

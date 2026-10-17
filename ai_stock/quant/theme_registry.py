@@ -32,7 +32,12 @@ logger = logging.getLogger(__name__)
 # ── 6 道校验阈值（改这里就等于改口径，务必同步文档）─────────────────────
 GATE_MIN_MEMBERS = 8
 GATE_MAX_MEMBERS = 40
-GATE_MAX_CR5 = 0.60            # 前 5 大权重和
+GATE_MAX_CR5 = 0.60            # 前 5 大权重和（仅作参考指标，不再作为闸门）
+# 为什么不用 CR5 做闸门：市值加权下 8~11 只票的 CR5 天然落在 78%~95%，
+# 它衡量的是"这个行业有没有大市值龙头"，而不是"是不是单票"。真正该拦的是
+# 单票绑架（max_weight）与双龙头绑架（top2）。
+GATE_MAX_SINGLE_WEIGHT = 0.35
+GATE_MAX_TOP2_WEIGHT = 0.55
 GATE_MIN_INTERNAL_CORR = 0.35  # 冷启动用"主题内一致性"替代"与父行业 ρ"（父板块无历史）
 GATE_MAX_DISPERSION = 1.6      # 个股波动 / 主题波动
 GATE_MIN_LIQUIDITY_RATIO = 0.80
@@ -233,7 +238,7 @@ def validate_theme(name: str, *, apply_status: bool = True) -> dict:
             hist[sym] = h
     metrics["history_symbols"] = len(hist)
 
-    if len(hist) < GATE_MIN_MEMBERS:
+    if not hist or len(hist) < min(5, len(symbols)):
         reasons.append(f"可用日线不足：仅 {len(hist)}/{len(symbols)} 只有 ≥25 根历史")
         return _finish(theme, metrics, reasons, apply_status, history_days=0)
 
@@ -245,11 +250,19 @@ def validate_theme(name: str, *, apply_status: bool = True) -> dict:
     metrics["weight_basis"] = "float_mcap" if use_caps else "equal"
 
     # 3) CR5
-    top5 = sorted(weights.values(), reverse=True)[:5]
-    cr5 = sum(top5)
-    metrics["cr5"] = round(cr5, 4)
-    if cr5 > GATE_MAX_CR5:
-        reasons.append(f"CR5={cr5:.0%} > {GATE_MAX_CR5:.0%}（龙头过重，本质是单票）")
+    ranked_w = sorted(weights.values(), reverse=True)
+    cr5 = sum(ranked_w[:5])
+    max_w = ranked_w[0] if ranked_w else 0.0
+    top2 = sum(ranked_w[:2])
+    metrics["cr5"] = round(cr5, 4)                 # 参考值（市值加权天然偏高）
+    metrics["max_weight"] = round(max_w, 4)
+    metrics["top2"] = round(top2, 4)
+    if max_w > GATE_MAX_SINGLE_WEIGHT:
+        reasons.append(
+            f"单票权重 {max_w:.0%} > {GATE_MAX_SINGLE_WEIGHT:.0%}（本质是单票，不是一个赛道）"
+        )
+    if top2 > GATE_MAX_TOP2_WEIGHT:
+        reasons.append(f"前两大权重和 {top2:.0%} > {GATE_MAX_TOP2_WEIGHT:.0%}（双龙头绑架）")
 
     # 收益序列（按位对齐：A 股同一交易日历，停牌导致长度差异时取较短尾部）
     rets = {s: _returns(h["closes"]) for s, h in hist.items()}
@@ -281,8 +294,12 @@ def validate_theme(name: str, *, apply_status: bool = True) -> dict:
 
     # 5) 离散度 = 个股波动均值 / 主题波动
     theme_std = pstdev(theme_ret) if len(theme_ret) > 2 else 0.0
+    # 离散度必须用**等权**口径: 市值加权会让主题波动贴近龙头, 比值虚高,
+    # 把"行业里有大票"误判成"成分股分化"。等权口径才纯粹反映相关性结构。
+    eq_ret = [mean(rets[s][i] for s in rets) for i in range(min_len)]
+    eq_std = pstdev(eq_ret) if len(eq_ret) > 2 else 0.0
     member_std = mean([pstdev(r) for r in rets.values()]) if rets else 0.0
-    dispersion = (member_std / theme_std) if theme_std > 0 else 0.0
+    dispersion = (member_std / eq_std) if eq_std > 0 else 0.0
     metrics["dispersion"] = round(dispersion, 4)
     metrics["sigma_daily"] = round(theme_std, 5)
     if dispersion > GATE_MAX_DISPERSION:
@@ -307,9 +324,13 @@ def validate_theme(name: str, *, apply_status: bool = True) -> dict:
     from ai_stock.dataflows.a_stock import _tencent_quote
 
     names = {c: r.get("name", "") for c, r in (_tencent_quote(symbols) or {}).items()}
-    st_count = sum(1 for n in names.values() if "ST" in n.upper() or "退" in n)
+    st_symbols = [
+        f"{c}:{n}" for c, n in names.items() if "ST" in n.upper() or "退" in n
+    ]
+    st_count = len(st_symbols)
     st_ratio = st_count / len(symbols) if symbols else 0.0
     metrics["st_ratio"] = round(st_ratio, 4)
+    metrics["st_symbols"] = st_symbols
     if st_ratio > GATE_MAX_ST_RATIO:
         reasons.append(f"ST/退市标的占比 {st_ratio:.0%} > {GATE_MAX_ST_RATIO:.0%}")
 

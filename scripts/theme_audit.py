@@ -35,7 +35,7 @@ def main() -> int:
     results = tr.validate_all()
     results.sort(key=lambda r: (r["status"] != "active", r["name"]))
 
-    header = f"{'主题':<20}{'成分股':>5}{'CR5':>7}{'内相关':>7}{'离散':>6}{'流动性':>7}{'ST':>6}{'结论':>9}"
+    header = f"{'主题':<20}{'成分股':>5}{'单票':>6}{'前二':>6}{'内相关':>7}{'离散':>6}{'流动性':>7}{'ST':>6}{'结论':>9}"
     print(header)
     print("-" * len(header))
     for r in results:
@@ -45,7 +45,8 @@ def main() -> int:
         print(
             f"{name}{' ' * max(0, pad)}"
             f"{m.get('members', 0):>5}"
-            f"{m.get('cr5', 0):>7.0%}"
+            f"{m.get('max_weight', 0):>6.0%}"
+            f"{m.get('top2', 0):>6.0%}"
             f"{m.get('internal_corr', 0):>7.2f}"
             f"{m.get('dispersion', 0):>6.2f}"
             f"{m.get('liquidity_ratio', 0):>7.0%}"
@@ -60,6 +61,9 @@ def main() -> int:
         print(f"[{r['status']}] {r['name']}")
         for reason in r.get("reasons") or []:
             print(f"    - {reason}")
+        sts = (r.get("metrics") or {}).get("st_symbols") or []
+        if sts:
+            print(f"    - ST 命中：{sts}")
         if not r.get("reasons"):
             print(f"    - 历史仅 {r['metrics'].get('history_days')} 根，进影子运行")
 
