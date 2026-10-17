@@ -271,10 +271,14 @@ journalctl -u ai-stock-backend -n 100 --no-pager   # StandardOutput 落到文件
 | 检查点 | 命令/位置 | 期望 |
 |---|---|---|
 | 后端存活 | `GET /api/health` | `{"status":"ok"}` |
-| 任务进度 | `GET /api/analysis/status/{task_id}` | 前端 2s 轮询同源；阶段推进 |
+| 任务进度 | `GET /api/analysis/status/{task_id}` | 前端 2s 轮询同源；阶段推进；`state_source` 为 `live`（本进程跑）或 `snapshot`（另一 worker 落库，滞后 ≤5s） |
+| 交易子系统归属 | `cat backend/data/quant_leader.lock` / 启动日志 `Acquired quant leader lock` | 内容等于 `systemctl show -p MainPID --value ai-stock-backend`；多 worker 时只有一个 worker 持有 |
+| 量化启动 | 日志 `QuantService started: mq=..., consumers=N, scheduler=...` | 消费者数 = 队列数；`global_trade_enable=1` |
+| 配置迁移 | 日志 `config migration applied: ...` | 升级后首次启动出现一次，之后不再出现 |
 | LLM 可用 | 发起一次单分析师短分析 | 正常产出报告 |
 | 数据源可用 | 跑一次 `600519` 技术分析 | K 线非空、无连续 fallback 警告 |
 | pipeline 调度 | backend 启动日志无 "Pipeline service init failed" | 调度器随 lifespan 启停 |
+| 停机收敛 | `systemctl restart` 后查日志 | 出现 `Consumer xxx stopped` → `QuantService stopped`，**不应**出现 `Quant service stop failed` |
 
 ## 9. 安全清单
 

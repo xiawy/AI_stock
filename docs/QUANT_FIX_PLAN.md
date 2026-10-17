@@ -496,3 +496,39 @@ python -m pytest tests/ -q                  # 617 passed / 14 skipped
 - **分析任务跨进程分发**：见 7.4 最后一段，需引入 MQ 消费者，属独立迭代。
 - **参数观察**：`RISK_BUDGET_PER_TRADE=1%`、`PORTFOLIO_DD_COEF_THRESHOLD=6%`、`MARKET_MA_WINDOW=20`、`CONF_KICK_THRESHOLD=0.25` 均为经验初值，建议按日报中的胜率/盈亏比/超额收益做 2~3 个月滚动校准。
 
+### 7.6 上线记录（2026-10-17 21:20 / 21:34，`118.25.48.120`）
+
+**动作**：`33ae2a7`（方案落地 + A5）→ `cf9b24c`（停机与日志修复）两次 `git pull` + `systemctl restart`，重启前用 sqlite backup API 备份数据库（`backend/data/aistock.db.bak-20261017_212027`，50MB）。
+
+**上线现场验证**
+
+| 检查项 | 结果 |
+|---|---|
+| `config migration applied: global_trade_enable 0 -> 1` | ✅ 日志可见（存量库自动迁移，无需手工改库） |
+| `max_order_value 200000 -> 250000` / `config_schema_version=3` / `market_timing_enable=1` | ✅ 库里核对一致 |
+| `QuantService started: mq=redis, consumers=5, scheduler=apscheduler, global_trade_enable=1` | ✅ |
+| `Acquired quant leader lock ... (pid=2237076)`，锁文件 pid == MainPID | ✅ 领导者选举生效 |
+| APScheduler 注册 `trigger_slo_check` 等 11 个 job | ✅ 日志可见 |
+| `analysis_tasks` 新增 6 列、`quant_stock_pool_holding.industry` | ✅ 幂等补列已跑 |
+| `/api/health` | ✅ ok |
+| 优雅停机 | ✅ 5 个 consumer 依次 `stopped` → `QuantService stopped`，无异常 |
+
+**上线过程中发现并修复的两个问题**（即 `cf9b24c`）
+
+1. **停机失联**：`TaskConsumer` / `DelayedWorker` / `TimeoutSweeper` / `_FallbackScheduler`
+   都把停止标志命名为 `self._stop`，覆盖了 `threading.Thread._stop()` 方法。`join()`
+   收尾调用它时抛 `'Event' object is not callable` → `QuantService.stop()` 中断，
+   消费者与清扫器没停干净（Redis 阻塞连接与锁残留）。已改名 `_stop_event` 并加
+   源码级回归测试。
+2. **应用 INFO 日志被吞**：uvicorn 只配置自己的 logger，应用 logger 冒泡到 root
+   （默认 WARNING），「QuantService started」这类关键启动日志看不到，排障时极易
+   误判成"调度器没起来"。已加 `_configure_logging()`（`LOG_LEVEL` 可覆盖，默认 INFO）。
+
+**首个真实交易日观察清单（下周一 10/19）**
+
+1. `quant_agent_decision_log` 中 `tech_signal` / `tech_no_signal` 比例（预期通过率 13% → 25%+）
+2. `industry_scan` 是否还有 `scan_empty`，日志中是否出现 `served by sina_board`
+3. 走到 `position_open` 的 flow 是否 > 0，`quant_trade_log` 是否出现新行
+4. 若出现 `大盘择时门` 拒绝，确认沪深300 数据是否正常（避免 `unknown` 误放行/误拦截）
+5. `check_business_slo` 首次巡检（每 30 分钟）是否误报
+
