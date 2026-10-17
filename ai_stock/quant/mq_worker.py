@@ -47,25 +47,27 @@ class TaskConsumer(threading.Thread):
         self.handlers = handlers
         self.backend = backend or get_mq_backend()
         self.consumer_id = f"{queue_name}_{uuid.uuid4().hex[:8]}"
-        self._stop = threading.Event()
+        # 不能命名为 self._stop: threading.Thread 内部有同名方法 _stop(),
+        # 覆盖后 join() 收尾时会抛 "'Event' object is not callable", 停机无法收敛。
+        self._stop_event = threading.Event()
         self._beat_counter = 0
         self.on_dead_letter = on_dead_letter
 
     def stop(self, timeout: float = 6.0) -> None:
-        self._stop.set()
+        self._stop_event.set()
         self.join(timeout=timeout)
 
     def run(self) -> None:
         logger.info("Consumer %s started (queue=%s)", self.consumer_id, self.queue_name)
         db_ops.beat(self.consumer_id, self.queue_name)
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             try:
                 task = self.backend.pop(
                     self.queue_name, timeout=CONSUME_TIMEOUT, consumer_id=self.consumer_id,
                 )
             except Exception as exc:
                 logger.error("MQ pop failed on %s: %s", self.queue_name, exc)
-                self._stop.wait(2.0)
+                self._stop_event.wait(2.0)
                 continue
             if task is None:
                 self._maybe_beat()
@@ -146,22 +148,24 @@ class DelayedWorker(threading.Thread):
     def __init__(self, backend: Optional[MQBackend] = None):
         super().__init__(name="mq-delayed-worker", daemon=True)
         self.backend = backend or get_mq_backend()
-        self._stop = threading.Event()
+        # 不能命名为 self._stop: threading.Thread 内部有同名方法 _stop(),
+        # 覆盖后 join() 收尾时会抛 "'Event' object is not callable", 停机无法收敛。
+        self._stop_event = threading.Event()
 
     def stop(self, timeout: float = 3.0) -> None:
-        self._stop.set()
+        self._stop_event.set()
         self.join(timeout=timeout)
 
     def run(self) -> None:
         logger.info("Delayed worker started")
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             try:
                 moved = self.backend.promote_delayed()
                 if moved:
                     logger.info("Delayed worker promoted %d task(s)", moved)
             except Exception as exc:
                 logger.error("Delayed worker error: %s", exc)
-            self._stop.wait(DELAYED_POLL_INTERVAL)
+            self._stop_event.wait(DELAYED_POLL_INTERVAL)
         logger.info("Delayed worker stopped")
 
 
@@ -175,16 +179,18 @@ class TimeoutSweeper(threading.Thread):
     ):
         super().__init__(name="mq-timeout-sweeper", daemon=True)
         self.backend = backend or get_mq_backend()
-        self._stop = threading.Event()
+        # 不能命名为 self._stop: threading.Thread 内部有同名方法 _stop(),
+        # 覆盖后 join() 收尾时会抛 "'Event' object is not callable", 停机无法收敛。
+        self._stop_event = threading.Event()
         self.on_dead_letter = on_dead_letter
 
     def stop(self, timeout: float = 3.0) -> None:
-        self._stop.set()
+        self._stop_event.set()
         self.join(timeout=timeout)
 
     def run(self) -> None:
         logger.info("Timeout sweeper started (interval=%ds)", SWEEP_INTERVAL)
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             try:
                 recovered = self.backend.sweep_timeouts(LOCK_TTL_SECONDS)
                 for item in recovered:
@@ -198,7 +204,7 @@ class TimeoutSweeper(threading.Thread):
                             logger.exception("dead-letter callback failed")
             except Exception as exc:
                 logger.error("Timeout sweeper error: %s", exc)
-            self._stop.wait(SWEEP_INTERVAL)
+            self._stop_event.wait(SWEEP_INTERVAL)
         logger.info("Timeout sweeper stopped")
 
 

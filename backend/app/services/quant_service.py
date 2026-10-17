@@ -66,6 +66,14 @@ def start_quant_service():
         return svc
     except Exception as exc:
         logger.warning("Quant service start failed: %s", exc)
+        # 启动失败必须交还领导者身份：否则本进程占着锁却跑不了交易子系统，
+        # 其它 worker / 重启后的自己都拿不到锁。
+        try:
+            from ai_stock.quant import leader
+
+            leader.release()
+        except Exception:  # pragma: no cover
+            pass
         return None
 
 

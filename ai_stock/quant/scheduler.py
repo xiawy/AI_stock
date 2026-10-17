@@ -308,24 +308,26 @@ class _FallbackScheduler(threading.Thread):
     def __init__(self, jobs: list[dict]):
         super().__init__(name="quant-fallback-scheduler", daemon=True)
         self.jobs = jobs  # [{kind: 'daily'|'interval', ...}]
-        self._stop = threading.Event()
+        # 不能命名为 self._stop: threading.Thread 内部有同名方法 _stop(),
+        # 覆盖后 join() 收尾时会抛 "'Event' object is not callable", 停机无法收敛。
+        self._stop_event = threading.Event()
         self._fired_daily: dict[str, str] = {}
         self._last_interval: dict[str, float] = {}
 
     def stop(self, timeout: float = 3.0) -> None:
-        self._stop.set()
+        self._stop_event.set()
         self.join(timeout=timeout)
 
     def run(self) -> None:
         logger.info("Fallback scheduler started (%d jobs)", len(self.jobs))
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             now = datetime.now()
             for job in self.jobs:
                 try:
                     self._maybe_fire(job, now)
                 except Exception as exc:
                     logger.error("Fallback job %s failed: %s", job.get("name"), exc)
-            self._stop.wait(self.TICK_SECONDS)
+            self._stop_event.wait(self.TICK_SECONDS)
 
     def _maybe_fire(self, job: dict, now: datetime) -> None:
         name = job["name"]

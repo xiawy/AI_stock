@@ -32,6 +32,28 @@ from app.core.database import init_db
 logger = logging.getLogger(__name__)
 
 
+def _configure_logging() -> None:
+    """让应用日志（ai_stock.* / app.*）在 INFO 级别可见。
+
+    uvicorn 只配置自己的 logger，应用 logger 会冒泡到 root；而 root 默认
+    WARNING，于是「Quant service started」「Consumer xxx started」这类关键启动
+    日志被静默吞掉 —— 现场排障时极易误判成"调度器没起来"（本次上线踩过）。
+    uvicorn 自身 logger 的 propagate=False，不会重复输出。
+
+    LOG_LEVEL 可用环境变量覆盖（DEBUG/INFO/WARNING...），默认 INFO。
+    """
+    level_name = (os.environ.get("LOG_LEVEL") or "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    logging.getLogger().setLevel(level)
+
+
+_configure_logging()
+
+
 def _reap_orphaned_tasks() -> None:
     """回收「心跳已过期」的 running/paused 任务行。
 
