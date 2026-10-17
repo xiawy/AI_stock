@@ -570,3 +570,24 @@ python -m pytest tests/ -q                  # 617 passed / 14 skipped
 
 > 注意：即使关掉择时门，趋势动量通道要求"站上 MA20 + MA20 上翘 + 放量"，弱市里命中率
 > 依然低；均值回归三通道（BOLL 缩量止跌 / MACD 底背离 / 缺口回踩）才是弱市主力。
+
+**决策记录（2026-10-17 22:30）**：按"先验证链路"原则，已在生产将
+`market_timing_enable` 置 **0**（即时生效，无需重启），干跑 3 只池内标的
+`pre_trade_check` 全部 `passed`。择时判定仍可观测（`get_market_regime()` 照常返回
+`risk_off`，日报基准不受影响），只是不再拦截建仓。
+
+恢复开关（任选其一，均即时生效）：
+
+```sql
+UPDATE quant_system_config SET value='1' WHERE key='market_timing_enable';
+```
+
+```bash
+# 或走 API（需登录 token）
+curl -X PUT http://127.0.0.1:8000/api/quant/config \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"key":"market_timing_enable","value":"1"}'
+```
+
+建议在拿到 3~5 笔完整成交、确认「选股 → 开仓 → 持仓跟踪 → 止损/止盈 → 日报归因」
+全链路无异常后再打开。
