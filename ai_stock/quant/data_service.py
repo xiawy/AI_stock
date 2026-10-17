@@ -42,6 +42,154 @@ def _market_today() -> str:
     return datetime.now(_MARKET_TZ).strftime("%Y-%m-%d")
 
 
+# ---------------------------------------------------------------------------
+# 实时行情: 多源取数 (P0-1 延伸)
+# ---------------------------------------------------------------------------
+# 东财 push2 的个股接口 (/api/qt/stock/get) 与板块列表 (clist) 同属一个集群,
+# 实测会一起对服务器 IP 断连。若只修板块列表, 实时价拿不到就只能退过期缓存 ——
+# 涨跌停判断、单笔金额校验、ATR 定量全部失真, 比"拿不到板块"更危险。
+# 因此这里做「东财 → 腾讯」双源, 且把涨跌停价交给数据源给的口径。
+
+
+def _normalize_symbol(symbol: str) -> str:
+    code = str(symbol or "").strip().lower()
+    for prefix in ("sh", "sz", "bj"):
+        code = code.removeprefix(prefix)
+    return code
+
+
+def _limit_ratio_for(code: str) -> float:
+    if code.startswith(("4", "8", "92")):
+        return 0.30          # 北交所
+    if code.startswith(("300", "301", "688", "689")):
+        return 0.20          # 创业板 / 科创板
+    return 0.10
+
+
+def _quote_from_eastmoney(code: str) -> Optional[dict]:
+    """东财 push2 单股行情 (主源). 失败直接抛, 由上层回退。"""
+    from ai_stock.dataflows.a_stock import _push2_get
+
+    market = "1" if code.startswith(("6", "9", "5")) else "0"
+    if code.startswith(("4", "8", "92")):
+        market = "0"
+    params = {
+        "secid": f"{market}.{code}",
+        "fields": "f43,f44,f45,f46,f57,f58,f60,f107,f116,f117",
+        "fltt": "2",
+        "invt": "2",
+    }
+    r = _push2_get("/api/qt/stock/get", params=params, timeout=10)
+    d = (r.json() or {}).get("data") or {}
+    price = _to_float(d.get("f43"))
+    prev_close = _to_float(d.get("f60"))
+    if price <= 0 or prev_close <= 0:
+        return None
+    limit_ratio = _limit_ratio_for(code)
+    change_pct = (price / prev_close - 1.0) * 100 if prev_close else 0.0
+    return {
+        "symbol": code,
+        "name": str(d.get("f58", "")),
+        "price": price,
+        "prev_close": prev_close,
+        "change_pct": round(change_pct, 2),
+        "limit_up": round(prev_close * (1 + limit_ratio), 2),
+        "limit_down": round(prev_close * (1 - limit_ratio), 2),
+        "limit_ratio": limit_ratio,
+        "market_cap": _to_float(d.get("f116")),
+        "float_mcap": _to_float(d.get("f117")),
+        "source": "eastmoney_push2",
+    }
+
+
+def _quote_from_tencent(code: str) -> Optional[dict]:
+    """腾讯行情 (备源, 不封 IP). 涨跌停价取交易所口径 (含 ST 5% 等)。"""
+    from ai_stock.dataflows.a_stock import _tencent_quote
+
+    row = (_tencent_quote([code]) or {}).get(code) or {}
+    price = _to_float(row.get("price"))
+    prev_close = _to_float(row.get("last_close"))
+    if price <= 0 or prev_close <= 0:
+        return None
+    limit_ratio = _limit_ratio_for(code)
+    limit_up = _to_float(row.get("limit_up")) or round(prev_close * (1 + limit_ratio), 2)
+    limit_down = _to_float(row.get("limit_down")) or round(prev_close * (1 - limit_ratio), 2)
+    change_pct = _to_float(row.get("change_pct"))
+    if not change_pct:
+        change_pct = (price / prev_close - 1.0) * 100
+    return {
+        "symbol": code,
+        "name": str(row.get("name", "")),
+        "price": price,
+        "prev_close": prev_close,
+        "change_pct": round(change_pct, 2),
+        "limit_up": limit_up,
+        "limit_down": limit_down,
+        "limit_ratio": limit_ratio,
+        "market_cap": 0.0,      # 腾讯给的是亿元口径, 与东财元口径不同, 不混用
+        "float_mcap": 0.0,
+        "source": "tencent",
+    }
+
+
+def _fetch_realtime_quote(code: str) -> Optional[dict]:
+    """多源取实时行情: 东财 → 腾讯。两源都失败时抛最后一个异常，交给熔断层。
+
+    空结果按失败处理（接口"成功但没数据"是最危险的静默故障形态）。
+
+    东财失败会进入与板块列表同一套健康矩阵退避（默认连续 3 次 → 5 分钟）：
+    ``_push2_get`` 每次要撞主域 + 延迟域、单次超时 10s，若不退避，一轮买入
+    扫描里每只票都白等 20s，扫描直接拖过交易时段。
+    """
+    from ai_stock.dataflows import data_health
+
+    last_error: Optional[Exception] = None
+    providers = []
+    if data_health.in_backoff("eastmoney_push2", "quote") <= 0:
+        providers.append(("eastmoney_push2", _quote_from_eastmoney))
+    providers.append(("tencent", _quote_from_tencent))
+
+    for name, fn in providers:
+        started = time.monotonic()
+        try:
+            quote = fn(code)
+        except Exception as exc:
+            last_error = exc
+            logger.warning("realtime quote %s via %s failed: %s", code, name, exc)
+            if name == "eastmoney_push2":
+                _record_quote_fail(code, exc)
+            continue
+        if quote:
+            if name == "eastmoney_push2":
+                data_health.record_ok(
+                    name, "quote", (time.monotonic() - started) * 1000.0,
+                )
+            elif last_error is not None:
+                logger.info("realtime quote %s served by tencent (primary unavailable)", code)
+            return quote
+        logger.warning("realtime quote %s via %s returned empty", code, name)
+
+    if last_error is not None:
+        raise last_error
+    return None
+
+
+def _record_quote_fail(code: str, exc: Exception) -> None:
+    """东财实时行情失败计入健康矩阵（与板块列表共用退避档位）。"""
+    from ai_stock.dataflows import data_health
+
+    try:
+        from .config import DATA_SOURCE_BACKOFF_STEPS, DATA_SOURCE_FAIL_THRESHOLD
+
+        data_health.record_fail(
+            "eastmoney_push2", "quote", str(exc),
+            backoff_steps=tuple(DATA_SOURCE_BACKOFF_STEPS),
+            threshold=DATA_SOURCE_FAIL_THRESHOLD,
+        )
+    except Exception:  # pragma: no cover - 统计失败不影响主流程
+        pass
+
+
 class DataService:
     """量化 Agent 共用的结构化数据门面 (单例见 get_data_service)."""
 
@@ -316,52 +464,18 @@ class DataService:
     def get_realtime_quote(self, symbol: str) -> Optional[dict]:
         """实时行情: {price, prev_close, change_pct, limit_up, limit_down, name}.
 
-        涨跌停价按昨收 ±10%/20%/30% 计算 (主板/创业科创/北交所).
+        多源取数 (P0-1 延伸): 东财 push2 个股接口 → 腾讯 qt.gtimg.cn。
+        实测东财 push2 整段（clist + stock/get）会对服务器 IP 断连，只修板块
+        列表不够 —— 实时价拿不到就只能退过期缓存，涨跌停判断与金额校验全失真。
+
+        涨跌停价优先用数据源给的交易所口径（腾讯 f47/f48 已含 ST 5% 等特殊
+        比例），缺失时按昨收 ±10%/20%/30% 兜底 (主板/创业科创/北交所)。
         """
-        code = str(symbol).strip().lower()
-        for prefix in ("sh", "sz", "bj"):
-            code = code.removeprefix(prefix)
-
-        def _fetch() -> Optional[dict]:
-            # 主域被网络环境断连时自动回退延迟域 (与板块资金流同一机制)
-            from ai_stock.dataflows.a_stock import _push2_get
-
-            market = "1" if code.startswith(("6", "9", "5")) else "0"
-            if code.startswith(("4", "8", "92")):
-                market = "0"
-            params = {
-                "secid": f"{market}.{code}",
-                "fields": "f43,f44,f45,f46,f57,f58,f60,f107,f116,f117",
-                "fltt": "2",
-                "invt": "2",
-            }
-            r = _push2_get("/api/qt/stock/get", params=params, timeout=10)
-            d = (r.json() or {}).get("data") or {}
-            price = _to_float(d.get("f43"))
-            prev_close = _to_float(d.get("f60"))
-            if price <= 0 or prev_close <= 0:
-                return None
-            limit_ratio = 0.30 if code.startswith(("4", "8", "92")) else (
-                0.20 if code.startswith(("300", "301", "688", "689")) else 0.10
-            )
-            change_pct = (price / prev_close - 1.0) * 100 if prev_close else 0.0
-            return {
-                "symbol": code,
-                "name": str(d.get("f58", "")),
-                "price": price,
-                "prev_close": prev_close,
-                "change_pct": round(change_pct, 2),
-                "limit_up": round(prev_close * (1 + limit_ratio), 2),
-                "limit_down": round(prev_close * (1 - limit_ratio), 2),
-                "limit_ratio": limit_ratio,
-                "market_cap": _to_float(d.get("f116")),
-                "float_mcap": _to_float(d.get("f117")),
-            }
-
+        code = _normalize_symbol(symbol)
         try:
             return self.cache.get_or_fetch(
                 f"quote:{code}",
-                _fetch,
+                lambda: _fetch_realtime_quote(code),
                 ttl=CACHE_TTL["realtime_quote"],
                 category="realtime_quote",
                 breaker=get_breaker("realtime_quote"),

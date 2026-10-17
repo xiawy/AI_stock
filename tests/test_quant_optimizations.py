@@ -762,3 +762,104 @@ class TestVolatilityTargetSizing:
         row = self._run(monkeypatch, atr=0.0)
         budget = 1_000_000 * BUY_POSITION_RATIO * POS_COEF_MID
         assert row["qty"] == int(budget / (10.0 * 1.002) / 100) * 100
+
+
+# ---------------------------------------------------------------------------
+# P0-1 延伸: 实时行情多源回退（东财 push2 → 腾讯）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestRealtimeQuoteFallback:
+    """东财 push2 的 clist 与 stock/get 同属一个集群，会一起被封。
+
+    只修板块列表不够：实时价拿不到就只能退过期缓存，涨跌停判断与金额校验失真。
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_health(self):
+        """退避状态是进程级全局，用例之间必须清干净（否则主源会被跳过）。"""
+        from ai_stock.dataflows import data_health
+
+        data_health.reset()
+        yield
+        data_health.reset()
+
+    def test_eastmoney_preferred(self, monkeypatch):
+        from ai_stock.quant import data_service as ds
+
+        monkeypatch.setattr(ds, "_quote_from_eastmoney", lambda c: {"symbol": c, "price": 10.0})
+
+        def _no_tencent(_c):
+            raise AssertionError("主源正常时不应调用备源")
+
+        monkeypatch.setattr(ds, "_quote_from_tencent", _no_tencent)
+        assert ds._fetch_realtime_quote("600000")["price"] == 10.0
+
+    def test_falls_back_to_tencent(self, monkeypatch):
+        from ai_stock.quant import data_service as ds
+
+        def _boom(_c):
+            raise ConnectionError("stock/get RemoteDisconnected")
+
+        monkeypatch.setattr(ds, "_quote_from_eastmoney", _boom)
+        monkeypatch.setattr(
+            ds, "_quote_from_tencent",
+            lambda c: {"symbol": c, "price": 9.5, "source": "tencent"},
+        )
+
+        quote = ds._fetch_realtime_quote("600000")
+        assert quote["source"] == "tencent"
+        assert quote["price"] == 9.5
+
+    def test_empty_primary_falls_through(self, monkeypatch):
+        from ai_stock.quant import data_service as ds
+
+        monkeypatch.setattr(ds, "_quote_from_eastmoney", lambda c: None)
+        monkeypatch.setattr(
+            ds, "_quote_from_tencent", lambda c: {"price": 1.0, "source": "tencent"},
+        )
+        assert ds._fetch_realtime_quote("600000")["source"] == "tencent"
+
+    def test_both_sources_down_raises(self, monkeypatch):
+        from ai_stock.quant import data_service as ds
+
+        def _boom(_c):
+            raise ConnectionError("down")
+
+        monkeypatch.setattr(ds, "_quote_from_eastmoney", _boom)
+        monkeypatch.setattr(ds, "_quote_from_tencent", _boom)
+        with pytest.raises(ConnectionError):
+            ds._fetch_realtime_quote("600000")
+
+    def test_tencent_uses_exchange_limit_prices(self, monkeypatch):
+        """涨跌停优先用数据源口径（腾讯已含 ST 5%、北交所 30% 等特殊比例）。"""
+        from ai_stock.dataflows import a_stock
+        from ai_stock.quant import data_service as ds
+
+        monkeypatch.setattr(
+            a_stock, "_tencent_quote",
+            lambda codes: {"600000": {
+                "name": "浦发银行", "price": 10.0, "last_close": 9.8,
+                "change_pct": 2.04, "limit_up": 10.78, "limit_down": 8.82,
+            }},
+        )
+        quote = ds._quote_from_tencent("600000")
+        assert quote["limit_up"] == 10.78
+        assert quote["limit_down"] == 8.82
+        assert quote["source"] == "tencent"
+
+    def test_tencent_falls_back_to_computed_limits(self, monkeypatch):
+        from ai_stock.dataflows import a_stock
+        from ai_stock.quant import data_service as ds
+
+        monkeypatch.setattr(
+            a_stock, "_tencent_quote",
+            lambda codes: {"300750": {
+                "name": "宁德时代", "price": 100.0, "last_close": 98.0,
+                "change_pct": 2.04, "limit_up": 0, "limit_down": 0,
+            }},
+        )
+        quote = ds._quote_from_tencent("300750")
+        assert quote["limit_up"] == 117.6      # 创业板 20%
+        assert quote["limit_ratio"] == 0.20
