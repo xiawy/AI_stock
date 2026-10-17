@@ -40,6 +40,8 @@ class TaskStatusResponse(BaseModel):
     tool_calls: int = 0
     tokens_in: int = 0
     tokens_out: int = 0
+    # live = 执行体在本进程（实时）；snapshot = 另一个 worker 落库的快照（≤1 个心跳周期）
+    state_source: str = "live"
 
 
 class TaskCreatedResponse(BaseModel):

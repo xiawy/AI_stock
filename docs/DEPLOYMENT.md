@@ -139,8 +139,12 @@ cd D:\code\AI_stock\backend
 .venv\Scripts\python -m uvicorn app.main:app --reload --port 8000
 ```
 
-- 首次启动自动建表（`init_db()`）；Swagger：`http://localhost:8000/docs`；健康检查：`/api/health`
-- 生产模式去掉 `--reload`，建议 `--workers 1`（任务管理器为进程内存态，多 worker 会分裂任务注册表）
+- 首次启动自动建表（`init_db()`，同时对 `analysis_tasks` 做幂等补列）；Swagger：`http://localhost:8000/docs`；健康检查：`/api/health`
+- 生产模式去掉 `--reload`。**A5 之后 `--workers N` 可以开**：分析任务的状态（进度/结果/控制指令）已落 `analysis_tasks` 表，任意 worker 都能服务任意任务；任务执行体仍在发起它的那个 worker 内，进程被杀则本次分析中断、需从 checkpoint 重新发起。
+  - 量化交易子系统（MQ 消费者 + APScheduler）由文件锁做领导者选举，**只有 1 个 worker 拥有**（`backend/data/quant_leader.lock`），其余 worker 只服务 API —— 所以多 worker 不会出现双份调度器并发发单。
+  - 单机小流量：`--workers 1`（默认，最简单）
+  - 需要扛并发轮询：`--workers 2` ~ `4`，注意 SQLite 为单写者，已开 WAL + `busy_timeout=5000`
+  - 不要为了"加速单次分析"而加 worker —— 一次分析只在一个 worker 内跑
 
 ### 4.3 前端（端口 5173）
 
@@ -202,7 +206,54 @@ Copy-Item data\aistock.db data\aistock.db.bak
 ```
 
 - 开发环境首启 `init_db()` 自动建表；此后 schema 演进一律走 Alembic
+- `init_db()` 里另有一段**幂等补列**（`analysis_tasks` 的 A5 状态列）：老库直接启动即可，不必先手工跑 alembic。两者并存不冲突（列已存在则跳过）
 - SQLite 适合单机/小团队；并发写入增大后可切 `DATABASE_URL` 到 PostgreSQL（SQLAlchemy 2.0 写法天然兼容，迁移文件或需 review 方言差异）
+
+## 6.5 生产进程守护（systemd）
+
+Linux 部署（如 `/deploy/AI_stock`，`www-data` 运行）建议直接用下面这份单元，关键是
+`Restart=always` + `RestartSec`：任何未捕获异常把进程打死，10 秒内自动拉起；
+拉起后 A5 的心跳巡检会把上次遗留的 running 行（心跳已过期）标为 `stopped`，
+不会出现"任务永远转圈"。
+
+```ini
+# /etc/systemd/system/ai-stock-backend.service
+[Unit]
+Description=AI Stock Backend (FastAPI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/deploy/AI_stock/backend
+Environment="PATH=/deploy/AI_stock/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="TZ=Asia/Shanghai"
+ExecStart=/deploy/AI_stock/backend/.venv/bin/python -m uvicorn app.main:app \
+    --host 127.0.0.1 --port 8000 --workers 2 --proxy-headers
+Restart=always
+RestartSec=10
+# 让 uvicorn 收到 SIGTERM 后有机会落盘状态再退出
+KillSignal=SIGTERM
+TimeoutStopSec=45
+StandardOutput=append:/deploy/AI_stock/backend/data/uvicorn.log
+StandardError=append:/deploy/AI_stock/backend/data/uvicorn.err.log
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now ai-stock-backend
+systemctl status ai-stock-backend --no-pager
+journalctl -u ai-stock-backend -n 100 --no-pager   # StandardOutput 落到文件时用它看 stderr
+```
+
+> `--workers 2` 的前提是 A5 已落地（状态在表里）+ 领导者选举已生效（量化只起一份）。
+> 若回退到旧版本代码，必须改回 `--workers 1`，否则会出现"A worker 起的任务在
+> B worker 里 404"、且 N 份调度器并发发任务。
 
 ## 7. 日常运维操作
 

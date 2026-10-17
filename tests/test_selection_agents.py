@@ -156,6 +156,61 @@ class TestEventIndustryKB:
         assert reconcile(["石油行业"], ["农牧饲渔"]) == ["农牧饲渔"]
         assert reconcile([], []) == []
 
+    def test_match_board_names_dynamic_hit_and_noise_exclusion(self):
+        """动态板块名匹配 (新行业兜底): 命中新题材板; 排除技术/指数/风格噪声板
+        与 2 字歧义名 (由静态 KB 覆盖, 不走动态层)."""
+        from ai_stock.quant.event_industry_kb import match_board_names
+
+        boards = [
+            "谷子经济", "脑机接口", "DeepSeek概念", "算力概念",   # 真实新题材板
+            "昨日涨停", "历史新高", "融资融券", "沪股通",         # 技术/资金噪声板
+            "小盘成长", "行业龙头", "题材股",                     # 风格噪声板
+            "军工", "电子",                                       # 2 字歧义名
+        ]
+        text = (
+            "谷子经济持续火爆, 脑机接口获政策加持, 某股创历史新高, "
+            "昨日涨停家数增多, 融资融券余额上升, 军工电子订单回暖"
+        )
+        hits = match_board_names(text, boards)
+        assert "谷子经济" in hits
+        assert "脑机接口" in hits
+        # 噪声板即便原文出现也不参与动态命中
+        for noise in ("昨日涨停", "历史新高", "融资融券", "沪股通",
+                      "小盘成长", "行业龙头", "题材股"):
+            assert noise not in hits
+        # 2 字名被长度护栏挡下 (军工/电子由静态 KB 覆盖)
+        assert "军工" not in hits
+        assert "电子" not in hits
+        # 空输入 → 空 (天然降级)
+        assert match_board_names(text, []) == []
+        assert match_board_names("", boards) == []
+
+    def test_match_industries_unions_static_kb_and_dynamic_boards(self):
+        """match_industries 叠加动态层: 静态 KB 命中 ∪ 新闻直接提及的新题材板名;
+        不传 board_names 时行为与旧版完全一致 (向后兼容)."""
+        from ai_stock.quant.event_industry_kb import match_industries
+
+        # 不传 board_names → 纯静态 KB (向后兼容)
+        assert match_industries("固态电池装车量产") == ["电池", "能源金属"]
+        # 传入 board_names → 静态 (电池/能源金属) 并集动态 (钠离子电池新题材板)
+        hits = match_industries(
+            "固态电池与钠离子电池齐发力", ["钠离子电池", "昨日涨停"],
+        )
+        assert "电池" in hits and "能源金属" in hits   # 静态层
+        assert "钠离子电池" in hits                     # 动态层 (新题材板, KB 无此关键词)
+        assert "昨日涨停" not in hits                   # 噪声板排除
+
+    def test_is_dynamic_matchable_guards(self):
+        """动态匹配护栏: 长度 + 噪声模式; 宽泛词不误杀真实题材板."""
+        from ai_stock.quant.event_industry_kb import _is_dynamic_matchable
+
+        assert _is_dynamic_matchable("算力概念") is True
+        assert _is_dynamic_matchable("国资云概念") is True   # "国资"宽泛词不误杀
+        assert _is_dynamic_matchable("央国企改革") is True
+        assert _is_dynamic_matchable("军工") is False        # 2 字歧义名
+        assert _is_dynamic_matchable("昨日涨停") is False    # 技术噪声板
+        assert _is_dynamic_matchable("") is False
+
 
 # ---------------------------------------------------------------------------
 # MacroEventAgent (知识库预检 + 影响力排序)
@@ -238,6 +293,44 @@ class TestMacroEventAgent:
         result = agent.handle(_task())
         assert result["decision"] == "empty"
         assert result["events"] == []
+
+    def test_dynamic_board_names_extend_kb_hits(self, quant_env, monkeypatch):
+        """动态层接线: 实时板块全集里的新题材板被新闻提及 → 进入 kb_industries;
+        噪声板/2字板不参与动态命中 (静态 KB 仍照常工作)."""
+        from ai_stock.quant.agents import macro_event
+        from ai_stock.quant.agents.macro_event import (
+            MacroEvent,
+            MacroEventAgent,
+            MacroEventReport,
+        )
+
+        data = FakeDataService()
+        data.boards = [
+            {"code": "BK900", "name": "谷子经济", "board_level": "concept"},
+            {"code": "BK901", "name": "昨日涨停", "board_level": "concept"},
+            {"code": "BK902", "name": "军工", "board_level": "concept"},
+        ]
+        data.hot_news = [{
+            "title": "谷子经济持续火爆 昨日涨停家数增多 军工订单回暖",
+            "content": "", "source": "财联社", "time": "t",
+        }]
+        monkeypatch.setattr(
+            macro_event, "structured_invoke",
+            lambda llm, schema, prompt, **kw: MacroEventReport(events=[
+                MacroEvent(title="谷子经济爆发", level="industry",
+                           impact_industries=["谷子经济"], influence_score=8.0),
+            ]),
+        )
+        agent = _make_agent(MacroEventAgent, data)
+        result = agent.handle(_task())
+        assert result["decision"] == "ok"
+        kb = result["kb_industries"]
+        assert "谷子经济" in kb          # 动态命中新题材板 (KB 无此关键词)
+        assert "昨日涨停" not in kb      # 噪声板排除
+        assert "军工" not in kb          # 2 字板不走动态层
+        assert "军工行业" in kb          # 静态 KB 仍生效
+        # 事件行业映射经 reconcile 保留精确新题材
+        assert result["events"][0]["impact_industries"] == ["谷子经济"]
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -35,6 +37,23 @@ class AnalysisTask(Base):
     deep_think_llm: Mapped[str] = mapped_column(String(96), default="")
     lookback_days: Mapped[int] = mapped_column(Integer, nullable=True)
 
+    # ── A5: 任务状态表内化 (任意 worker 都能服务任意任务) ──────────────
+    # progress_json: 与 /status 返回值同构的进度快照 (阶段/报告/计数/耗时)
+    # result_json:   完成时的最终结果 (final_state + stock_label), 供非执行进程返回
+    # owner:         持有执行线程的进程标识 host:pid
+    # heartbeat_at:  执行体心跳; 超时视为进程已退出 (据此回收, 而非启动即杀)
+    # control:       跨进程控制指令 pause|resume|stop, 由持有执行体的进程消费后清空
+    progress_json: Mapped[str] = mapped_column(Text, default="{}")
+    result_json: Mapped[str] = mapped_column(Text, default="")
+    owner: Mapped[str] = mapped_column(String(96), default="", index=True)
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    control: Mapped[str] = mapped_column(String(16), default="")
+    control_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -45,6 +64,14 @@ class AnalysisTask(Base):
     )
 
     user: Mapped["User"] = relationship()  # noqa: F821
+
+    def progress(self) -> dict[str, Any]:
+        """已持久化的进度快照 (解析失败返回空字典, 不抛异常)。"""
+        try:
+            value = json.loads(self.progress_json or "{}")
+        except (TypeError, ValueError):
+            return {}
+        return value if isinstance(value, dict) else {}
 
     def to_dict(self) -> dict:
         return {
@@ -60,6 +87,10 @@ class AnalysisTask(Base):
             "quick_think_llm": self.quick_think_llm,
             "deep_think_llm": self.deep_think_llm,
             "lookback_days": self.lookback_days,
+            "owner": self.owner,
+            "heartbeat_at": (
+                self.heartbeat_at.isoformat() if self.heartbeat_at else None
+            ),
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

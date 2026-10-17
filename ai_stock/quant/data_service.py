@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from typing import Optional
@@ -45,26 +47,56 @@ class DataService:
 
     def __init__(self):
         self.cache = get_cache_manager()
+        # 板块列表的进程内最短采样间隔 (秒): 缓存 TTL 之外的二次护栏。
+        # 反爬封禁多由「高频轮询」触发, 缓存击穿时也必须有下限。
+        self._board_last_fetch = 0.0
+        self._board_last_payload: list[dict] = []
+        self._board_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # 板块 / 行业
     # ------------------------------------------------------------------
 
     def get_all_board_fund_flow(self) -> list[dict]:
-        """行业+概念板块行情与主力净流入 (结构化: code/name/change_pct/main_net_inflow...)."""
+        """行业+概念板块行情与主力净流入 (结构化: code/name/change_pct/main_net_inflow...).
+
+        多源容错已在 ``pipeline_data`` 内完成 (东财 push2 → 新浪)。本层额外提供:
+        - 进程内最短采样间隔 (BOARD_FLOW_MIN_INTERVAL), 防止缓存击穿时的硬撞;
+        - 全源失败时用上次成功的内存快照兜底, 避免上游选股链路被 0 条数据打断。
+        """
         def _fetch() -> list[dict]:
             from ai_stock.dataflows.pipeline_data import get_all_board_fund_flow
 
             return get_all_board_fund_flow()
 
-        return self.cache.get_or_fetch(
-            "board_fund_flow",
-            _fetch,
-            ttl=CACHE_TTL["fund_flow"],
-            category="fund_flow",
-            breaker=get_breaker("board_fund_flow"),
-            allow_fallback_stale=True,
-        ) or []
+        from .config import BOARD_FLOW_MIN_INTERVAL
+
+        with self._board_lock:
+            elapsed = time.monotonic() - self._board_last_fetch
+            if (
+                self._board_last_payload
+                and elapsed < BOARD_FLOW_MIN_INTERVAL
+                and not self.cache.get("board_fund_flow")
+            ):
+                # 间隔内且缓存已被清空: 直接复用上次成功快照, 不回源
+                return list(self._board_last_payload)
+        try:
+            payload = self.cache.get_or_fetch(
+                "board_fund_flow",
+                _fetch,
+                ttl=CACHE_TTL["fund_flow"],
+                category="fund_flow",
+                breaker=get_breaker("board_fund_flow"),
+                allow_fallback_stale=True,
+            ) or []
+        except Exception as exc:
+            logger.warning("board fund flow unavailable, use last snapshot: %s", exc)
+            payload = list(self._board_last_payload)
+        if payload:
+            with self._board_lock:
+                self._board_last_fetch = time.monotonic()
+                self._board_last_payload = list(payload)
+        return payload
 
     def get_top_industries(self, top_n: int = 5) -> list[dict]:
         """涨幅前 N ∪ 主力净流入前 N 的候选行业 (并集, 去重)."""
@@ -654,6 +686,8 @@ def compute_indicators(df) -> dict:
     """在 OHLCV DataFrame 上用 stockstats 计算全部指标, 返回末行 dict."""
     from stockstats import wrap
 
+    from .config import TREND_MA_WINDOW
+
     wrapped = wrap(df.copy())
     indicators = [
         "boll", "boll_ub", "boll_lb",
@@ -664,26 +698,54 @@ def compute_indicators(df) -> dict:
         "vwma", "mfi",
     ]
     out: dict = {}
+    # 指标序列长度: 背离/缩量判断需 ≥ 20 根, 原 5 根只够跟最近 4 天比 (P1-2)
+    series_len = max(30, TREND_MA_WINDOW + 5)
     for ind in indicators:
         try:
             series = wrapped[ind].astype(float)
             value = series.iloc[-1]
             out[ind] = None if value != value else round(float(value), 4)
-            # 额外携带近 5 日序列 (背离/缩量判断用)
+            # 额外携带近 N 日序列 (背离/缩量判断用)
             recent = [
-                round(float(v), 4) for v in series.tail(5) if v == v
+                round(float(v), 4) for v in series.tail(series_len) if v == v
             ]
             out[f"{ind}_series"] = recent
         except Exception:
             out[ind] = None
             out[f"{ind}_series"] = []
-    # 量能序列 (缩量判断)
     try:
-        out["volume_series"] = [round(float(v), 0) for v in df["Volume"].tail(5)]
-        out["close_series"] = [round(float(v), 2) for v in df["Close"].tail(5)]
-        # 高低序列给突破/缺口判断用, 需 ≥11 根 (AddPositionAgent 要求 >=11)
-        out["high_series"] = [round(float(v), 2) for v in df["High"].tail(21)]
-        out["low_series"] = [round(float(v), 2) for v in df["Low"].tail(21)]
+        close_list = [float(v) for v in df["Close"].tolist()]
+        volume_list = [float(v) for v in df["Volume"].tolist()]
+        out["close_series"] = [round(v, 2) for v in close_list[-series_len:]]
+        out["volume_series"] = [round(v, 0) for v in volume_list[-series_len:]]
+        # 高低序列给突破/缺口判断用, 需 ≥11 根 (AddPositionAgent 要求 >=11);
+        # 与 close/volume 保持同长度, 避免「用 5 根收盘价判断 11 根突破」的隐性 Bug
+        out["high_series"] = [
+            round(float(v), 2) for v in df["High"].tail(series_len)
+        ]
+        out["low_series"] = [
+            round(float(v), 2) for v in df["Low"].tail(series_len)
+        ]
+
+        # -- 趋势动量通道所需的均线/量能派生量 (P1-2) -----------------------
+        window = int(TREND_MA_WINDOW)
+        if len(close_list) >= window + 3:
+            ma_now = sum(close_list[-window:]) / window
+            ma_prev = sum(close_list[-window - 3:-3]) / window
+            out["ma20"] = round(ma_now, 4)
+            out["ma20_prev"] = round(ma_prev, 4)
+            out["ma20_slope"] = (
+                round(ma_now / ma_prev - 1.0, 5) if ma_prev > 0 else 0.0
+            )
+        if len(volume_list) >= window + 1:
+            base = volume_list[-window - 1:-1]   # 不含末根, 避免放量自我稀释
+            avg = sum(base) / len(base) if base else 0.0
+            out["vol_ma20_prev"] = round(avg, 2)
+            out["volume_ratio_20"] = (
+                round(volume_list[-1] / avg, 3) if avg > 0 else 0.0
+            )
+        if out.get("atr") and close_list and close_list[-1] > 0:
+            out["atr_pct"] = round(float(out["atr"]) / close_list[-1], 4)
     except Exception:
         pass
     return out

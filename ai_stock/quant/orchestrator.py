@@ -39,9 +39,13 @@ logger = logging.getLogger(__name__)
 STEP_DONE_EVENT = "step_done"
 STEP_FAILED_EVENT = "step_failed"
 
-# 事件去重窗口 (秒): 同 (flow_id, step) 在窗口内重复到达直接丢弃
-EVENT_DEDUPE_SECONDS = 600
+# 事件去重窗口 (秒): 同 (flow_id, step) 在窗口内重复到达直接丢弃。
+# 必须 ≥ 2× 最长流程时长 (selection=3600s): 两者相等时边界上必然失效 (A4)。
+EVENT_DEDUPE_SECONDS = 7200
 EVENT_DEDUPE_MAX_ENTRIES = 4096
+# 去重键的持久化前缀: 进程内 OrderedDict 重启即失效, 多 worker 也不共享;
+# 事件重复投递 (MQ 重试 / 重启补发) 在落库层再兜一次。
+_EVENT_KEY_PREFIX = "evt_seen:"
 
 
 # ---------------------------------------------------------------------------
@@ -546,10 +550,36 @@ class Orchestrator:
                 break
         if key in self._dedupe:
             return True
+        if self._db_seen(flow_id, step):
+            # 进程重启/多 worker 场景: 内存表已丢, 持久化标记仍能识别重复事件
+            self._dedupe[key] = now
+            return True
         self._dedupe[key] = now
+        self._db_mark(flow_id, step)
         if len(self._dedupe) > EVENT_DEDUPE_MAX_ENTRIES:
             self._dedupe.popitem(last=False)
         return False
+
+    @staticmethod
+    def _event_key(flow_id: str, step: str) -> str:
+        return f"{_EVENT_KEY_PREFIX}{flow_id}:{step}"
+
+    def _db_seen(self, flow_id: str, step: str) -> bool:
+        """落库去重查询 (A4). 任何异常都退化为「不重复」, 不能阻断事件处理."""
+        try:
+            return db_ops.cache_get(self._event_key(flow_id, step)) is not None
+        except Exception as exc:
+            logger.debug("dedupe db read failed: %s", exc)
+            return False
+
+    def _db_mark(self, flow_id: str, step: str) -> None:
+        try:
+            db_ops.cache_put(
+                self._event_key(flow_id, step), {"ts": time.time()},
+                category="event_dedupe", ttl_seconds=EVENT_DEDUPE_SECONDS,
+            )
+        except Exception as exc:
+            logger.debug("dedupe db write failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------

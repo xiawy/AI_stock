@@ -9,12 +9,19 @@ Reuses (unchanged) from the original project:
 New here: task_id registry, per-request config assembly (formerly the web UI's
 ``st.session_state``), and DB persistence via ``AnalysisTask`` rows.
 
+A5（任务状态表内化）：``ProgressTracker`` 仍是进程内对象（执行体），但所有
+对外的状态都来自 ``analysis_tasks`` 行 —— 见 ``analysis_state``。于是
+- 任意 worker 都能 ``snapshot`` / ``result`` 任意任务（不再 404）；
+- pause/resume/stop 跨进程通过 ``control`` 列下发；
+- 心跳超时才回收孤儿行，``uvicorn --workers N`` 不再互杀。
+
 Engine imports are lazy so this module (and the whole API) can load without
 the heavy analysis stack installed.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import uuid
@@ -26,6 +33,9 @@ from sqlalchemy.orm import Session
 
 from app.core.trading import bootstrap as bootstrap_engine
 from app.models import AnalysisTask
+from app.services import analysis_state
+
+logger = logging.getLogger(__name__)
 
 
 def _engine() -> SimpleNamespace:
@@ -45,11 +55,36 @@ def _engine() -> SimpleNamespace:
 
 
 class AnalysisTaskManager:
-    """In-memory registry of live trackers + DB synchronization on demand."""
+    """Registry of live trackers + DB-backed state (A5).
+
+    ``_tasks`` 只保存**本进程**正在执行的任务（执行体），对外可见的状态一律
+    以 ``analysis_tasks`` 行为准，因此多 worker 下任意实例都能回答任意任务。
+    """
 
     def __init__(self) -> None:
-        self._tasks: dict[str, ProgressTracker] = {}
+        self._tasks: dict[str, Any] = {}
         self._lock = threading.Lock()
+        self._owner = analysis_state.owner_id()
+        self._flushed: dict[str, str] = {}
+        self._hb_thread: threading.Thread | None = None
+        self._hb_stop = threading.Event()
+
+    # ── Session helpers ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _session():
+        """独立短事务 session（延迟导入，便于测试替换 SessionLocal）。"""
+        from app.core.database import SessionLocal
+
+        return SessionLocal()
+
+    def _local(self, task_id: str):
+        with self._lock:
+            return self._tasks.get(task_id)
+
+    def _load_row(self, task_id: str) -> AnalysisTask | None:
+        with self._session() as db:
+            return db.get(AnalysisTask, task_id)
 
     # ── Start / resume ───────────────────────────────────────────────────
 
@@ -107,9 +142,15 @@ class AnalysisTaskManager:
                 quick_think_llm=config["quick_think_llm"],
                 deep_think_llm=config["deep_think_llm"],
                 lookback_days=config["market_lookback_days"],
+                owner=self._owner,
             )
         )
         db.commit()
+
+        # 首帧进度立刻落库：其它 worker 从这一刻起就能读到该任务（而非等到第一
+        # 个心跳周期），也避免"行存在但 progress 为空"被误判为孤儿。
+        self._flush(task_id, tracker, force=True)
+        self.start_heartbeat()
         return task_id
 
     @staticmethod
@@ -202,17 +243,153 @@ class AnalysisTaskManager:
     # ── Registry access ──────────────────────────────────────────────────
 
     def get_tracker(self, task_id: str):
-        with self._lock:
-            tracker = self._tasks.get(task_id)
-        if tracker is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"任务不存在或已随服务重启丢失: {task_id}",
-            )
-        return tracker
+        """仅返回**本进程**持有的执行体；不存在时返回 None（不再直接 404）。
+
+        跨 worker 的场景下"没有 tracker"是正常状态，调用方应回落到 DB 状态。
+        """
+        return self._local(task_id)
 
     def snapshot(self, task_id: str) -> dict[str, Any]:
-        tracker = self.get_tracker(task_id)
+        """任务进度。执行体在本进程 → 实时；否则 → 读表里的进度快照。"""
+        tracker = self._local(task_id)
+        if tracker is not None:
+            payload = self._build_snapshot(task_id, tracker)
+            payload["state_source"] = "live"
+            return payload
+
+        row = self._load_row(task_id)
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"任务不存在: {task_id}",
+            )
+        return self._overlay_row(row.progress(), row, source="snapshot")
+
+    def result(self, task_id: str) -> dict[str, Any]:
+        tracker = self._local(task_id)
+        if tracker is not None:
+            if not tracker.is_complete:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="分析尚未完成" if tracker.is_running else "分析未成功完成，无结果可取",
+                )
+            payload = self._build_result(task_id, tracker)
+            payload["state_source"] = "live"
+            return payload
+
+        row = self._load_row(task_id)
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"任务不存在: {task_id}",
+            )
+        if row.status != "completed":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="分析尚未完成" if row.status in ("running", "paused") else "分析未成功完成，无结果可取",
+            )
+        payload = analysis_state.loads(row.result_json, {})
+        if not payload.get("final_state"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="该任务由旧版本创建，结果未持久化，无法在此进程读取",
+            )
+        payload.setdefault("task_id", row.id)
+        payload.setdefault("ticker", row.ticker)
+        payload.setdefault("trade_date", row.trade_date)
+        payload.setdefault("signal", row.signal)
+        payload["state_source"] = "snapshot"
+        return payload
+
+    # ── Lifecycle control ────────────────────────────────────────────────
+
+    def pause(self, task_id: str) -> bool:
+        tracker = self._local(task_id)
+        if tracker is not None:
+            if not tracker.pause():
+                return False
+            _engine().history.record_incomplete_task(
+                tracker.ticker,
+                tracker.trade_date,
+                status="paused",
+                completed_stages=tracker.completed_stages,
+            )
+            self._flush(task_id, tracker, force=True)
+            return True
+        return self._remote_control(task_id, analysis_state.CONTROL_PAUSE, ("running",))
+
+    def resume(self, task_id: str) -> bool:
+        tracker = self._local(task_id)
+        if tracker is not None:
+            if not tracker.resume():
+                return False
+            _engine().history.record_incomplete_task(
+                tracker.ticker,
+                tracker.trade_date,
+                status="running",
+                completed_stages=tracker.completed_stages,
+            )
+            self._flush(task_id, tracker, force=True)
+            return True
+        return self._remote_control(task_id, analysis_state.CONTROL_RESUME, ("paused",))
+
+    def stop(self, task_id: str) -> bool:
+        tracker = self._local(task_id)
+        if tracker is None:
+            return self._remote_control(
+                task_id, analysis_state.CONTROL_STOP, ("running", "paused"),
+            )
+        self._stop_tracker(tracker)
+        self._flush(task_id, tracker, force=True)
+        return True
+
+    def _stop_tracker(self, tracker) -> None:
+        if tracker.is_running:
+            tracker.request_stop()
+            _engine().history.clear_incomplete_task(tracker.ticker, tracker.trade_date)
+        else:
+            tracker.mark_stopped()
+
+    def _remote_control(self, task_id: str, control: str, allowed: tuple[str, ...]) -> bool:
+        """把控制指令写到表里，交给持有执行体的进程消费。"""
+        with self._session() as db:
+            row = db.get(AnalysisTask, task_id)
+            if row is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"任务不存在: {task_id}",
+                )
+            if row.status not in allowed:
+                return False
+            return analysis_state.set_control(db, task_id, control)
+
+    # ── DB sync (called when rows are read) ──────────────────────────────
+
+    def sync_task_row(self, db: Session, row: AnalysisTask) -> None:
+        """Refresh a DB row from its live tracker, if one exists locally."""
+        tracker = self._local(row.id)
+        if tracker is None:
+            return
+        self._flush(row.id, tracker)
+        db.refresh(row)  # 进度由独立短事务写入，刷新让调用方看到最新值
+
+    # ── Persistence internals (A5) ───────────────────────────────────────
+
+    @staticmethod
+    def _status_of(tracker) -> str:
+        if tracker.is_complete:
+            return "completed"
+        if tracker.error:
+            return "error"
+        if tracker.stop_requested or (
+            not tracker.is_running and not tracker.is_complete and not tracker.error
+        ):
+            return "stopped"
+        if tracker.is_paused:
+            return "paused"
+        return "running"
+
+    def _build_snapshot(self, task_id: str, tracker) -> dict[str, Any]:
         stages = [
             {
                 "id": s["id"],
@@ -242,13 +419,7 @@ class AnalysisTaskManager:
             "tokens_out": tracker.tokens_out,
         }
 
-    def result(self, task_id: str) -> dict[str, Any]:
-        tracker = self.get_tracker(task_id)
-        if not tracker.is_complete:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="分析尚未完成" if tracker.is_running else "分析未成功完成，无结果可取",
-            )
+    def _build_result(self, task_id: str, tracker) -> dict[str, Any]:
         label = _engine().stock_display.stock_display_label(
             tracker.ticker, tracker.final_state
         )
@@ -262,72 +433,140 @@ class AnalysisTaskManager:
             "final_state": tracker.final_state,
         }
 
-    # ── Lifecycle control ────────────────────────────────────────────────
+    @staticmethod
+    def _digest(payload: dict[str, Any]) -> str:
+        """进度指纹：内容不变时只刷心跳，不重写整段 JSON。"""
+        raw = analysis_state.dumps(payload).encode("utf-8", "ignore")
+        return hashlib.sha1(raw).hexdigest()
 
-    def pause(self, task_id: str) -> bool:
-        tracker = self.get_tracker(task_id)
-        ok = tracker.pause()
-        if ok:
-            _engine().history.record_incomplete_task(
-                tracker.ticker,
-                tracker.trade_date,
-                status="paused",
-                completed_stages=tracker.completed_stages,
-            )
-        return ok
-
-    def resume(self, task_id: str) -> bool:
-        tracker = self.get_tracker(task_id)
-        ok = tracker.resume()
-        if ok:
-            _engine().history.record_incomplete_task(
-                tracker.ticker,
-                tracker.trade_date,
-                status="running",
-                completed_stages=tracker.completed_stages,
-            )
-        return ok
-
-    def stop(self, task_id: str) -> bool:
-        tracker = self.get_tracker(task_id)
-        was_running = tracker.is_running
-        if was_running:
-            tracker.request_stop()
-            _engine().history.clear_incomplete_task(tracker.ticker, tracker.trade_date)
-        else:
-            tracker.mark_stopped()
-        return True
-
-    # ── DB sync (called when rows are read) ──────────────────────────────
-
-    def sync_task_row(self, db: Session, row: AnalysisTask) -> None:
-        """Refresh a DB row from its live tracker, if one exists."""
-        with self._lock:
-            tracker = self._tasks.get(row.id)
-        if tracker is None:
-            return
-        status_value = "running"
-        if tracker.is_complete:
-            status_value = "completed"
-        elif tracker.error:
-            status_value = "error"
-        elif tracker.stop_requested or (
-            not tracker.is_running and not tracker.is_complete and not tracker.error
-        ):
-            status_value = "stopped"
-        elif tracker.is_paused:
-            status_value = "paused"
-
-        changed = (
-            row.status != status_value
-            or (tracker.is_complete and row.signal != tracker.signal)
-            or (tracker.error and row.error != tracker.error)
+    def _flush(self, task_id: str, tracker, *, force: bool = False) -> None:
+        payload = self._build_snapshot(task_id, tracker)
+        digest = self._digest(payload)
+        status_value = self._status_of(tracker)
+        result_payload = (
+            self._build_result(task_id, tracker) if tracker.is_complete else None
         )
-        if changed:
-            row.status = status_value
-            row.signal = tracker.signal if tracker.is_complete else row.signal
-            row.error = tracker.error or ""
-            db.commit()
+        try:
+            with self._session() as db:
+                if digest == self._flushed.get(task_id) and not force:
+                    analysis_state.touch_heartbeat(db, [task_id], self._owner)
+                    return
+                analysis_state.persist_progress(
+                    db,
+                    task_id,
+                    payload,
+                    status=status_value,
+                    owner=self._owner,
+                    error=tracker.error or "",
+                    signal=tracker.signal if tracker.is_complete else None,
+                    result=result_payload,
+                )
+        except Exception as exc:  # 持久化失败不能打断分析主流程
+            logger.warning("task state persist failed for %s: %s", task_id, exc)
+            return
+        self._flushed[task_id] = digest
+
+    # ── Heartbeat / reaping / cross-process control ───────────────────────
+
+    def start_heartbeat(self) -> None:
+        """启动心跳线程（幂等）。无本地任务时它就是低频的孤儿巡检。"""
+        if self._hb_thread is not None and self._hb_thread.is_alive():
+            return
+        self._hb_stop.clear()
+        thread = threading.Thread(
+            target=self._heartbeat_loop,
+            name="analysis-task-heartbeat",
+            daemon=True,
+        )
+        self._hb_thread = thread
+        thread.start()
+
+    def _heartbeat_loop(self) -> None:
+        while not self._hb_stop.wait(analysis_state.HEARTBEAT_INTERVAL_SECONDS):
+            try:
+                self.flush_local()
+                self.reap_stale()
+            except Exception as exc:  # pragma: no cover - 线程不能因单次失败退出
+                logger.warning("analysis task heartbeat cycle failed: %s", exc)
+
+    def flush_local(self) -> int:
+        """落库本进程所有执行体，并消费跨进程控制指令。返回处理的任务数。"""
+        with self._lock:
+            items = list(self._tasks.items())
+        if not items:
+            return 0
+        task_ids = [task_id for task_id, _ in items]
+        try:
+            with self._session() as db:
+                pending = dict(analysis_state.load_controls(db, task_ids))
+        except Exception as exc:  # pragma: no cover
+            logger.warning("control poll failed: %s", exc)
+            pending = {}
+        for task_id, tracker in items:
+            control = pending.get(task_id)
+            if control:
+                self._apply_control(task_id, tracker, control)
+            self._flush(task_id, tracker)
+        return len(items)
+
+    def _apply_control(self, task_id: str, tracker, control: str) -> None:
+        """把表里的控制指令落到本地执行体，然后清空该指令。"""
+        try:
+            if control == analysis_state.CONTROL_PAUSE:
+                tracker.pause()
+            elif control == analysis_state.CONTROL_RESUME:
+                tracker.resume()
+            elif control == analysis_state.CONTROL_STOP:
+                self._stop_tracker(tracker)
+            else:
+                logger.warning("unknown task control %r for %s", control, task_id)
+        finally:
+            try:
+                with self._session() as db:
+                    analysis_state.clear_control(db, task_id, control)
+            except Exception as exc:  # pragma: no cover
+                logger.warning("clear control failed for %s: %s", task_id, exc)
+
+    def reap_stale(self, stale_after: int = analysis_state.STALE_AFTER_SECONDS) -> int:
+        """回收心跳超时的 running/paused 行；本进程活着的任务心跳新鲜，不受影响。"""
+        try:
+            with self._session() as db:
+                count = analysis_state.reap_stale_tasks(db, stale_after=stale_after)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("stale task reap failed: %s", exc)
+            return 0
+        if count:
+            logger.warning(
+                "Reaped %d analysis task(s) whose executor heartbeat expired", count
+            )
+        return count
+
+    @staticmethod
+    def _overlay_row(
+        payload: dict[str, Any], row: AnalysisTask, *, source: str,
+    ) -> dict[str, Any]:
+        """以表里的状态为准覆盖快照，避免旧进度声称"仍在运行"。"""
+        data = dict(payload or {})
+        data["task_id"] = row.id
+        data["ticker"] = data.get("ticker") or row.ticker
+        data["trade_date"] = data.get("trade_date") or row.trade_date
+        data["is_running"] = row.status == "running"
+        data["is_complete"] = row.status == "completed"
+        data["is_paused"] = row.status == "paused"
+        data["stop_requested"] = bool(data.get("stop_requested")) or row.status == "stopped"
+        data.setdefault("error", None)
+        if row.error:
+            data["error"] = row.error
+        data.setdefault("signal", row.signal)
+        data.setdefault("elapsed", 0.0)
+        data.setdefault("current_stage", "")
+        data.setdefault("stages", [])
+        data.setdefault("llm_calls", 0)
+        data.setdefault("tool_calls", 0)
+        data.setdefault("tokens_in", 0)
+        data.setdefault("tokens_out", 0)
+        data["state_source"] = source
+        return data
 
     # ── Resumable tasks (cross-restart, file-system based) ────────────────
 

@@ -32,7 +32,10 @@ from ..calendar_utils import count_trading_days
 from ..config import (
     BUY_POSITION_RATIO,
     SINGLE_POSITION_MAX_PCT,
+    STOP_LOSS_ATR_MULT,
+    STOP_LOSS_CONFIRM_BARS,
     STOP_LOSS_PCT,
+    TIME_STOP_DAYS_BY_STAGE,
     TIME_STOP_MIN_GAIN,
     TIME_STOP_TRADING_DAYS,
     TRAILING_STOP_FLOOR,
@@ -134,6 +137,12 @@ class TrendTrackingAgent(BaseAgent):
             count_trading_days(buy_dt.date() + timedelta(days=1), datetime.now().date())
             if buy_dt else 0
         )
+        # 建仓阶段 (HEAD/BODY) 决定时间止损窗口 (T5): 主线鱼头横盘蓄势期更长,
+        # 固定 5 日会把主升浪前的洗盘当成"无行情"清掉。
+        stage = str((context.get("plan") or {}).get("stage") or "BODY").upper()
+        time_stop_days = int(
+            TIME_STOP_DAYS_BY_STAGE.get(stage, TIME_STOP_TRADING_DAYS)
+        ) or TIME_STOP_TRADING_DAYS
 
         # 规则引擎上下文 (硬规则: stop_loss_5pct / time_stop_5days)
         rule_ctx = {
@@ -147,17 +156,34 @@ class TrendTrackingAgent(BaseAgent):
         triggered_rules = get_rule_engine().evaluate(rule_ctx)
         rule_actions = [r["action"] for r in triggered_rules]
 
-        # 止损信号: 连续两根 K 线收盘浮亏 ≥5% (§7.3.1, 不用盘中瞬时价)
-        stop_loss_signal = "sell_all" in rule_actions or (
-            len(close_series) >= 2
-            and close_series[-1] <= cost * (1 - STOP_LOSS_PCT)
-            and close_series[-2] <= cost * (1 - STOP_LOSS_PCT)
+        # 止损信号 (T4): 止损位 = min(成本 × (1-5%), 成本 - 2×ATR), 收盘确认
+        # STOP_LOSS_CONFIRM_BARS 根 (默认 1 根 + 盘中破位预警)。
+        # 原实现要求连续 2 根收盘破位, 急跌中实际亏损可达 8~12%。
+        if atr_ratio > 0 and atr > 0:
+            dynamic_stop = min(
+                cost * (1 - STOP_LOSS_PCT), cost - STOP_LOSS_ATR_MULT * atr,
+            )
+        else:
+            dynamic_stop = cost * (1 - STOP_LOSS_PCT)
+        confirm_bars = max(1, STOP_LOSS_CONFIRM_BARS)
+        recent_close = close_series[-confirm_bars:]
+        stop_confirmed = bool(
+            recent_close
+            and len(close_series) >= confirm_bars
+            and all(c <= dynamic_stop for c in recent_close)
         )
-        # 时间止损信号
-        time_stop_signal = "sell_all" in rule_actions and holding_trading_days >= TIME_STOP_TRADING_DAYS
+        stop_loss_signal = "sell_all" in rule_actions or stop_confirmed
+        # 盘中破位预警 (未收盘确认): 只留痕, 不触发卖出
+        intraday_breach = bool(
+            not stop_loss_signal
+            and current_close > 0
+            and quote.get("price", current_close) <= dynamic_stop
+        )
+        # 时间止损信号 (分层窗口)
+        time_stop_signal = "sell_all" in rule_actions and holding_trading_days >= time_stop_days
         if not time_stop_signal:
             time_stop_signal = (
-                holding_trading_days >= TIME_STOP_TRADING_DAYS
+                holding_trading_days >= time_stop_days
                 and max_gain_ratio < TIME_STOP_MIN_GAIN
                 and atr_ratio < 0.04
             )
@@ -182,8 +208,12 @@ class TrendTrackingAgent(BaseAgent):
             "max_gain_ratio": round(max_gain_ratio, 4),
             "atr_ratio": round(atr_ratio, 4),
             "holding_trading_days": holding_trading_days,
+            "time_stop_days": time_stop_days,
+            "stage_batch": stage,
             "trend": trend,
+            "dynamic_stop_price": round(dynamic_stop, 3),
             "stop_loss_signal": stop_loss_signal,
+            "intraday_breach": intraday_breach,
             "time_stop_signal": time_stop_signal,
             "triggered_rules": triggered_rules,
             "predicted_path": predicted[:300],
@@ -192,7 +222,8 @@ class TrendTrackingAgent(BaseAgent):
             "trend_tracked", symbol=symbol, task_id=task_id, flow_id=flow_id,
             reason=(
                 f"trend={trend}, 浮亏={loss_ratio:.1%}, 持有{holding_trading_days}交易日, "
-                f"止损信号={stop_loss_signal}, 时间止损={time_stop_signal}"
+                f"动态止损位={dynamic_stop:.2f}, 止损信号={stop_loss_signal}, "
+                f"盘中破位={intraday_breach}, 时间止损={time_stop_signal}"
             ),
             detail=result,
         )
@@ -321,7 +352,8 @@ class ReducePositionAgent(BaseAgent):
             action = "sell_all"
             reason = (
                 f"硬性止损: 浮亏 {trend_result.get('loss_ratio', 0):.1%} "
-                f"(连续两根 K 线确认)"
+                f"(收盘跌破动态止损位 {trend_result.get('dynamic_stop_price')}, "
+                f"ATR 挂钩)"
             )
         elif trend_result.get("time_stop_signal"):
             action = "sell_all"
@@ -532,7 +564,7 @@ class ExecutionUpdateAgent(BaseAgent):
             reason=f"加仓: {add_result.get('reason', '突破/超预期')}"[:200],
             flow_id=flow_id,
         )
-        check = pre_trade_check(order)
+        check = pre_trade_check(order, position_ratio=BUY_POSITION_RATIO)
         if not check.ok:
             self.log(
                 "add_risk_rejected", symbol=symbol, task_id=task_id,

@@ -142,6 +142,7 @@ def init_quant_db() -> None:
     _migrate_multi_user_schema(engine)
     _migrate_industry_board_schema(engine)
     _migrate_pool_radar_schema(engine)
+    _migrate_holding_industry_schema(engine)
     _drop_legacy_ranking_tables(engine)
     logger.debug("Quant tables ensured on %s", engine.url)
 
@@ -262,6 +263,28 @@ def _migrate_pool_radar_schema(engine) -> None:
                     f"ALTER TABLE quant_stock_pool_optional ADD COLUMN {col} {ddl}"
                 ))
                 logger.info("quant_stock_pool_optional migrated: +%s", col)
+
+
+def _migrate_holding_industry_schema(engine) -> None:
+    """存量库升级 (幂等): ``quant_stock_pool_holding`` 补 industry.
+
+    行业集中度硬约束 (T2) 需要知道每只持仓的行业归口; 旧库无该列, 补空串后
+    由风控回退到自选池 industry 字段。
+    """
+    if not str(engine.url).startswith("sqlite"):
+        return
+    insp = inspect(engine)
+    if "quant_stock_pool_holding" not in set(insp.get_table_names()):
+        return
+    cols = {c["name"] for c in insp.get_columns("quant_stock_pool_holding")}
+    if "industry" in cols:
+        return
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE quant_stock_pool_holding ADD COLUMN "
+            "industry VARCHAR(64) NOT NULL DEFAULT ''"
+        ))
+    logger.info("quant_stock_pool_holding migrated: +industry")
 
 
 def _migrate_multi_user_schema(engine) -> None:

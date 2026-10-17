@@ -63,8 +63,8 @@ class Settings(BaseSettings):
     project_root: str = str(PROJECT_ROOT)
 
     # ── Quant trading subsystem (V3.0) ──────────────────────────────────
-    # Starts MQ consumers + APScheduler with the app. The engine itself
-    # boots with global_trade_enable=0 (simulation only).
+    # Starts MQ consumers + APScheduler with the app. 默认允许模拟盘下单
+    # (global_trade_enable 种子为 1); 实盘另需 QUANT_LIVE_MODE/券商配置。
     quant_enabled: bool = True
 
     @property

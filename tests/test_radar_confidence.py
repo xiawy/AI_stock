@@ -385,7 +385,8 @@ class TestConfidenceMaintain:
         from ai_stock.quant import db_ops
         from ai_stock.quant.agents.radar import ConfidenceMaintainAgent
 
-        _upsert("600003", dyn=0.25, theme="")
+        # 阈值已回调至 0.25 (P1-4): 用 0.20 明确落在衰竭区
+        _upsert("600003", dyn=0.20, theme="")
         agent = _make_agent(ConfidenceMaintainAgent, FakeDataService())
         result = agent.handle(_sel_task())
         assert result["kicked"] == 1
@@ -417,16 +418,27 @@ class TestConfidenceMaintain:
 
 @pytest.mark.unit
 class TestWatchlistKicker:
+    """清理官需连续 KICK_CONFIRM_ROUNDS 次命中才真正移除 (P1-4).
+
+    单次 LLM 采样波动不得直接移出标的: 首次命中只留痕并跳过本轮买入。
+    """
+
     def test_kick_on_low_confidence(self, quant_env):
         from ai_stock.quant import db_ops
         from ai_stock.quant.agents.buy import WatchlistKickerAgent
 
         _upsert("700001", dyn=0.2, stage="BODY")
         agent = _make_agent(WatchlistKickerAgent, FakeDataService())
-        result = agent.handle(_buy_task({"symbol": "700001"}))
-        assert result["decision"] == "kicked"
-        assert result["abort"] is True
-        assert result["kicked_reason"] == "置信度衰竭"
+        first = agent.handle(_buy_task({"symbol": "700001"}))
+        # 第一轮: 命中但待二次确认, 不移除
+        assert first["decision"] == "kick_pending"
+        assert first["abort"] is True
+        assert db_ops.get_optional_stock("700001")["status"] == "active"
+        # 第二轮: 连续命中 → 真正移出
+        second = agent.handle(_buy_task({"symbol": "700001"}))
+        assert second["decision"] == "kicked"
+        assert second["abort"] is True
+        assert second["kicked_reason"] == "置信度衰竭"
         row = db_ops.get_optional_stock("700001")
         assert row["status"] == "removed"
         assert row["kicked_reason"] == "置信度衰竭"
@@ -437,9 +449,12 @@ class TestWatchlistKicker:
 
         _upsert("700002", dyn=0.6, stage="TAIL")
         agent = _make_agent(WatchlistKickerAgent, FakeDataService())
-        result = agent.handle(_buy_task({"symbol": "700002"}))
-        assert result["decision"] == "kicked"
-        assert result["kicked_reason"] == "鱼尾"
+        first = agent.handle(_buy_task({"symbol": "700002"}))
+        assert first["decision"] == "kick_pending"
+        assert first["kicked_reason"] == "鱼尾"
+        second = agent.handle(_buy_task({"symbol": "700002"}))
+        assert second["decision"] == "kicked"
+        assert second["kicked_reason"] == "鱼尾"
         assert db_ops.get_optional_stock("700002")["status"] == "removed"
 
     def test_kick_on_live_tail_detection(self, quant_env, monkeypatch):
@@ -450,6 +465,7 @@ class TestWatchlistKicker:
             "ai_stock.quant.agents.buy.is_tail_phase", lambda data, symbol: True,
         )
         agent = _make_agent(WatchlistKickerAgent, FakeDataService())
+        agent.handle(_buy_task({"symbol": "700003"}))
         result = agent.handle(_buy_task({"symbol": "700003"}))
         assert result["decision"] == "kicked"
         assert result["kicked_reason"] == "鱼尾"
@@ -703,8 +719,9 @@ class TestPositionOpenCoefficient:
             def to_dict(self):
                 return {}
 
-        def _fake_check(order, snapshot=None):
+        def _fake_check(order, snapshot=None, position_ratio=None):
             captured["qty"] = order.quantity
+            captured["position_ratio"] = position_ratio
             return _Chk()
 
         monkeypatch.setattr(buy_mod, "pre_trade_check", _fake_check)

@@ -36,8 +36,10 @@ ALL_QUEUES = (
 # 挑选自选: 每日 7:00 / 12:00 / 18:00 (盘前事件扫描 / 午间修订 / 盘后复盘)
 SELECTION_SCHEDULE = ["07:00", "12:00", "18:00"]
 
-# 自选买入: 开盘期间每 30 分钟 (guarded by trading-session check)
-BUY_SCAN_INTERVAL_MINUTES = 30
+# 自选买入: 开盘期间每 10 分钟 (与持仓扫描同频)
+# A 股缩量回踩等信号的有效窗口常只有 15~30 分钟, 30 分钟槽位会系统性错过
+# (P1-2/T8: 一天 8 次机会窗口 → 24 次)
+BUY_SCAN_INTERVAL_MINUTES = 10
 
 # 持仓维护: 开盘期间每 10 分钟
 HOLD_SCAN_INTERVAL_MINUTES = 10
@@ -68,10 +70,22 @@ BUY_POSITION_RATIO = 0.20
 MAX_HOLDING_COUNT = 3
 # 单只持仓市值占账户总资产上限 (软约束, 风控扫描用)
 SINGLE_POSITION_MAX_PCT = 0.30
-# 自选池观察期 (交易日), 到期自动 expired
+# 单次建仓比例的硬上限: 基础比例 × 最高动态系数。
+# pre_trade_check 用它做金额校验的兜底口径, 与 position_open 的
+# 「BUY_POSITION_RATIO × coef」共用同一事实来源 (P1-1: 原代码把上限
+# 写死成 20%, 导致 coef=1.2 的高置信标的 100% 被拒)。
+POSITION_RATIO_HARD_CAP = BUY_POSITION_RATIO * 1.2
+# 自选池观察期 (交易日), 到期自动 expired (BODY 档基准, 分层见下)
 OBSERVE_EXPIRE_TRADING_DAYS = 7
+# 观察期按阶段分层 (T5/P1-4): 主线鱼头给足 10 天, 鱼身 7 天, 鱼尾立即出池
+OBSERVE_EXPIRE_DAYS_BY_STAGE = {"HEAD": 10, "BODY": 7, "TAIL": 3}
 # 深度分析置信度低于该值不入池 (宁缺毋滥)
 MIN_ENTRY_CONFIDENCE = 6.0
+
+# 同一行业 (申万一级/板块归口) 的最大同时持仓数 (T2 行业集中度硬约束)。
+# 历史教训: 池内 8 只标的 5 只属军工产业链, 3 个持仓名额会一次性买成
+# 单 beta 押注。1 = 同行业只允许一只。
+INDUSTRY_CONCENTRATION_MAX = 1
 
 # ---------------------------------------------------------------------------
 # 选股集群: 自上而下 (宏观事件 → 生命周期 → 三大支柱) 筛选常量 (§7.1)
@@ -130,8 +144,17 @@ CONF_RADAR_WEIGHT = 0.4           # 雷达强度权重
 CONF_DECAY_FACTOR = 0.95          # 超期未验证的衰减系数
 CONF_REINFORCE_FACTOR = 1.1       # 主题今日再现雷达的增强系数
 CONF_DECAY_AFTER_DAYS = 5         # 距上次确认超过该天数才衰减
-CONF_KICK_THRESHOLD = 0.3         # 低于该值自动移出自选池 (置信度衰竭)
-CONF_BREAKOUT_THRESHOLD = 0.7     # 主线突破通道开启的最低 dyn_confidence
+CONF_KICK_THRESHOLD = 0.25        # 低于该值自动移出自选池 (置信度衰竭)
+# 主线突破通道开启的最低 dyn_confidence。
+# 0.7 与 dyn 实际分布严重不匹配 (实测池内中位数 0.42, 最高 0.74),
+# 等于把唯一一条「追强」通道永久关闭 (P1-2)。
+CONF_BREAKOUT_THRESHOLD = 0.55
+# 相对门槛: dyn 排名前该比例内也可进突破通道 (与绝对阈值取或)。
+# 绝对阈值会随雷达评分口径漂移, 相对排名更稳。
+CONF_BREAKOUT_TOP_PCT = 0.30
+# 清理官移除需连续命中的次数 (P1-4): LLM 单次采样波动不得直接移除标的,
+# 首次命中只告警留痕, 连续 N 次才真正移出。
+KICK_CONFIRM_ROUNDS = 2
 
 # 动态仓位系数 (在原 BUY_POSITION_RATIO 基础上叠加, 只影响总额度):
 # pool_conf>=POS_HIGH_CONF 且 stage=BODY -> 1.2; >=POS_MID_CONF -> 1.0; 否则 0.5
@@ -142,6 +165,60 @@ POS_MID_CONF = 0.5
 POS_COEF_HIGH = 1.2
 POS_COEF_MID = 1.0
 POS_COEF_LOW = 0.5
+
+# ---------------------------------------------------------------------------
+# 波动率目标仓位 (T1)
+# ---------------------------------------------------------------------------
+# 固定「可用资金 × 20%」的问题是: 同样 20% 仓位, 买年化波动 40% 的票和 25% 的票
+# 承担的风险完全不同。改为按风险预算定量:
+#   qty = (总资产 × RISK_BUDGET_PER_TRADE) / (STOP_LOSS_ATR_MULT × ATR)
+# 使每笔「触发止损时的亏损金额」趋同 (默认 1% 总资产), 再由资金上限二次约束。
+VOL_TARGET_SIZING_ENABLED = True
+RISK_BUDGET_PER_TRADE = 0.01      # 单笔风险预算 = 总资产 × 1%
+# 组合级风险预算总闸: 账户回撤触及阈值 → 仓位系数打对折 (从源头降杠杆)
+PORTFOLIO_DD_COEF_THRESHOLD = 0.06    # 回撤 6% 起
+PORTFOLIO_DD_COEF_FACTOR = 0.5        # 系数 × 0.5
+
+# ---------------------------------------------------------------------------
+# 技术入场通道 (P1-2: 补「趋势跟随」维度)
+# ---------------------------------------------------------------------------
+# 原三个信号 (BOLL 缩量止跌 / MACD 底背离 / 缺口回踩缩量) 全部是均值回归型,
+# 在单边上涨行情里永远等不到缩量回踩 → 实测池内 0/7 命中。新增趋势动量通道:
+# close > MA20 且 MA20 上翘 且 量能 > 1.2×20日均量 且 RSI ∈ [50, 75] (追强不追妖)。
+TREND_MA_WINDOW = 20
+TREND_MA_SLOPE_MIN = 0.002       # MA20 相对 3 日前的最小上翘幅度 (0.2%)
+TREND_VOLUME_RATIO = 1.2         # 末根量能 / 20 日均量
+TREND_RSI_MIN = 50.0
+TREND_RSI_MAX = 75.0
+# MACD 背离的「新低」比较窗口 (根)。原实现只在 5 根里比较 ≈ 只跟最近 4 天比,
+# 不构成背离语义。
+MACD_DIVERGENCE_WINDOW = 25
+
+# ---------------------------------------------------------------------------
+# 止损 / 时间止损 (T4/T5)
+# ---------------------------------------------------------------------------
+# ATR 止损: 实际止损位 = min(成本 × (1-5%), 成本 - 2×ATR), 让每笔最大亏损
+# 与波动率挂钩; 确认根数从 2 降为 1 (原 2 根确认在急跌中实际亏损可达 8~12%)
+STOP_LOSS_ATR_MULT = 2.0
+STOP_LOSS_CONFIRM_BARS = 1
+# 分层时间止损 (交易日): HEAD 给足 10 天, BODY 7 天; TAIL 0 = 不单独计时
+TIME_STOP_DAYS_BY_STAGE = {"HEAD": 10, "BODY": 7, "TAIL": 0}
+
+# ---------------------------------------------------------------------------
+# 大盘择时门 (T3)
+# ---------------------------------------------------------------------------
+# 沪深300 收盘 > MA20 且 MA20 上翘 → risk_on, 否则只减不加 (禁止新建仓)。
+# 熊市里信号同样会触发, 没有这一层系统会持续抄底。
+MARKET_TIMING_ENABLED = True
+MARKET_INDEX_CODE = "000300"
+MARKET_INDEX_PREFIX = "sh"
+MARKET_MA_WINDOW = 20
+MARKET_REGIME_TTL = 1800         # 30 分钟缓存 (与买扫周期同量级)
+
+# ---------------------------------------------------------------------------
+# 交易标的硬过滤 (T9)
+# ---------------------------------------------------------------------------
+NEW_LISTING_MIN_BARS = 60        # 上市不足 60 个交易日的次新股不建仓
 
 # 阶段批次 stage_batch: HEAD(鱼头)/BODY(鱼身)/TAIL(鱼尾)
 STAGE_HEAD_CHANGE_PCT_MAX = 15.0  # 新主题且当日涨幅<此值 -> HEAD, 否则 BODY
@@ -180,7 +257,9 @@ MQ_BACKEND = os.getenv("QUANT_MQ_BACKEND", "auto")  # auto / redis / sqlite
 REDIS_URL = os.getenv("QUANT_REDIS_URL", "redis://localhost:6379/1")
 MAX_ATTEMPTS = 3          # 每任务最大重试次数
 LOCK_TTL_SECONDS = 600    # 任务抢占锁 TTL (processing 超时判定)
-IDEMPOTENT_TTL = 3600     # 调度幂等 key TTL
+# 调度/事件幂等 key TTL: 必须 ≥ 2× 最长流程时长 (selection=3600s)。
+# 旧值 3600 与 selection 流程超时相等, 边界上必然失效 (A4)。
+IDEMPOTENT_TTL = 7200
 RETRY_BASE_DELAY = 30     # 指数退避基础延迟 (秒)
 SWEEP_INTERVAL = 30       # 超时巡检线程周期 (秒)
 DELAYED_POLL_INTERVAL = 0.2  # 延迟任务迁移线程 sleep (秒)
@@ -208,6 +287,36 @@ MEMORY_CACHE_MAXSIZE = 512
 
 CIRCUIT_FAILURE_THRESHOLD = 3   # 连续失败 N 次打开熔断
 CIRCUIT_OPEN_SECONDS = 300      # 熔断窗口 5min, 之后 half-open 试探
+
+# ---------------------------------------------------------------------------
+# 数据源健康矩阵 + 退避 (P0-1 / A1)
+# ---------------------------------------------------------------------------
+# 单一供应商 (push2 clist) 被反爬封禁 6 周无人知晓, 因此:
+# - 每个 (源, 接口) 记录成功率 / P95 延迟 / 最近成功时间, 供日报与告警消费
+# - 连续失败 3 次进入指数退避 (5/15/60 min), 不再每 10 分钟硬撞 (硬撞只会加重封禁)
+DATA_SOURCE_FAIL_THRESHOLD = 3
+DATA_SOURCE_BACKOFF_STEPS = (300, 900, 3600)
+DATA_HEALTH_SUCCESS_RATE_ALERT = 0.5   # 成功率跌破 50% 持续告警
+DATA_HEALTH_LATENCY_WINDOW = 50        # 每接口保留的样本数
+# 板块列表最短采样间隔 (秒): 进程内二次护栏, 叠加缓存 TTL 一起限流
+BOARD_FLOW_MIN_INTERVAL = 300
+
+# ---------------------------------------------------------------------------
+# 业务级 SLO 告警 (A3: 告警只落库等于没有告警)
+# ---------------------------------------------------------------------------
+# 外部通道: 企业微信群机器人 / 通用 webhook (POST JSON {"text": "..."} )
+# 未配置时仅落库 + 日志 (保持原行为, 不阻塞)
+ALERT_WEBHOOK_URL = os.getenv("QUANT_ALERT_WEBHOOK", "").strip()
+ALERT_WEBHOOK_TIMEOUT = 5
+SLO_SCAN_EMPTY_STREAK = 3        # industry_scan 连续 N 次空 → WARNING
+SLO_NO_TRADE_DAYS = 5            # 连续 N 个交易日无成交 → CRITICAL
+SLO_SELECT_FALLBACK_RATIO = 0.5   # 选股降级占比 > 50% → WARNING
+
+# ---------------------------------------------------------------------------
+# 数据归档 (A6)
+# ---------------------------------------------------------------------------
+DECISION_LOG_RETENTION_DAYS = 90   # 决策日志保留天数 (此前永不清理)
+FLOW_STATE_RETENTION_DAYS = 30     # 终态流程保留天数 (此前只增不减)
 
 # ---------------------------------------------------------------------------
 # News vector store
@@ -248,17 +357,52 @@ SYSTEM_USER = "system"
 INITIAL_CAPITAL_ENV = "QUANT_INITIAL_CAPITAL"
 CAPITAL_FILE_ENV = "QUANT_CAPITAL_FILE"
 
-# 实施步骤 §15-1: 初始化后 global_trade_enable=0 默认关闭交易。
+# 实施步骤 §15-1: 初始化后 global_trade_enable=1 (允许模拟盘下单)。
+# 历史教训: 9 月首装的库按 "0" 落库, 之后代码把默认值改成 "1", 但种子语义是
+# 「已存在的键一律不覆盖」→ 新默认值永远到不了存量库, 直接导致 6 周 0 成交。
+# 因此默认值变更必须走下面的 CONFIG_MIGRATIONS (A2/P0-2)。
 SYSTEM_CONFIG_SEED = {
     "global_trade_enable": ("1", "全局交易开关: 0=禁止全部下单(一键熔断), 1=允许"),
     "max_daily_orders": ("50", "单日最大委托笔数"),
-    "max_order_value": ("200000", "单笔最大委托金额(元)"),
+    # 250000 = 初始资金 25%, 与「基础 20% × 最高系数 1.2 = 24%」的仓位公式
+    # 留 1% 缓冲; 原 200000 与高置信档位直接矛盾 (P1-1)
+    "max_order_value": ("250000", "单笔最大委托金额(元)"),
     "allowed_symbols": ("", "允许交易的股票白名单(逗号分隔, 空=不限制)"),
     "initial_cash": ("1000000", "模拟盘初始资金(元)"),
     "max_drawdown_pct": ("0.20", "账户总回撤阈值(触发冻结新建仓)"),
     "max_daily_loss_pct": ("0.03", "单日最大亏损阈值(触发冻结新建仓)"),
     "trade_frozen": ("0", "账户级风控冻结: 1=只允许卖出, 0=正常"),
+    # 大盘择时门: 1=开启 (沪深300 走强才允许新建仓)
+    "market_timing_enable": ("1", "大盘择时门: 1=开启, 0=关闭 (只减不加)"),
 }
+
+# ---------------------------------------------------------------------------
+# 配置 schema 版本与迁移表 (A2)
+# ---------------------------------------------------------------------------
+# 存储位置: quant_system_config['config_schema_version']
+# 执行语义: 启动时若库版本 < CONFIG_SCHEMA_VERSION, 按 version 升序执行,
+# 且**只迁移「值仍是旧默认值」的键** —— 运维手工改过的值绝不动。
+CONFIG_SCHEMA_KEY = "config_schema_version"
+CONFIG_SCHEMA_VERSION = 3
+
+CONFIG_MIGRATIONS: tuple[dict, ...] = (
+    {
+        "version": 2,
+        "description": "默认放开模拟盘交易开关, 并放宽单笔金额上限与仓位公式对齐",
+        "changes": (
+            # (key, 旧默认值集合, 新值)
+            ("global_trade_enable", ("0",), "1"),
+            ("max_order_value", ("200000",), "250000"),
+        ),
+    },
+    {
+        "version": 3,
+        "description": "新增大盘择时门开关 (存量库补键)",
+        "changes": (
+            ("market_timing_enable", ("",), "1"),
+        ),
+    },
+)
 
 # Quant 数据库 URL (独立 SQLite; 测试/独立部署可用环境变量覆盖)
 QUANT_DB_URL_ENV = "QUANT_DB_URL"

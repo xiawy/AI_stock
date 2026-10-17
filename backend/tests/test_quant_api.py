@@ -33,12 +33,12 @@ def test_quant_requires_auth(client, quant_ready):
     assert resp.status_code == 401
 
 
-def test_status_seeded_with_trade_switch_off(client, auth_headers, quant_ready):
+def test_status_seeded_with_trade_switch_on(client, auth_headers, quant_ready):
     resp = client.get("/api/quant/status", headers=auth_headers)
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    # §15-1: 初始化后全局交易开关默认关闭
-    assert data["config"]["global_trade_enable"] == "0"
+    # P0-2: 初始化后全局交易开关默认开启 (模拟盘), 由配置迁移保证存量库也能同步
+    assert data["config"]["global_trade_enable"] == "1"
     assert data["pending_tasks"] == 0
     assert "optional_pool_active" in data
 
@@ -143,7 +143,7 @@ def test_daily_report_generated(client, auth_headers, quant_ready):
     resp = client.get("/api/quant/daily-report", headers=auth_headers)
     assert resp.status_code == 200, resp.text
     report = resp.json()["report"]
-    assert report["global_trade_enable"] == "0"
+    assert report["global_trade_enable"] == "1"
     assert report["trades"]["count"] == 0
 
 

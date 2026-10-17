@@ -33,36 +33,18 @@ logger = logging.getLogger(__name__)
 
 
 def _reap_orphaned_tasks() -> None:
-    """Freeze tasks left running/paused by a previous process.
+    """回收「心跳已过期」的 running/paused 任务行。
 
-    Trackers live in process memory; after a restart no tracker exists for
-    those rows, so ``sync_task_row`` would never refresh them and the UI
-    would show them as alive forever. Single-worker deployments only
-    (the in-memory registry is not shared across workers anyway).
+    A5 之后判定依据是 ``heartbeat_at`` 而非"启动即冻结"：多 worker 部署下
+    其它 worker 上活着的任务心跳新鲜，不能被本进程启动时误杀。真正的孤儿
+    （上个进程已退出）会在心跳阈值过后由启动巡检与周期巡检统一回收。
     """
-    from datetime import datetime, timezone
+    try:
+        from app.services.analysis_service import task_manager
 
-    from sqlalchemy import update
-
-    from app.core.database import SessionLocal
-    from app.models.analysis_task import AnalysisTask
-
-    with SessionLocal() as session:
-        result = session.execute(
-            update(AnalysisTask)
-            .where(AnalysisTask.status.in_(["running", "paused"]))
-            .values(
-                status="stopped",
-                error="服务重启，任务已中断；可从历史记录重新发起分析",
-                updated_at=datetime.now(timezone.utc),
-            )
-        )
-        session.commit()
-        if result.rowcount:
-            logger.warning(
-                "Reaped %d orphaned analysis task(s) left running/paused by a previous process",
-                result.rowcount,
-            )
+        task_manager.reap_stale()
+    except Exception as exc:  # pragma: no cover - 回收失败不应阻断启动
+        logger.warning("Reap orphaned analysis tasks failed (non-fatal): %s", exc)
 
 
 def _reap_orphaned_snapshots() -> None:
@@ -111,6 +93,15 @@ async def lifespan(_: FastAPI):
         yield
         return
 
+    # A5: 心跳线程（顺带做孤儿巡检）。任何 worker 起的任务都要能被别人看到，
+    # 因此每个 worker 都跑；它同时负责消费跨进程 pause/resume/stop 指令。
+    try:
+        from app.services.analysis_service import task_manager
+
+        task_manager.start_heartbeat()
+    except Exception as exc:
+        logger.warning("Analysis task heartbeat init failed (non-fatal): %s", exc)
+
     # Data retention: 诊股 > 20 days / 热股榜·新闻榜 > 70 days. One pass now
     # (background thread) and daily at 03:30 afterwards.
     try:
@@ -141,8 +132,9 @@ async def lifespan(_: FastAPI):
         )
 
     # Start the quant trading subsystem (V3.0): MQ consumers + scheduler +
-    # FSM recovery. Ships with global_trade_enable=0 (simulation only) until
-    # an operator flips the switch; failure is non-fatal for the API.
+    # FSM recovery. 默认允许模拟盘下单 (P0-2: global_trade_enable 种子改为 1,
+    # 并由配置迁移下发到存量库); 实盘需另行开启 QUANT_LIVE_MODE。
+    # 启动失败对 API 非致命。
     try:
         if settings.quant_enabled:
             from app.services.quant_service import start_quant_service

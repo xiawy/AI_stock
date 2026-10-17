@@ -30,14 +30,19 @@ def quant_env(tmp_path, monkeypatch):
 class TestQuantService:
     def test_start_seeds_config_and_rules_then_stop(self, quant_env):
         from ai_stock.quant import db_ops
+        from ai_stock.quant.config import CONFIG_SCHEMA_KEY, CONFIG_SCHEMA_VERSION
         from ai_stock.quant.service import QuantService
 
         service = QuantService(with_scheduler=False)
         service.start()
         try:
-            # §15-1: 初始化后全局交易开关默认关闭
-            assert db_ops.get_config_value("global_trade_enable") == "0"
+            # 默认允许模拟盘下单 (P0-2): 原默认 0 是「6 周 0 成交」的直接原因。
+            # 实盘仍需 QUANT_LIVE_MODE=1 且人工开闸。
+            assert db_ops.get_config_value("global_trade_enable") == "1"
             assert db_ops.get_config_value("max_daily_orders") == "50"
+            assert db_ops.get_config_value("max_order_value") == "250000"
+            # 配置 schema 版本已写入 (迁移机制的事实来源)
+            assert db_ops.get_config_value(CONFIG_SCHEMA_KEY) == str(CONFIG_SCHEMA_VERSION)
             # §10.1: 种子规则已写入
             rule_ids = {r["rule_id"] for r in db_ops.get_rules()}
             assert {"stop_loss_5pct", "time_stop_5days", "trailing_stop"} <= rule_ids
@@ -47,7 +52,7 @@ class TestQuantService:
 
             status = service.status()
             assert status["mq_backend"] == "sqlite"
-            assert status["global_trade_enable"] == "0"
+            assert status["global_trade_enable"] == "1"
         finally:
             service.stop()
         assert not service.started
@@ -121,10 +126,10 @@ class TestSchedulerTriggers:
         now = datetime(2026, 8, 28, 9, 45)  # 交易时段内
         first = trigger_buy_scan(now=now, force=True)
         assert first is not None
-        # 同一 30 分钟槽位重复触发直接丢弃 (§5.3 调度幂等)
-        assert trigger_buy_scan(now=datetime(2026, 8, 28, 9, 50), force=True) is None
+        # 同一扫描槽位 (10 分钟, P1-2/T8 由 30 分钟下调) 重复触发直接丢弃
+        assert trigger_buy_scan(now=datetime(2026, 8, 28, 9, 49), force=True) is None
         # 下一个槽位重新入队
-        assert trigger_buy_scan(now=datetime(2026, 8, 28, 10, 0), force=True) is not None
+        assert trigger_buy_scan(now=datetime(2026, 8, 28, 9, 50), force=True) is not None
 
     def test_selection_trigger_idempotent(self, quant_env):
         from ai_stock.quant.scheduler import trigger_selection

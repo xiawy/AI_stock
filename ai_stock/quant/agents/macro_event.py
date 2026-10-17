@@ -135,8 +135,10 @@ class MacroEventAgent(BaseAgent):
         if not lines:
             return [], []
 
-        # 关键词知识库预检: 先粗筛行业, 再将匹配结果(而非原始新闻)喂给 LLM 排序
-        kb_hits = match_industries("\n".join(corpus_parts))
+        # 关键词知识库预检: 先粗筛行业, 再将匹配结果(而非原始新闻)喂给 LLM 排序;
+        # 叠加动态板块名层 (实时板块全集), 东财新上线题材板无需改 KB 即可命中
+        board_names = self._live_board_names()
+        kb_hits = match_industries("\n".join(corpus_parts), board_names)
         kb_hint = (
             "本地知识库已预检出以下候选行业 (有关键词依据, 优先从中选取, "
             "也可补充确有依据的行业): "
@@ -155,8 +157,12 @@ class MacroEventAgent(BaseAgent):
             "- policy_support: 既有方向的政策加码/落地\n"
             "- tech_breakthrough: 既有产业的关键技术突破\n"
             "- routine: 常规行业动态\n"
-            "对每个事件，映射其最直接利好的 A 股行业名称 "
-            "(如: 碳中和→新能源/电力; AI 大模型→半导体/通信/计算机)。\n"
+            "对每个事件，映射其最直接利好的 A 股行业/概念板块名称，尽量精确到细分板块 "
+            "(如: 碳中和→新能源/电力; AI 大模型/智能体→人工智能/算力概念/AIGC概念; "
+            "芯片/晶圆/光刻机→半导体/国产芯片/半导体设备)。\n"
+            "粒度纪律: 泛 AI 应用/数字消费类新闻不要笼统映射到'半导体'，"
+            "应映射到人工智能/算力概念等贴题板块; 仅当新闻明确涉及芯片/晶圆/"
+            "半导体设备或材料时才映射半导体相关板块。\n"
             "impact_industries 必须有新闻原文依据, 禁止凭联想输出无关行业。\n"
             f"{kb_hint}"
             "influence_score 按 1-10 评估事件的持续性、覆盖广度与市场影响力。\n"
@@ -179,7 +185,7 @@ class MacroEventAgent(BaseAgent):
             # 逐事件知识库交叉收敛: 剔除无关键词依据的幻觉映射 (库无命中时保留兜底)
             verified = reconcile(
                 list(e.impact_industries),
-                match_industries(f"{e.title} {e.description}"),
+                match_industries(f"{e.title} {e.description}", board_names),
             )
             if not verified:
                 continue
@@ -187,6 +193,24 @@ class MacroEventAgent(BaseAgent):
             events.append(e)
         events.sort(key=lambda e: e.influence_score, reverse=True)
         return events, kb_hits
+
+    def _live_board_names(self) -> list[str]:
+        """实时板块全集名 (行业 + 概念), 供动态板块名匹配; 失败/空时降级为空.
+
+        板块全集本就每日实时抓取 (非写死), 这里复用 DataService 缓存, 使东财新
+        上线题材板一经出现即可被新闻直接命中, 无需为其新增 KB 关键词。
+        """
+        try:
+            return [
+                str(b.get("name", "")).strip()
+                for b in self.data.get_all_industries()
+                if b.get("name")
+            ]
+        except Exception as exc:
+            logger.warning(
+                "Live board names unavailable; KB dynamic layer off: %s", exc,
+            )
+            return []
 
     @staticmethod
     def _slim_event(e: MacroEvent) -> dict:

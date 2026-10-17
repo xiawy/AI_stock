@@ -27,19 +27,32 @@ from ..broker import (
     OrderType,
     calc_fee,
     get_broker,
-    round_lot,
 )
 from ..config import (
     BUY_POSITION_RATIO,
     CONF_BREAKOUT_THRESHOLD,
+    CONF_BREAKOUT_TOP_PCT,
     CONF_DEFAULT,
     CONF_KICK_THRESHOLD,
+    KICK_CONFIRM_ROUNDS,
+    MACD_DIVERGENCE_WINDOW,
     MAX_HOLDING_COUNT,
+    OBSERVE_EXPIRE_DAYS_BY_STAGE,
     POS_COEF_HIGH,
     POS_COEF_LOW,
     POS_COEF_MID,
     POS_HIGH_CONF,
     POS_MID_CONF,
+    PORTFOLIO_DD_COEF_FACTOR,
+    PORTFOLIO_DD_COEF_THRESHOLD,
+    RISK_BUDGET_PER_TRADE,
+    STOP_LOSS_ATR_MULT,
+    STOP_LOSS_PCT,
+    TREND_MA_SLOPE_MIN,
+    TREND_RSI_MAX,
+    TREND_RSI_MIN,
+    TREND_VOLUME_RATIO,
+    VOL_TARGET_SIZING_ENABLED,
 )
 from ..llm_helper import structured_invoke
 from ..market_utils import is_tail_phase
@@ -82,6 +95,10 @@ class VerificationReport(BaseModel):
     passed: bool = False
     reason: str = ""
     major_bear_resolved: bool = False   # 重大利空是否已消除
+    # 未消除利空的风险等级 (low/medium/high) — P1-3: 原实现把
+    # major_bear_resolved 当硬性 AND, 只要利空清单里还剩一条就拒绝,
+    # 使「双保险」退化成「双闸门」(63 次拒绝)。改为评分项: 仅 high 级拒绝。
+    bear_risk_level: str = "medium"
     bull_scenario: str = ""
     range_scenario: str = ""
     bear_scenario: str = ""
@@ -104,6 +121,13 @@ def handle_buy_scan(task: dict) -> dict:
 
     holdings = {h["symbol"] for h in db_ops.get_holdings()}
     pool = db_ops.get_optional_pool("active")
+    # 名额有限 (3 个持仓位) 时按动态置信度降序取前几只, 而不是按池子插入顺序:
+    # 原实现「先入池先买」会让最早入池但已衰减的标的占掉全部名额。
+    pool = sorted(
+        pool,
+        key=lambda s: float(s.get("dyn_confidence", CONF_DEFAULT) or CONF_DEFAULT),
+        reverse=True,
+    )
     started: list[str] = []
     for stock in pool:
         symbol = stock.get("symbol", "")
@@ -197,6 +221,23 @@ class WatchlistKickerAgent(BaseAgent):
         self, symbol: str, task_id: str, flow_id: str,
         flow_type: str, step: str, *, kicked_reason: str, reason: str,
     ) -> dict:
+        # 连续确认 (P1-4): 单次判定 (尤其 LLM 采样波动) 不移除标的,
+        # 首次命中只留痕并跳过本轮买入, 连续 KICK_CONFIRM_ROUNDS 次才真正移出。
+        if not self._kick_confirmed(symbol, kicked_reason):
+            self.log(
+                "kick_pending", symbol=symbol, task_id=task_id, flow_id=flow_id,
+                reason=f"清理官命中({kicked_reason})待二次确认: {reason}",
+            )
+            result = {
+                "decision": "kick_pending", "passed": False, "abort": True,
+                "kicked_reason": kicked_reason,
+                "abort_reason": (
+                    f"清理官命中 {kicked_reason}, 待连续 {KICK_CONFIRM_ROUNDS} 次确认, "
+                    "本轮跳过买入"
+                ),
+            }
+            self.report(flow_type, flow_id, step, result)
+            return result
         db_ops.update_optional_status(
             symbol, "removed",
             remove_reason=kicked_reason, kicked_reason=kicked_reason,
@@ -212,6 +253,21 @@ class WatchlistKickerAgent(BaseAgent):
         }
         self.report(flow_type, flow_id, step, result)
         return result
+
+    @staticmethod
+    def _kick_confirmed(symbol: str, kicked_reason: str) -> bool:
+        """是否已连续命中足够轮次 (决策日志即事实来源, 无需新增表)."""
+        if KICK_CONFIRM_ROUNDS <= 1:
+            return True
+        try:
+            prior = db_ops.get_decisions(
+                limit=KICK_CONFIRM_ROUNDS + 3, agent="watchlist_kicker",
+                symbol=symbol, decision="kick_pending",
+            )
+        except Exception:
+            return True   # 查询失败不退化为「永不移除」
+        hits = sum(1 for d in prior if kicked_reason in (d.get("reason") or ""))
+        return hits + 1 >= KICK_CONFIRM_ROUNDS
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +350,24 @@ class LogicCollapseAgent(BaseAgent):
             return result
 
         if check.collapsed:
+            # 连续确认 (P1-4): LLM 单次采样波动不得直接移除标的。
+            # 硬规则 (鱼尾/年线破位) 仍是立即移除; 只有 LLM 判定需要两轮确认。
+            if not self._collapse_confirmed(symbol):
+                self.log(
+                    "collapse_pending", symbol=symbol, task_id=task_id,
+                    flow_id=flow_id,
+                    reason=f"LLM 判定逻辑崩塌待二次确认: {check.reason[:200]}",
+                    detail=check.model_dump(),
+                )
+                result = {
+                    "decision": "collapse_pending", "llm_check": "pending",
+                    "note": check.reason[:200], "abort": True,
+                    "abort_reason": (
+                        f"逻辑崩塌待连续 {KICK_CONFIRM_ROUNDS} 次确认, 本轮跳过买入"
+                    ),
+                }
+                self.report(flow_type, flow_id, step, result)
+                return result
             return self._collapse(
                 symbol, task_id, flow_id, flow_type, step,
                 f"{check.reason} (证据: {check.evidence[:200]})",
@@ -306,6 +380,20 @@ class LogicCollapseAgent(BaseAgent):
         }
         self.report(flow_type, flow_id, step, result)
         return result
+
+    @staticmethod
+    def _collapse_confirmed(symbol: str) -> bool:
+        """LLM 崩塌判定是否已连续命中足够轮次."""
+        if KICK_CONFIRM_ROUNDS <= 1:
+            return True
+        try:
+            prior = db_ops.get_decisions(
+                limit=KICK_CONFIRM_ROUNDS + 3, agent="logic_guard",
+                symbol=symbol, decision="collapse_pending",
+            )
+        except Exception:
+            return True
+        return len(prior) + 1 >= KICK_CONFIRM_ROUNDS
 
     def _collapse(
         self, symbol: str, task_id: str, flow_id: str,
@@ -332,7 +420,12 @@ class LogicCollapseAgent(BaseAgent):
 # ---------------------------------------------------------------------------
 
 class TechSignalAgent(BaseAgent):
-    """技术买入信号检测: BOLL 中轨缩量止跌 / MACD 底背离 / 回踩缺口缩量."""
+    """技术买入信号检测: 均值回归 (BOLL/MACD/缺口) + 趋势动量 (P1-2).
+
+    原实现三种形态全部是「缩量回踩抄底」型, 在单边上涨行情里永远等不到入场点
+    (实测池内 0/7 命中)。新增趋势跟随通道后, 技术面覆盖「趋势 / 动量 / 波动率」
+    三个正交维度, 而不是三个高度相关的回调形态。
+    """
 
     agent_name = "tech_signal"
 
@@ -356,20 +449,27 @@ class TechSignalAgent(BaseAgent):
             "boll_mid_shrink_stop": self._boll_mid_shrink_stop(indicators),
             "macd_divergence": self._macd_divergence(indicators),
             "gap_pullback_shrink": self._gap_pullback_shrink(indicators),
+            # 趋势动量: 追强通道, 与上面三个回调形态正交
+            "trend_momentum": self._trend_momentum(indicators),
         }
         triggered = {k: v for k, v in signals.items() if v.get("triggered")}
         passed = bool(triggered)
         channel = "standard" if passed else "none"
 
-        # 主线突破通道 (旁路): 标准三信号均未触发时, 高置信度主线标的
-        # (dyn_confidence>=CONF_BREAKOUT_THRESHOLD 且处于 HEAD/BODY) 可凭放量突破放行
+        # 主线突破通道 (旁路): 标准信号均未触发时, 高置信度主线标的可凭放量
+        # 突破放行。门槛由「绝对 dyn 阈值」放宽并叠加「池内相对排名」(P1-2):
+        # dyn 的绝对分布随雷达评分口径漂移, 纯绝对阈值会把通道长期关闭
+        # (实测池内中位数 0.42, 原阈值 0.7 几乎无人可达)。
         if not passed:
             pool = db_ops.get_optional_stock(symbol) or {}
             dyn = float(pool.get("dyn_confidence", CONF_DEFAULT) or CONF_DEFAULT)
             stage = pool.get("stage_batch", "BODY") or "BODY"
             if (
-                dyn >= CONF_BREAKOUT_THRESHOLD
-                and stage in ("HEAD", "BODY")
+                stage in ("HEAD", "BODY")
+                and (
+                    dyn >= CONF_BREAKOUT_THRESHOLD
+                    or self._dyn_rank_top(symbol, dyn)
+                )
                 and self._check_breakout(indicators)
             ):
                 passed = True
@@ -383,13 +483,13 @@ class TechSignalAgent(BaseAgent):
             "close": (indicators.get("close_series") or [None])[-1],
         }
         if channel == "breakout":
-            log_reason = "主线突破通道触发: 高置信度主线放量突破前高/跳空 (标准三信号未过)"
+            log_reason = "主线突破通道触发: 放量突破前高/跳空 (标准信号未过)"
         elif passed:
             log_reason = "触发: " + "; ".join(
                 f"{k} ({v['detail']})" for k, v in triggered.items()
             )
         else:
-            log_reason = "三种技术形态均未触发"
+            log_reason = "四种技术形态均未触发"
         self.log(
             "tech_signal" if passed else "tech_no_signal",
             symbol=symbol, task_id=task_id, flow_id=flow_id,
@@ -399,6 +499,62 @@ class TechSignalAgent(BaseAgent):
         # 无论是否触发都正常上报 — 催化事件步骤做最终触发综合判断
         self.report(flow_type, flow_id, step, result)
         return result
+
+    # -- 池内相对排名 (突破通道的相对门槛) ------------------------------------
+
+    @staticmethod
+    def _dyn_rank_top(symbol: str, dyn: float) -> bool:
+        """dyn 是否处于当前自选池的前 ``CONF_BREAKOUT_TOP_PCT`` 分位。
+
+        池内样本少于 3 只时不启用相对门槛 (统计意义不足, 避免单票自动进通道)。
+        """
+        if CONF_BREAKOUT_TOP_PCT <= 0 or dyn <= 0:
+            return False
+        try:
+            pool = db_ops.get_optional_pool("active")
+        except Exception:
+            return False
+        values = sorted(
+            (
+                float(s.get("dyn_confidence", CONF_DEFAULT) or CONF_DEFAULT)
+                for s in pool
+                if s.get("symbol")
+            ),
+            reverse=True,
+        )
+        if len(values) < 3:
+            return False
+        cutoff = max(1, int(round(len(values) * CONF_BREAKOUT_TOP_PCT)))
+        return dyn >= values[cutoff - 1]
+
+    # -- 信号 4: 趋势动量 (追强不追妖) -----------------------------------------
+
+    @staticmethod
+    def _trend_momentum(ind: dict) -> dict:
+        """趋势跟随入场: close > MA20 且 MA20 上翘 且 放量 且 RSI ∈ [50, 75].
+
+        与三个回调形态正交 —— 回调形态在单边上涨里永不触发, 该通道负责
+        「主线启动后右侧跟进」; RSI 上限 75 用于排除已经过热的妖股。
+        """
+        close = ind.get("close_series") or []
+        ma20 = ind.get("ma20")
+        slope = ind.get("ma20_slope")
+        vol_ratio = ind.get("volume_ratio_20")
+        rsi = ind.get("rsi")
+        if not close or ma20 is None or slope is None:
+            return {"triggered": False, "detail": "数据不足"}
+        above_ma = close[-1] > float(ma20)
+        ma_rising = float(slope) >= TREND_MA_SLOPE_MIN
+        volume_ok = float(vol_ratio or 0) >= TREND_VOLUME_RATIO
+        rsi_ok = rsi is not None and TREND_RSI_MIN <= float(rsi) <= TREND_RSI_MAX
+        triggered = above_ma and ma_rising and volume_ok and rsi_ok
+        return {
+            "triggered": triggered,
+            "detail": (
+                f"站上MA20={above_ma}, MA20上翘={ma_rising}({slope}), "
+                f"放量={volume_ok}({vol_ratio}x), RSI区间={rsi_ok}({rsi})"
+            ),
+        }
 
     # -- 信号 1: BOLL 中轨缩量止跌 --------------------------------------------
 
@@ -427,15 +583,24 @@ class TechSignalAgent(BaseAgent):
 
     @staticmethod
     def _macd_divergence(ind: dict) -> dict:
+        """价格创新低但 MACD 未创新低 (底背离), 需 RSI 超卖或 KDJ 低位金叉确认.
+
+        口径修正 (P1-2): 原实现只在 5 根序列里比较 ``close[:-1]``, 等于"只跟最近
+        4 天比", 不构成背离语义。现在按 ``MACD_DIVERGENCE_WINDOW`` 回溯窗口比较,
+        且要求价格确实处于窗口低位区间 (而非仅比昨天低)。
+        """
         close = ind.get("close_series") or []
         macd = ind.get("macd_series") or []
         rsi = ind.get("rsi")
         kdjk = ind.get("kdjk_series") or []
         kdjd = ind.get("kdjd_series") or []
-        if len(close) < 3 or len(macd) < 3:
-            return {"triggered": False, "detail": "数据不足"}
-        price_new_low = close[-1] <= min(close[:-1])
-        macd_higher = macd[-1] > min(macd[:-1])
+        window = MACD_DIVERGENCE_WINDOW
+        if len(close) < window or len(macd) < window:
+            return {"triggered": False, "detail": f"数据不足 (需 {window} 根)"}
+        base_close = close[-(window + 1):-1]
+        base_macd = macd[-(window + 1):-1]
+        price_new_low = close[-1] <= min(base_close)
+        macd_higher = macd[-1] > min(base_macd)
         divergence = price_new_low and macd_higher
         rsi_oversold = rsi is not None and rsi < 35
         kdj_cross = (
@@ -448,8 +613,8 @@ class TechSignalAgent(BaseAgent):
         return {
             "triggered": triggered,
             "detail": (
-                f"背离={divergence}, RSI超卖={rsi_oversold}, KDJ金叉={kdj_cross} "
-                f"(rsi={rsi}, macd={macd[-1] if macd else None})"
+                f"背离={divergence}(窗口{window}根), RSI超卖={rsi_oversold}, "
+                f"KDJ金叉={kdj_cross} (rsi={rsi}, macd={macd[-1] if macd else None})"
             ),
         }
 
@@ -470,7 +635,7 @@ class TechSignalAgent(BaseAgent):
                 gap = {"index": i, "upper": low[i], "lower": high[i - 1]}
                 break
         if gap is None:
-            return {"triggered": False, "detail": "近 10 日无向上缺口"}
+            return {"triggered": False, "detail": f"近 {len(high)} 日无向上缺口"}
         # 缺口未被实体封闭: 之后最低价未跌破缺口下沿
         not_filled = min(low[gap["index"]:]) > gap["lower"]
         # 当前回踩缺口上沿附近 (距离 < 3%)
@@ -645,13 +810,16 @@ class SecondVerificationAgent(BaseAgent):
             f"## 最新新闻\n{news_digest or '(无)'}\n\n"
             f"## 基本面\n{(fundamentals or '(无)')[:1200]}\n\n"
             "要求:\n"
-            "1. 检查入选时利空清单中的重大利空是否已消除, 未消除直接拒绝\n"
+            "1. 检查入选时利空清单中的重大利空是否消除; 未消除时给出风险等级 "
+            "bear_risk_level (low=旧闻/影响有限, medium=需跟踪但可接受, "
+            "high=足以否决建仓)\n"
             "2. 三种市场情景 (上涨/震荡/下跌) 推演买入后的走势\n"
             "3. 评估风险收益比, 不达标拒绝\n"
             "4. 生成操作规划: 止损位百分比(默认5%, A股硬性止损)、止盈百分比、加仓条件列表\n"
-            "输出 JSON: passed, reason, major_bear_resolved, bull_scenario, "
-            "range_scenario, bear_scenario, risk_reward_ratio, stop_loss_pct, "
-            "take_profit_pct, add_position_conditions, predicted_path(后期走势预测)."
+            "输出 JSON: passed, reason, major_bear_resolved, bear_risk_level, "
+            "bull_scenario, range_scenario, bear_scenario, risk_reward_ratio, "
+            "stop_loss_pct, take_profit_pct, add_position_conditions, "
+            "predicted_path(后期走势预测)."
         )
         try:
             report = structured_invoke(
@@ -673,12 +841,26 @@ class SecondVerificationAgent(BaseAgent):
             self.report(flow_type, flow_id, step, result)
             return result
 
-        passed = bool(report.passed and report.major_bear_resolved)
+        # 通过判定 (P1-3): LLM 结论 AND 「利空风险等级不是 high」。
+        # 原实现是 passed AND major_bear_resolved → 只要利空清单里还剩一条就
+        # 拒绝, 与「宁缺毋滥」的初衷相反 (会漏掉最优标的)。
+        bear_level = str(report.bear_risk_level or "medium").strip().lower()
+        bear_blocked = bear_level == "high" and not report.major_bear_resolved
+        passed = bool(report.passed) and not bear_blocked
+        # 结构化拒绝原因: 便于事后统计「到底卡在哪个子条件」(此前只有自由文本)
+        if passed:
+            reject_stage = ""
+        elif not report.passed:
+            reject_stage = "llm_rejected"
+        else:
+            reject_stage = "major_bear_high"
         result = {
             "decision": "passed" if passed else "rejected",
             "passed": passed,
             "reason": report.reason,
             "major_bear_resolved": report.major_bear_resolved,
+            "bear_risk_level": bear_level,
+            "reject_stage": reject_stage,
             "scenarios": {
                 "bull": report.bull_scenario,
                 "range": report.range_scenario,
@@ -746,6 +928,20 @@ class PositionOpenAgent(BaseAgent):
             else:
                 coef = POS_COEF_LOW
         budget = snapshot.get("available_cash", 0.0) * BUY_POSITION_RATIO * coef
+        # 本次下单实际使用的资金比例: 与风控上限校验共用同一事实来源 (P1-1)
+        used_ratio = BUY_POSITION_RATIO * coef
+        # 组合级风险预算总闸 (T1): 账户回撤触及阈值 → 仓位系数打对折。
+        # 单标的择时/止损是「一笔一笔」的风控, 账户回撤是「组合层面已亏损」的信号,
+        # 此时继续按原比例开仓等于在回撤中加杠杆。
+        dd = float(snapshot.get("drawdown_pct") or 0.0)
+        if PORTFOLIO_DD_COEF_THRESHOLD > 0 and dd >= PORTFOLIO_DD_COEF_THRESHOLD:
+            logger.info(
+                "portfolio drawdown %.2f%% >= %.2f%%, halve position coef for %s",
+                dd * 100, PORTFOLIO_DD_COEF_THRESHOLD * 100, symbol,
+            )
+            coef *= PORTFOLIO_DD_COEF_FACTOR
+            budget *= PORTFOLIO_DD_COEF_FACTOR
+            used_ratio *= PORTFOLIO_DD_COEF_FACTOR
         try:
             quote = self.data.get_realtime_quote(symbol)
         except Exception as exc:
@@ -761,13 +957,36 @@ class PositionOpenAgent(BaseAgent):
             self.report(flow_type, flow_id, step, result)
             return result
 
+        # ATR 提前取: 波动率目标仓位 (T1) 与止损位 (T4) 共用同一次指标快照
+        atr_value = 0.0
+        try:
+            indicators = self.data.get_stock_indicators(symbol)
+            atr_value = float((indicators or {}).get("atr") or 0.0)
+        except Exception as exc:
+            logger.warning("ATR unavailable for %s, sizing/stop degrade: %s", symbol, exc)
+            indicators = None
+
         # 2) 数量计算: 预扣滑点与手续费的缓冲
         est_price = quote["price"] * 1.002  # 滑点 + 缓冲
-        qty = round_lot(int(budget / est_price / 100) * 100)
+        qty_by_cash = int(budget / est_price / 100) * 100
+        qty = qty_by_cash
+        qty_by_risk = 0
+        if VOL_TARGET_SIZING_ENABLED and atr_value > 0:
+            total_assets = float(snapshot.get("total_assets") or 0.0)
+            risk_budget = total_assets * RISK_BUDGET_PER_TRADE
+            per_share_risk = STOP_LOSS_ATR_MULT * atr_value
+            if per_share_risk > 0 and risk_budget > 0:
+                qty_by_risk = int(risk_budget / per_share_risk / 100) * 100
+                qty = min(qty_by_cash, qty_by_risk)
         if qty <= 0:
+            reason = (
+                f"风险预算 {RISK_BUDGET_PER_TRADE:.2%} × 总资产 不足一手 "
+                f"(ATR={atr_value:.3f})"
+                if qty_by_risk == 0 and atr_value > 0 and VOL_TARGET_SIZING_ENABLED
+                else f"预算 {budget:.0f} 元不足一手"
+            )
             result = {
-                "decision": "rejected", "abort": True,
-                "abort_reason": f"预算 {budget:.0f} 元不足一手",
+                "decision": "rejected", "abort": True, "abort_reason": reason,
             }
             self.report(flow_type, flow_id, step, result)
             return result
@@ -781,7 +1000,7 @@ class PositionOpenAgent(BaseAgent):
             reason=f"建仓: {verification.get('reason', '')[:200]}",
             flow_id=flow_id,
         )
-        check = pre_trade_check(order, snapshot)
+        check = pre_trade_check(order, snapshot, position_ratio=used_ratio)
         if not check.ok:
             result = {
                 "decision": "risk_rejected", "abort": True,
@@ -817,6 +1036,32 @@ class PositionOpenAgent(BaseAgent):
         stop_loss_pct = float(plan.get("stop_loss_pct", 5.0))
         take_profit_pct = float(plan.get("take_profit_pct", 15.0))
 
+        # ATR 止损 (T4): 止损位取 min(成本 × (1-固定%), 成本 - 2×ATR)。
+        # 固定 5% 在低波动票上过紧 (被噪音扫出), 在高波动票上过松 (单笔亏损过大);
+        # 用 ATR 让每笔最大亏损与波动率挂钩。ATR 不可得时退化为固定比例。
+        stop_price_by_pct = fill_price * (1 - stop_loss_pct / 100)
+        stop_price = stop_price_by_pct
+        # atr_value 已在仓位定量阶段取过一次, 此处直接复用 (同一笔建仓同一份指标快照)
+        if atr_value > 0:
+            stop_price = min(stop_price_by_pct, fill_price - STOP_LOSS_ATR_MULT * atr_value)
+            # 安全性下限: ATR 极端放大时不允许止损位低于成本 15% (防止单笔爆亏)
+            stop_price = max(stop_price, fill_price * (1 - 0.15))
+
+        plan = dict(plan)
+        plan.setdefault("stage", stage)     # 分层时间止损 (T5) 需要建仓时的阶段
+        plan["stop_loss_price"] = round(stop_price, 3)
+        plan["atr_at_entry"] = round(atr_value, 4)
+        # 仓位定量留痕 (T1): 事后复盘「为什么只买了这么少」不必再猜
+        plan["sizing"] = {
+            "mode": "vol_target" if VOL_TARGET_SIZING_ENABLED and atr_value > 0 else "cash_ratio",
+            "qty_by_cash": qty_by_cash,
+            "qty_by_risk": qty_by_risk,
+            "risk_budget": round(
+                float(snapshot.get("total_assets") or 0.0) * RISK_BUDGET_PER_TRADE, 2,
+            ),
+            "coef": round(coef, 4),
+        }
+
         # 5) 写持仓池: T+1 禁卖标记 + 操作规划 + 走势预测 (§7.2.4)
         # 复用 user_accounts._t1_lock_until: 市场时区下一交易日开盘, 全链路口径一致
         from ..user_accounts import _t1_lock_until
@@ -824,20 +1069,22 @@ class PositionOpenAgent(BaseAgent):
         db_ops.upsert_holding({
             "symbol": symbol,
             "name": name or quote.get("name", ""),
+            # 行业归口: 行业集中度硬约束 (T2) 的事实来源
+            "industry": context.get("industry", "") or "",
             "quantity": result_order.filled_quantity,
             "available_quantity": 0,  # T+1: 当日买入冻结
             "cost_price": cost_price,
             "entry_reason": verification.get("reason", ""),
             "plan": plan,
             "predicted_path": {"text": verification.get("predicted_path", "")},
-            "stop_loss": round(fill_price * (1 - stop_loss_pct / 100), 3),
+            "stop_loss": round(stop_price, 3),
             "take_profit": round(fill_price * (1 + take_profit_pct / 100), 3),
             "cannot_sell_until": cannot_sell_until,
         })
         # 自选池标记 bought
         db_ops.update_optional_status(symbol, "bought")
 
-        stop_loss_price = round(fill_price * (1 - stop_loss_pct / 100), 3)
+        stop_loss_price = round(stop_price, 3)
         take_profit_price = round(fill_price * (1 + take_profit_pct / 100), 3)
 
         # 6) 多用户扇出: 同一建仓决策在每个用户模拟账户独立执行 (§多用户持仓池)

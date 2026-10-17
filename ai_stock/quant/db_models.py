@@ -160,6 +160,9 @@ class StockPoolHolding(QuantBase):
     user_id: Mapped[str] = mapped_column(String(32), primary_key=True, default="system")
     symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
     name: Mapped[str] = mapped_column(String(64), default="")
+    # 建仓时的行业归口 (板块名): 行业集中度硬约束 (T2) 的事实来源。
+    # 为空时风控回退到自选池的 industry 字段, 再不行则跳过该条约束。
+    industry: Mapped[str] = mapped_column(String(64), default="")
     quantity: Mapped[int] = mapped_column(Integer, default=0)         # 总持仓
     available_quantity: Mapped[int] = mapped_column(Integer, default=0)  # 可卖(T+1后)
     cost_price: Mapped[float] = mapped_column(Float, default=0.0)
@@ -179,6 +182,7 @@ class StockPoolHolding(QuantBase):
             "user_id": self.user_id,
             "symbol": self.symbol,
             "name": self.name,
+            "industry": self.industry,
             "quantity": self.quantity,
             "available_quantity": self.available_quantity,
             "cost_price": self.cost_price,

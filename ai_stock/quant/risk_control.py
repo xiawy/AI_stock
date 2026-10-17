@@ -18,7 +18,10 @@ from . import db_ops
 from .broker import OrderSide, get_broker
 from .config import (
     BUY_POSITION_RATIO,
+    INDUSTRY_CONCENTRATION_MAX,
     MAX_HOLDING_COUNT,
+    NEW_LISTING_MIN_BARS,
+    POSITION_RATIO_HARD_CAP,
     SINGLE_POSITION_MAX_PCT,
 )
 from .data_service import get_data_service
@@ -59,25 +62,34 @@ def account_snapshot() -> dict:
     }
 
 
-def pre_trade_check(order, snapshot: Optional[dict] = None) -> CheckResult:
+def pre_trade_check(
+    order,
+    snapshot: Optional[dict] = None,
+    position_ratio: Optional[float] = None,
+) -> CheckResult:
     """下单前同步前置校验 (第一道防线, §11.1).
 
     Args:
         order: broker.OrderRequest
         snapshot: 可选预取的账户快照 (省一次 broker 调用)
+        position_ratio: 本次下单实际使用的资金比例 (含动态仓位系数)。
+            P1-1: 原实现把上限硬编码成 ``available_cash × 20%``, 而建仓侧按
+            「20% × coef(最高 1.2)」下单 → dyn_confidence ≥ 0.8 且 stage=BODY
+            的高置信标的 **必然** 超过上限而被拒, 与「宁缺毋滥」的产品意图相反。
+            现在上限与实际下单比例共用同一事实来源; 未传入时用基础比例兜底。
     """
     snap = snapshot or account_snapshot()
     details = {"snapshot": snap}
 
     # 1. 全局总开关 — 一键紧急熔断, 无需重启进程 (§14.5)
-    if db_ops.get_config_value("global_trade_enable", "0") != "1":
+    if db_ops.get_config_value("global_trade_enable", "1") != "1":
         return CheckResult(False, "全局交易开关关闭 (global_trade_enable=0)", details)
 
     # 2. 账户级风控冻结 (总回撤 / 单日亏损, 只允许卖出)
     if order.side == OrderSide.BUY:
         if db_ops.get_config_value("trade_frozen", "0") == "1":
             return CheckResult(False, "账户风控冻结中, 仅允许卖出", details)
-        max_dd = float(db_ops.get_config_value("max_drawdown_pct", "0.10"))
+        max_dd = float(db_ops.get_config_value("max_drawdown_pct", "0.20"))
         if snap.get("drawdown_pct", 0.0) >= max_dd:
             _freeze("总回撤超阈值", snap)
             return CheckResult(False, f"总回撤 {snap['drawdown_pct']:.1%} 超阈值 {max_dd:.0%}", details)
@@ -99,7 +111,7 @@ def pre_trade_check(order, snapshot: Optional[dict] = None) -> CheckResult:
     if not quote:
         return CheckResult(False, f"无法获取 {order.symbol} 行情, 拒绝下单", details)
     details["quote"] = quote
-    max_value = float(db_ops.get_config_value("max_order_value", "200000"))
+    max_value = float(db_ops.get_config_value("max_order_value", "250000"))
     est_amount = quote["price"] * order.quantity
     if est_amount > max_value:
         return CheckResult(
@@ -132,22 +144,129 @@ def pre_trade_check(order, snapshot: Optional[dict] = None) -> CheckResult:
     else:
         if quote.get("limit_up", 0) and quote["price"] >= quote["limit_up"]:
             return CheckResult(False, f"涨停价 {quote['limit_up']} 不可买入", details)
-        # 5. 个股层: 持仓数上限 / 单次建仓比例
+
+        # 4.1 标的资格硬过滤 (T9): ST/退市 / 停牌 / 次新股
+        blocked = _symbol_eligibility(order.symbol, quote)
+        if blocked:
+            return CheckResult(False, blocked, details)
+
         holdings = db_ops.get_holdings()
+        # 5. 个股层: 持仓数上限 / 单次建仓比例
         if order.symbol not in {h["symbol"] for h in holdings}:
             if len(holdings) >= MAX_HOLDING_COUNT:
                 return CheckResult(
                     False, f"持仓数已达上限 {MAX_HOLDING_COUNT} 支", details,
                 )
-        budget = snap.get("available_cash", 0.0) * BUY_POSITION_RATIO
-        if est_amount > budget:
+
+        # 5.1 行业集中度硬约束 (T2): 同行业最多 N 只
+        concentration = _industry_concentration_check(order.symbol, holdings)
+        if concentration:
+            return CheckResult(False, concentration, details)
+
+        # 5.2 大盘择时门 (T3): 沪深300 走弱时只减不加
+        timing = _market_timing_check()
+        if timing:
+            return CheckResult(False, timing, details)
+
+        # 5.3 单次建仓金额上限: 与建仓侧同一比例口径
+        ratio = position_ratio if position_ratio is not None else BUY_POSITION_RATIO
+        ratio = max(0.0, min(float(ratio), POSITION_RATIO_HARD_CAP * 2))
+        budget = snap.get("available_cash", 0.0) * ratio
+        # 1‰ 容差: 下单侧按「价格×1.002 缓冲」定量, 极易在边界上超 1~2 元
+        if est_amount > budget * 1.001:
             return CheckResult(
                 False,
-                f"单次建仓金额 {est_amount:.0f} 超过可用资金 20% ({budget:.0f})",
+                f"单次建仓金额 {est_amount:.0f} 超过可用资金 {ratio:.0%} ({budget:.0f})",
                 details,
             )
 
     return CheckResult(True, "passed", details)
+
+
+def _symbol_eligibility(symbol: str, quote: dict) -> str:
+    """建仓标的资格过滤 (T9). 返回拒绝原因, 通过返回空串.
+
+    - ST/*ST/退市风险: 名称含 ST / 退
+    - 停牌: 现价 ≤ 0 (行情接口给出 0 或缺失)
+    - 次新股: 上市不足 ``NEW_LISTING_MIN_BARS`` 个交易日 (K 线根数不足)
+    任一数据不可得时 **不拦截** (数据故障不应变成交易开关)。
+    """
+    name = str(quote.get("name") or "")
+    if "ST" in name.upper() or "退" in name:
+        return f"{symbol} {name} 属 ST/退市风险标的, 不建仓"
+    price = float(quote.get("price") or 0)
+    if price <= 0:
+        return f"{symbol} 现价 {price} 异常 (疑似停牌), 拒绝下单"
+    try:
+        df = get_data_service().get_ohlcv(symbol, lookback_days=NEW_LISTING_MIN_BARS + 10)
+    except Exception:
+        return ""
+    if df is None or len(df) == 0:
+        return ""
+    if len(df) < NEW_LISTING_MIN_BARS:
+        return f"{symbol} 上市仅 {len(df)} 个交易日 (<{NEW_LISTING_MIN_BARS}), 次新股不建仓"
+    return ""
+
+
+def _industry_concentration_check(symbol: str, holdings: list[dict]) -> str:
+    """行业集中度硬约束 (T2): 同一行业已持仓数达上限则拒绝.
+
+    行业归口优先取持仓记录, 回退到自选池 ``industry``; 两者都缺失时跳过该约束
+    (宁可放过, 不因元数据缺失阻断交易)。
+    """
+    if INDUSTRY_CONCENTRATION_MAX <= 0 or not holdings:
+        return ""
+    target = _resolve_industry(symbol)
+    if not target:
+        return ""
+    same = [
+        h for h in holdings
+        if h.get("symbol") != symbol
+        and _same_industry(_resolve_industry(h.get("symbol", ""), h), target)
+    ]
+    if len(same) >= INDUSTRY_CONCENTRATION_MAX:
+        names = ",".join(h.get("symbol", "") for h in same[:3])
+        return (
+            f"行业集中度超限: 已持有 {target} 行业 {len(same)} 只 ({names}), "
+            f"上限 {INDUSTRY_CONCENTRATION_MAX}"
+        )
+    return ""
+
+
+def _resolve_industry(symbol: str, holding: Optional[dict] = None) -> str:
+    if not symbol:
+        return ""
+    if holding and holding.get("industry"):
+        return str(holding["industry"])
+    try:
+        pool = db_ops.get_optional_stock(symbol) or {}
+    except Exception:
+        return ""
+    return str(pool.get("industry") or "")
+
+
+def _same_industry(left: str, right: str) -> bool:
+    """行业名宽松匹配: 板块命名在东财/新浪间存在粒度差异 (如 "军工" vs "航天航空")."""
+    if not left or not right:
+        return False
+    return left == right or left in right or right in left
+
+
+def _market_timing_check() -> str:
+    """大盘择时门 (T3). 返回拒绝原因, 通过返回空串.
+
+    数据不可用 (regime='unknown') 时不拦截 —— 数据故障不应变成交易开关。
+    """
+    try:
+        from .market_regime import get_market_regime
+
+        regime = get_market_regime()
+    except Exception as exc:
+        logger.warning("market timing check degraded: %s", exc)
+        return ""
+    if not regime.get("ok") or regime.get("regime") != "risk_off":
+        return ""
+    return f"大盘择时门: {regime.get('reason', '市场走弱')} → 只减不加"
 
 
 def _freeze(reason: str, snap: dict) -> None:
@@ -222,7 +341,7 @@ def async_risk_scan() -> dict:
     def _is_frozen() -> bool:
         return db_ops.get_config_value("trade_frozen", "0") == "1"
 
-    max_dd = float(db_ops.get_config_value("max_drawdown_pct", "0.10"))
+    max_dd = float(db_ops.get_config_value("max_drawdown_pct", "0.20"))
     if not _is_frozen() and snap.get("drawdown_pct", 0.0) >= max_dd:
         _freeze("异步风控: 总回撤超阈值", snap)
         findings.append({"issue": "drawdown_freeze"})

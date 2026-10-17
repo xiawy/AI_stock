@@ -38,11 +38,24 @@ def prepare_quant_env() -> None:
 def start_quant_service():
     """Start the quant service (consumers + scheduler). Idempotent.
 
-    Returns the running service, or ``None`` when startup failed — callers
-    treat quant as optional and must not crash the app on its failure.
+    多 worker 部署（``uvicorn --workers N``）下只有**领导者** worker 启动交易
+    子系统：消费者/调度器/清扫器都必须单实例，否则 N 份调度器并发发任务。
+    其余 worker 照常提供 API（含交易查询），领导者进程退出后内核释放文件锁，
+    由 uvicorn 拉起的新 worker 接手。
+
+    Returns the running service, or ``None`` when startup was skipped/failed —
+    callers treat quant as optional and must not crash the app on its failure.
     """
     try:
         prepare_quant_env()
+        from ai_stock.quant import leader
+
+        if not leader.acquire():
+            logger.info(
+                "Quant subsystem owned by another worker; this worker serves API only"
+            )
+            return None
+
         from ai_stock.quant import get_quant_service
 
         svc = get_quant_service()
@@ -67,6 +80,13 @@ def stop_quant_service() -> None:
             logger.info("Quant service stopped")
     except Exception as exc:
         logger.warning("Quant service stop failed: %s", exc)
+    finally:
+        try:
+            from ai_stock.quant import leader
+
+            leader.release()
+        except Exception:  # pragma: no cover - 释放失败不影响退出
+            pass
 
 
 def get_quant_status() -> dict:

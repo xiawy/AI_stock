@@ -192,7 +192,7 @@ def trigger_pool_expire(now: Optional[datetime] = None) -> Optional[str]:
 
 
 def trigger_cleanup(now: Optional[datetime] = None) -> Optional[str]:
-    """凌晨维护: 缓存归档清理 + 新闻向量过期清理 + 元数据备份 (§9.2/§9.3)."""
+    """凌晨维护: 缓存归档清理 + 日志/流程归档 + 新闻向量过期清理 (§9.2/§9.3/A6)."""
     now = now or datetime.now()
     date_str = now.strftime("%Y-%m-%d")
     task_id, created = enqueue_task(
@@ -200,6 +200,20 @@ def trigger_cleanup(now: Optional[datetime] = None) -> Optional[str]:
         "maintenance_cleanup",
         payload={"trade_date": date_str},
         idempotent_key=f"cleanup_{date_str}",
+        priority=0,
+    )
+    return task_id if created else None
+
+
+def trigger_slo_check(now: Optional[datetime] = None) -> Optional[str]:
+    """业务级 SLO 巡检 (A3): 每 30 分钟一次, 只入队."""
+    now = now or datetime.now()
+    window = now.strftime("%Y%m%d") + _aligned_hhmm(now, 30)
+    task_id, created = enqueue_task(
+        RISK_QUEUE,
+        "slo_check",
+        payload={"window": window},
+        idempotent_key=f"slocheck_{window}",
         priority=0,
     )
     return task_id if created else None
@@ -228,9 +242,13 @@ def handle_pool_expire(task: dict) -> dict:
 
 def handle_maintenance_cleanup(task: dict) -> dict:
     from . import db_ops
+    from .config import DECISION_LOG_RETENTION_DAYS, FLOW_STATE_RETENTION_DAYS
     from .news_store import get_news_store
 
     removed_cache = db_ops.cache_cleanup()
+    # A6: 决策日志 (此前永不清理, 已达 2 万行) 与终态流程 (只增不减) 按期归档
+    removed_decisions = db_ops.cleanup_decision_log(DECISION_LOG_RETENTION_DAYS)
+    removed_flows = db_ops.archive_finished_flows(FLOW_STATE_RETENTION_DAYS)
     store = get_news_store()
     removed_news = store.cleanup()
     backup_path = None
@@ -240,9 +258,22 @@ def handle_maintenance_cleanup(task: dict) -> dict:
         logger.warning("News metadata backup failed: %s", exc)
     return {
         "cache_rows_removed": removed_cache,
+        "decision_rows_removed": removed_decisions,
+        "flow_rows_removed": removed_flows,
         "news_expired": removed_news,
         "news_backup": backup_path,
     }
+
+
+def handle_slo_check(task: dict) -> dict:
+    """业务级 SLO 巡检 (A3): 静默故障的主动发现通道."""
+    from .ops_monitor import check_business_slo
+
+    try:
+        return check_business_slo()
+    except Exception as exc:
+        logger.warning("SLO check failed: %s", exc)
+        return {"issues": [], "error": str(exc)}
 
 
 def handle_flow_timeout_check(task: dict) -> dict:
@@ -261,6 +292,7 @@ def build_maintenance_handlers() -> dict[str, Callable[[dict], dict]]:
         "pool_expire": handle_pool_expire,
         "maintenance_cleanup": handle_maintenance_cleanup,
         "flow_timeout_check": handle_flow_timeout_check,
+        "slo_check": handle_slo_check,
     }
 
 
@@ -392,6 +424,7 @@ class QuantScheduler:
             {"name": "pool_expire", "kind": "daily",
              "at": _shifted_time(*DAILY_REPORT_AT, delta_minutes=5), "fn": trigger_pool_expire},
             {"name": "cleanup", "kind": "daily", "at": dtime(3, 0), "fn": trigger_cleanup},
+            {"name": "slo_check", "kind": "interval", "minutes": 30, "fn": trigger_slo_check},
             {"name": "selection_catch_up", "kind": "interval",
              "minutes": 10, "fn": catch_up_selection},
         ]
@@ -441,6 +474,11 @@ class QuantScheduler:
         aps.add_job(
             trigger_cleanup, "cron", hour=3, minute=0,
             id="maintenance_cleanup", replace_existing=True, **grace,
+        )
+        # 业务级 SLO 巡检 (A3): 静默故障 (上游断流/长期无成交) 的主动发现通道
+        aps.add_job(
+            trigger_slo_check, "interval", minutes=30,
+            id="slo_check", replace_existing=True, **grace,
         )
         # 选股补跑巡检: 轻量幂等 (查行业榜是否已产出), 兼顾长时间休眠唤醒后
         # 错过超过 30 分钟宽限窗的槽位 (见 catch_up_selection)

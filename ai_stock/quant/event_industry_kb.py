@@ -1,15 +1,22 @@
 """事件-行业映射知识库 (选股优化点 2: 降低 LLM 行业映射幻觉).
 
 本地关键词 → 利好行业映射表, 用于宏观事件解析的预检:
-- ``match_industries(text)``: 关键词子串匹配, 返回命中的行业名列表 (保序去重)
+- ``match_industries(text, board_names=None)``: 静态 KB 关键词子串匹配, 叠加
+  "新闻文本直接命中实时板块名"的动态层, 返回命中行业名列表 (保序去重)
 - 内置规则覆盖常见主题; 支持通过 ``QUANT_EVENT_KB_FILE`` 环境变量指向
   额外 JSON 文件扩展 (格式: [{"keywords": [...], "industries": [...]}]),
   便于跟进最新政策/题材而无需改代码.
+- 新行业兜底: 板块全集本身实时抓取 (非写死); 传入 ``board_names`` 后, 东财新
+  上线的题材板只要被新闻提及即自动命中, 无需为其新增 KB 关键词 (动态覆盖层)。
 
 设计取舍:
 - 只做粗筛与交叉验证, 不做最终决策 — LLM 仍负责事件提取与影响力排序
 - 知识库无命中时不拦截 LLM 结果 (兜底), 有命中时以「交集优先」收敛
   LLM 输出, 压缩凭空捏造的行业关联
+- industries 输出对齐东财真实板块名 (行业板 + 概念板), 并按主题精度分层:
+  泛 AI 应用/大模型 → 人工智能/算力概念/AIGC概念 等概念板; 芯片/晶圆/设备 →
+  半导体 等板。避免粗标签「半导体」被子串匹配炸开到「半导体设备/半导体材料」
+  等无关细分板 (泛 AI/数字消费新闻不应驱动半导体设备)
 """
 
 from __future__ import annotations
@@ -17,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Iterable
 from functools import lru_cache
 
 logger = logging.getLogger(__name__)
@@ -24,14 +32,47 @@ logger = logging.getLogger(__name__)
 # 扩展知识库文件路径 (可选): [{"keywords": [...], "industries": [...]}]
 _KB_FILE_ENV = "QUANT_EVENT_KB_FILE"
 
+# --- 动态板块名匹配 (新行业兜底: 不依赖 KB 关键词, 直接命中实时板块名) --------
+# 参与"新闻文本直接命中板块名"的最小板块名长度: 过滤"电子/通信/军工"等 2 字
+# 歧义名 (易被普通词误命中); 新题材板名几乎都 ≥3 字 (谷子经济/脑机接口/算力概念)。
+_DYNAMIC_BOARD_MIN_LEN = 3
+
+# 排除模式: 板块名含以下任一子串即视为"非行业"技术/指数/资金/风格/交易事件
+# 标签板, 不参与动态命中 (这些词高频出现在行情快讯, 参与匹配会引入噪声)。刻意
+# 不含"国资/央企/龙头/参股"等宽泛词, 避免误杀"国资云概念/央国企改革"等真实题材板。
+_DYNAMIC_BOARD_EXCLUDES: tuple[str, ...] = (
+    # 交易状态 / 技术形态
+    "昨日", "涨停", "跌停", "连板", "首板", "炸板", "触板", "多板", "打板",
+    "新高", "历史", "近期", "振幅", "换手", "超跌", "反转股", "摘帽",
+    # 指数 / 资金 / 互联互通
+    "指数", "股通", "融资融券", "融券", "重仓", "标的", "MSCI", "富时",
+    "罗素", "道琼斯", "标普", "GDR", "做市",
+    # 业绩 / 股本 / 交易事件
+    "预增", "预减", "预盈", "预亏", "扭亏", "业绩", "次新", "新股", "转债",
+    "回购", "增持", "减持", "解禁", "质押", "送转", "分红", "配股", "举牌",
+    "股权激励", "破净", "破发", "ST", "退市", "风险警示",
+    # 市场分类 / 风格标签
+    "北交所", "科创板", "创业板", "注册制", "微盘", "小盘", "大盘", "白马",
+    "蓝筹", "风格", "题材股", "金股", "红利股", "价值股", "成长股", "独角兽",
+    "行业龙头", "宁组合", "股权集中", "股权分散", "B股", "AH股", "AB股",
+)
+
 # 内置映射规则: 关键词 → 直接利好行业 (行业名与东财板块名尽量对齐)
 _BUILTIN_RULES: list[dict] = [
-    {"keywords": ["算力", "大模型", "人工智能", "AI", "AIGC", "ChatGPT", "智能体"],
-     "industries": ["半导体", "通信设备", "计算机设备", "软件开发"]},
-    {"keywords": ["光模块", "CPO", "数据中心", "东数西算", "液冷"],
-     "industries": ["通信设备", "光学光电子"]},
+    # AI 应用/大模型/智能体 → 对齐东财 AI 概念板块; 不再粗映射到「半导体」,
+    # 避免泛 AI 新闻经子串匹配污染「半导体设备/半导体材料」细分行业板
+    {"keywords": ["人工智能", "AI", "智能体", "AIGC", "ChatGPT", "大模型",
+                  "多模态", "生成式"],
+     "industries": ["人工智能", "AI应用", "AIGC概念", "算力概念"]},
+    # 算力/数据中心等 AI 基础设施 → 算力概念板 + 通信设备 (硬件侧, 仍不碰半导体设备)
+    {"keywords": ["算力", "智算", "超算", "数据中心", "东数西算", "液冷"],
+     "industries": ["算力概念", "数据中心", "东数西算", "通信设备"]},
+    # 光模块/CPO/光通信 → 精确概念板块
+    {"keywords": ["光模块", "CPO", "光通信", "硅光"],
+     "industries": ["CPO概念", "光学光电子", "通信设备"]},
+    # 存储芯片 → 精确概念板 (用「半导体概念」控制粒度, 不炸开到半导体设备)
     {"keywords": ["存储", "DRAM", "NAND", "HBM"],
-     "industries": ["半导体", "电子元件"]},
+     "industries": ["存储芯片", "半导体概念", "元件"]},
     {"keywords": ["固态电池", "锂电池", "动力电池", "储能", "续航"],
      "industries": ["电池", "能源金属"]},
     {"keywords": ["新能源车", "电动车", "充电桩", "智能驾驶", "无人驾驶", "智驾"],
@@ -72,10 +113,13 @@ _BUILTIN_RULES: list[dict] = [
      "industries": ["农牧饲渔", "农药兽药"]},
     {"keywords": ["券商", "资本市场", "并购重组", "牛市"],
      "industries": ["证券行业"]},
-    {"keywords": ["数字经济", "数据要素", "信创"],
-     "industries": ["软件开发", "互联网服务"]},
-    {"keywords": ["半导体设备", "光刻机", "国产替代", "晶圆"],
-     "industries": ["半导体"]},
+    {"keywords": ["数字经济", "数据要素", "信创", "国产软件"],
+     "industries": ["信创", "国产软件", "软件开发", "数据要素", "数字经济"]},
+    # 芯片/半导体硬件 (真·半导体新闻) → 半导体行业板 + 精确细分板; 保留粗标签
+    # 「半导体」供跨粒度匹配 (芯片/晶圆/设备新闻确与半导体设备/材料相关, 与泛 AI 区分)
+    {"keywords": ["芯片", "半导体", "晶圆", "光刻机", "光刻胶", "集成电路",
+                  "封测", "刻蚀", "先进封装", "国产替代", "华为昇腾", "昇腾"],
+     "industries": ["半导体", "国产芯片", "半导体概念", "集成电路制造", "先进封装"]},
 ]
 
 
@@ -100,8 +144,44 @@ def _load_rules() -> tuple[dict, ...]:
     return tuple(rules)
 
 
-def match_industries(text: str) -> list[str]:
-    """关键词子串匹配 → 命中行业列表 (保序去重); 空文本返回空."""
+def _is_dynamic_matchable(name: str) -> bool:
+    """板块名是否可用于"新闻文本直接命中"的动态匹配:
+    长度 ≥ ``_DYNAMIC_BOARD_MIN_LEN`` 且不含 ``_DYNAMIC_BOARD_EXCLUDES`` 噪声模式."""
+    if not name or len(name) < _DYNAMIC_BOARD_MIN_LEN:
+        return False
+    return not any(x in name for x in _DYNAMIC_BOARD_EXCLUDES)
+
+
+def match_board_names(text: str, board_names: Iterable[str]) -> list[str]:
+    """在 *text* 中直接查找出现的实时板块名 (动态关键词覆盖层, 无需维护 KB).
+
+    新题材板块一经东财上线, 只要新闻正文提及其板块名即自动命中, 解决内置 KB
+    关键词写死、跟不上新行业的问题。仅保留可匹配板块名 (见
+    ``_is_dynamic_matchable``), 保序去重; *board_names* 为空时返回空列表。
+    """
+    if not text:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in board_names or ():
+        name = str(raw or "").strip()
+        if not name or name in seen:
+            continue
+        if _is_dynamic_matchable(name) and name in text:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def match_industries(
+    text: str, board_names: Iterable[str] | None = None,
+) -> list[str]:
+    """命中行业列表 (保序去重); 空文本返回空. 两层来源并集:
+
+    - 静态 KB (``_BUILTIN_RULES`` + 可选外部 JSON): 关键词 → 行业, 精度层;
+    - 动态板块名 (``board_names`` 提供时): 新闻文本直接命中的实时板块名,
+      覆盖层 — 东财新上线题材板无需改 KB 即可被关联 (新行业兜底)。
+    """
     if not text:
         return []
     out: list[str] = []
@@ -110,6 +190,10 @@ def match_industries(text: str) -> list[str]:
             for ind in rule["industries"]:
                 if ind not in out:
                     out.append(ind)
+    if board_names:
+        for name in match_board_names(text, board_names):
+            if name not in out:
+                out.append(name)
     return out
 
 

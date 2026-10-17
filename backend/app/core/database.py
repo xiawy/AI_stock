@@ -69,3 +69,46 @@ def init_db() -> None:
     import app.models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    _migrate_analysis_task_state(engine)
+
+
+# A5: analysis_tasks 的跨 worker 状态列。create_all 不会给**已存在**的表补列,
+# 而现网库是 init_db() 建起来的, 因此这里做一次幂等补列 (与 alembic 版本对齐)。
+_ANALYSIS_TASK_STATE_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("progress_json", "TEXT DEFAULT '{}'"),
+    ("result_json", "TEXT DEFAULT ''"),
+    ("owner", "VARCHAR(96) DEFAULT ''"),
+    ("heartbeat_at", "DATETIME"),
+    ("control", "VARCHAR(16) DEFAULT ''"),
+    ("control_at", "DATETIME"),
+)
+
+
+def _migrate_analysis_task_state(bind) -> None:
+    """幂等补列：老库升级到 A5 后仍能直接启动，无需手工跑迁移。"""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(bind)
+    if "analysis_tasks" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("analysis_tasks")}
+    missing = [(name, ddl) for name, ddl in _ANALYSIS_TASK_STATE_COLUMNS if name not in existing]
+    if not missing:
+        return
+
+    with bind.begin() as conn:
+        for name, ddl in missing:
+            conn.execute(text(f"ALTER TABLE analysis_tasks ADD COLUMN {name} {ddl}"))
+        # SQLite 只能在建列后单独建索引
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_analysis_tasks_heartbeat_at "
+                "ON analysis_tasks (heartbeat_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_analysis_tasks_owner "
+                "ON analysis_tasks (owner)"
+            )
+        )

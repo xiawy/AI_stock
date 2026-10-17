@@ -2,8 +2,8 @@
 
 组装设计文档的全部运行时组件:
 
-1. 初始化 SQLite 业务表 + ``system_config`` 种子 (``global_trade_enable=0``
-   默认关闭交易, §15-1)
+1. 初始化 SQLite 业务表 + ``system_config`` 种子 (``global_trade_enable=1``,
+   默认允许**模拟盘**下单; 实盘需 ``QUANT_LIVE_MODE=1`` 且人工开闸)
 2. 种子默认策略规则与单测用例 (§10.1)
 3. 启动五个队列消费者: selection_control / buy / hold / risk / orchestrator
    (§7), risk 队列并入维护任务 handler (日报/清理/超时巡检/到期出池)
@@ -22,7 +22,14 @@ from typing import Optional
 
 from . import db_ops
 from .agents import build_handlers
-from .config import ALL_QUEUES, RISK_QUEUE, SYSTEM_CONFIG_SEED
+from .config import (
+    ALL_QUEUES,
+    CONFIG_MIGRATIONS,
+    CONFIG_SCHEMA_KEY,
+    CONFIG_SCHEMA_VERSION,
+    RISK_QUEUE,
+    SYSTEM_CONFIG_SEED,
+)
 from .db import init_quant_db
 from .mq import get_mq_backend
 from .mq_worker import (
@@ -39,13 +46,88 @@ logger = logging.getLogger(__name__)
 
 
 def _seed_system_config() -> None:
-    """首次初始化种子配置; 已存在的键一律不覆盖 (运维手工调整优先)."""
+    """初始化种子配置 + 执行版本化迁移 (P0-2 / A2).
+
+    语义分两层:
+    1. **补缺**: 库里没有的键按 ``SYSTEM_CONFIG_SEED`` 写入;
+    2. **迁移**: 默认值变更通过 ``CONFIG_MIGRATIONS`` 下发, 且**只改「值仍是
+       旧默认值」的键** —— 运维手工调整过的值绝不动。
+
+    历史教训: 9 月首装的库按 ``global_trade_enable='0'`` 落库, 之后代码把默认
+    值改成 ``'1'``, 但「已存在的键一律不覆盖」使新默认值永远到不了存量库, 直接
+    导致 6 周 0 成交。没有第 2 层, 下次改任何默认值都会重演。
+    """
     existing = db_ops.get_all_config()
+    seeded = 0
     for key, (value, description) in SYSTEM_CONFIG_SEED.items():
         if key not in existing:
             db_ops.set_config_value(key, value, description)
-    if "global_trade_enable" not in existing:
-        logger.info("system_config 初始化完成, global_trade_enable=0 (默认关闭交易)")
+            seeded += 1
+    if seeded:
+        logger.info("system_config 补种 %d 个缺失键", seeded)
+
+    current_version = _read_schema_version(existing)
+    if current_version >= CONFIG_SCHEMA_VERSION:
+        logger.info(
+            "system_config schema v%d 已是最新, global_trade_enable=%s",
+            current_version, db_ops.get_config_value("global_trade_enable", "?"),
+        )
+        return
+
+    applied = _apply_config_migrations(current_version, existing)
+    db_ops.set_config_value(
+        CONFIG_SCHEMA_KEY, str(CONFIG_SCHEMA_VERSION),
+        "配置种子 schema 版本 (默认值变更迁移用)",
+    )
+    logger.info(
+        "system_config 迁移完成: v%d -> v%d, 应用 %d 项 (global_trade_enable=%s)",
+        current_version, CONFIG_SCHEMA_VERSION, applied,
+        db_ops.get_config_value("global_trade_enable", "?"),
+    )
+
+
+def _read_schema_version(existing: dict[str, str]) -> int:
+    """读取当前 schema 版本; 无版本字段时按 v1 处理 (首版种子)."""
+    raw = existing.get(CONFIG_SCHEMA_KEY, "")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        # 老库没有版本标记: 视为 v1 (其中 global_trade_enable 等仍是初版默认值)
+        return 1
+
+
+def _apply_config_migrations(
+    from_version: int, existing: dict[str, str],
+) -> int:
+    """按版本升序执行迁移, 返回实际变更的键数."""
+    applied = 0
+    for migration in CONFIG_MIGRATIONS:
+        if int(migration["version"]) <= from_version:
+            continue
+        for key, old_defaults, new_value in migration["changes"]:
+            current = existing.get(key)
+            if current is None:
+                # 键不存在 (全新库或新增键): 交给补种层处理
+                db_ops.set_config_value(key, new_value)
+                applied += 1
+                logger.info("config migration add %s=%s (v%s)", key, new_value,
+                            migration["version"])
+                continue
+            if current not in tuple(old_defaults):
+                # 运维手工改过 → 尊重人工设置, 不动
+                logger.info(
+                    "config migration skip %s (current=%s 非旧默认值, 保留人工设置)",
+                    key, current,
+                )
+                continue
+            db_ops.set_config_value(key, new_value)
+            applied += 1
+            logger.warning(
+                "config migration applied: %s %s -> %s (v%s: %s)",
+                key, current, new_value, migration["version"],
+                migration["description"],
+            )
+    return applied
 
 
 class QuantService:
@@ -150,7 +232,7 @@ class QuantService:
             "mq_backend": backend.name,
             "queues": stats,
             "scheduler": self.scheduler.backend_name if self.scheduler else "disabled",
-            "global_trade_enable": db_ops.get_config_value("global_trade_enable", "0"),
+            "global_trade_enable": db_ops.get_config_value("global_trade_enable", "?"),
             "trade_frozen": db_ops.get_config_value("trade_frozen", "0"),
             "optional_pool_active": len(db_ops.get_optional_pool("active")),
             "holdings": len(db_ops.get_holdings()),

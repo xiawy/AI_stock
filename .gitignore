@@ -224,4 +224,7 @@ node_modules/
 # Backend local database (SQLite)
 backend/data/
 
+# WorkBuddy agent workspace (memory/logs, 不属于项目产物)
+.workbuddy/
+
 custom_strategies

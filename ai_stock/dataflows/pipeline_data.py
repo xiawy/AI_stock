@@ -395,6 +395,9 @@ def _fetch_board_flow(board_level: str) -> list[dict]:
         code (BKxxxx), name, change_pct, main_net_inflow (元),
         up_count, down_count, top_stock_name, top_stock_code, top_stock_pct,
         board_level ("industry" / "concept").
+
+    Raises the underlying exception when the vendor host refuses the connection so
+    that the caller can fall back to another provider (see ``_fetch_board_flow_any``).
     """
     fs = _EM_BOARD_FS[board_level]
     boards: list[dict] = []
@@ -427,11 +430,214 @@ def _fetch_board_flow(board_level: str) -> list[dict]:
                 "top_stock_code": str(item.get("f140", "")),
                 "top_stock_pct": _to_float(item.get("f136")),
                 "board_level": board_level,
+                "source": "eastmoney_push2",
             })
         if len(items) < 100:
             break
         page += 1
     return boards
+
+
+# ---------------------------------------------------------------------------
+# 备用数据源: 新浪板块行情 (P0-1)
+# ---------------------------------------------------------------------------
+# 东财 push2 的 clist 集群会对采集机 IP 做应用层封禁 (TCP/TLS 均正常, 仅该接口
+# 被断连), 且主域与 delay 镜像同时失效 → 原有「主域失败回退延迟域」机制无效。
+# 新浪的两个 JS 接口同口径返回板块名/涨跌幅/成交额, 且不走东财反爬体系:
+#   行业:  q/view/newSinaHy.php            → "new_xxx":"code,name,count,..."
+#   概念:  q/view/newFLJK.php?param=class  → "gn_xxx":"code,name,count,..."
+# 字段 (逗号分隔, GBK 编码):
+#   0=板块代码 1=板块名 2=成分数 3=均价 4=涨跌额 5=涨跌幅% 6=成交量 7=成交额
+#   8=领涨股代码 9..11=价格字段 12=领涨股名
+# 语义差异: 无主力净流入 (置 0)、无成分股涨跌家数 (置 0) —— 下游按「可得字段」
+# 使用, 排序退化为纯涨幅榜, 但选股链路不再空转。
+_SINA_BOARD_URLS = {
+    "industry": "https://vip.stock.finance.sina.com.cn/q/view/newSinaHy.php",
+    "concept": (
+        "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+        "Market_Center.getHQNodeData"
+    ),
+}
+_SINA_CLASS_BOARD_URL = (
+    "https://vip.stock.finance.sina.com.cn/q/view/newFLJK.php?param=class"
+)
+_SINA_NODE_DATA_URL = (
+    "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+    "Market_Center.getHQNodeData"
+)
+_SINA_HEADERS = {
+    "User-Agent": _UA,
+    "Referer": "https://finance.sina.com.cn/",
+    "Accept": "*/*",
+}
+
+
+def _sina_board_flow(board_level: str) -> list[dict]:
+    """新浪板块行情 (行业 / 概念), 与东财口径对齐的板flow 结构."""
+    import json as _json
+    import re as _re
+
+    url = (
+        _SINA_CLASS_BOARD_URL if board_level == "concept"
+        else _SINA_BOARD_URLS[board_level]
+    )
+    resp = _requests.get(url, headers=_SINA_HEADERS, timeout=12)
+    resp.raise_for_status()
+    # 接口返回 GBK 编码的 JS 变量赋值, 显式 decode 避免 requests 误判 latin-1
+    text = resp.content.decode("gbk", errors="ignore")
+    match = _re.search(r"=\s*(\{.*\})\s*;?\s*$", text.strip(), _re.S)
+    if not match:
+        raise ValueError("sina board payload unexpected")
+    payload = _json.loads(match.group(1))
+
+    boards: list[dict] = []
+    for raw in payload.values():
+        parts = str(raw).split(",")
+        if len(parts) < 8:
+            continue
+        code = parts[0].strip()
+        name = parts[1].strip()
+        if not code or not name:
+            continue
+        boards.append({
+            "code": code,
+            "name": name,
+            "change_pct": _to_float(parts[5]),
+            "main_net_inflow": 0.0,          # 新浪不提供主力净流入
+            "up_count": 0,
+            "down_count": 0,
+            "top_stock_name": parts[12].strip() if len(parts) > 12 else "",
+            "top_stock_code": _strip_sina_prefix(parts[8]) if len(parts) > 8 else "",
+            "top_stock_pct": 0.0,
+            "board_level": board_level,
+            "source": "sina_board",
+        })
+    return boards
+
+
+def _strip_sina_prefix(symbol: str) -> str:
+    """'sh600629' -> '600629' (与东财 f12 口径一致, 便于下游按 6 位代码匹配)."""
+    value = str(symbol or "").strip().lower()
+    for prefix in ("sh", "sz", "bj"):
+        if value.startswith(prefix):
+            return value[len(prefix):]
+    return value
+
+
+def _sina_board_constituents(
+    board_code: str, top_n: int = 20, sort_by: str = "amount",
+) -> list[dict]:
+    """新浪板块成分股 (行业/概念节点), 结构对齐 ``get_board_constituents``."""
+    sort_key = "mktcap" if sort_by == "market_cap" else "amount"
+    params = {
+        "page": "1",
+        "num": str(max(top_n, 1)),
+        "sort": sort_key,
+        "asc": "0",
+        "node": board_code,
+    }
+    resp = _requests.get(
+        _SINA_NODE_DATA_URL, params=params, headers=_SINA_HEADERS, timeout=12,
+    )
+    resp.raise_for_status()
+    items = resp.json() or []
+    stocks: list[dict] = []
+    for item in items:
+        code = str(item.get("code", "") or "")
+        if not code:
+            continue
+        # 新浪 mktcap/nmc 单位为万元, 东财 f20 为元 → 统一换算成元
+        stocks.append({
+            "code": code,
+            "name": str(item.get("name", "")),
+            "price": _to_float(item.get("trade")),
+            "change_pct": _to_float(item.get("changepercent")),
+            "amount": _to_float(item.get("amount")),
+            "turnover_rate": _to_float(item.get("turnoverratio")),
+            # 新浪无「量比」字段; 置 0 表示不可用 (雷达按 >2 过滤, 自然不触发)
+            "volume_ratio": 0.0,
+            "market_cap": _to_float(item.get("mktcap")) * 1e4,
+            "main_net_inflow": 0.0,
+            "source": "sina_board",
+        })
+    return stocks
+
+
+def _fetch_board_flow_any(board_level: str) -> list[dict]:
+    """板块列表多源取数: 东财 push2 (主) → 新浪 (备).
+
+    每个 provider 独立记录健康度与退避: 主源在退避窗口内直接跳过, 避免
+    「被封期间每 10 分钟硬撞一次」把封禁越撞越久 (P0-1)。
+    """
+    from . import data_health
+
+    providers = (
+        ("eastmoney_push2", "board_list", lambda: _fetch_board_flow(board_level)),
+        ("sina_board", "board_list", lambda: _sina_board_flow(board_level)),
+    )
+    last_error = ""
+    for source, api, fn in providers:
+        if data_health.in_backoff(source):
+            logger.info(
+                "%s in backoff for %s, skip provider", source, board_level,
+            )
+            continue
+        started = _time.monotonic()
+        try:
+            rows = fn()
+        except Exception as exc:
+            last_error = f"{source}: {exc}"
+            in_backoff = data_health.record_fail(
+                source, api, str(exc),
+                backoff_steps=_board_backoff_steps(), threshold=_board_fail_threshold(),
+            )
+            logger.warning(
+                "%s board_list(%s) failed: %s%s",
+                source, board_level, exc, " (entering backoff)" if in_backoff else "",
+            )
+            continue
+        if not rows:
+            # 空结果按失败处理: 接口「成功但返回 0 条」是最危险的静默故障形态
+            data_health.record_fail(
+                source, api, "empty_result",
+                backoff_steps=_board_backoff_steps(), threshold=_board_fail_threshold(),
+            )
+            logger.warning("%s board_list(%s) returned 0 rows", source, board_level)
+            continue
+        # 统一标注实际供数来源: 下游排查「数据是哪个源给的」时无需再看日志
+        for row in rows:
+            if isinstance(row, dict):
+                row.setdefault("source", source)
+        data_health.record_ok(
+            source, api, (_time.monotonic() - started) * 1000.0,
+        )
+        if source != "eastmoney_push2":
+            logger.info(
+                "board_list(%s) served by %s (%d rows) — primary source unavailable",
+                board_level, source, len(rows),
+            )
+        return rows
+    if last_error:
+        logger.warning("all board providers failed for %s: %s", board_level, last_error)
+    return []
+
+
+def _board_backoff_steps() -> tuple[int, ...]:
+    try:
+        from ai_stock.quant.config import DATA_SOURCE_BACKOFF_STEPS
+
+        return tuple(DATA_SOURCE_BACKOFF_STEPS)
+    except Exception:  # pragma: no cover - quant 未安装时用保守默认
+        return (300, 900, 3600)
+
+
+def _board_fail_threshold() -> int:
+    try:
+        from ai_stock.quant.config import DATA_SOURCE_FAIL_THRESHOLD
+
+        return int(DATA_SOURCE_FAIL_THRESHOLD)
+    except Exception:  # pragma: no cover
+        return 3
 
 
 def get_industry_fund_flow() -> list[dict]:
@@ -444,7 +650,7 @@ def get_industry_fund_flow() -> list[dict]:
     Empty list on failure — the ranking degrades to news-heat-only.
     """
     try:
-        boards = _fetch_board_flow("industry")
+        boards = _fetch_board_flow_any("industry")
     except Exception as e:
         logger.warning("Industry fund-flow fetch failed: %s", e)
         return []
@@ -458,11 +664,7 @@ def get_concept_board_flow() -> list[dict]:
 
     Empty list on failure.
     """
-    try:
-        boards = _fetch_board_flow("concept")
-    except Exception as e:
-        logger.warning("Concept board fund-flow fetch failed: %s", e)
-        return []
+    boards = _fetch_board_flow_any("concept")
     logger.info("Fetched %d concept boards with fund flow", len(boards))
     return boards
 
@@ -472,14 +674,21 @@ def get_all_board_fund_flow() -> list[dict]:
 
     This is the universe the industry heatmap matches against: concept boards
     give the fine granularity, industry boards give the standard classification.
+
+    多源容错 (P0-1): 每个板块类别独立走「东财 push2 → 新浪」链路, 单源被封不会
+    让整张榜单归零; 两源都不可用时才返回空 (由调用方走缓存兜底)。
     """
     boards: list[dict] = []
     for level in ("industry", "concept"):
-        try:
-            boards.extend(_fetch_board_flow(level))
-        except Exception as e:
-            logger.warning("%s board fund-flow fetch failed: %s", level, e)
-    logger.info("Fetched %d total boards (industry + concept)", len(boards))
+        boards.extend(_fetch_board_flow_any(level))
+    if boards:
+        sources = sorted({b.get("source", "?") for b in boards})
+        logger.info(
+            "Fetched %d total boards (industry + concept), source=%s",
+            len(boards), ",".join(sources),
+        )
+    else:
+        logger.warning("All board providers returned empty (industry + concept)")
     return boards
 
 
@@ -505,9 +714,24 @@ def get_board_constituents(
         market_cap (元), amount (成交额, 元), main_net_inflow (元).
 
     Empty list on failure.
+
+    数据源: 东财 push2 (主, 板块代码形如 ``BK1033``) → 新浪节点 (备, 板块代码形如
+    ``new_dlhy`` / ``gn_hwqc``)。新浪来源的板块代码无法转换到东财, 因此备用板块
+    列表天然只能由备用成分股接口承接, 两条链路保持一致 (P0-1)。
     """
     if not board_code:
         return []
+    from . import data_health
+
+    if board_code.startswith(("new_", "gn_")):
+        return _sina_constituents_guarded(board_code, top_n, sort_by)
+
+    if data_health.in_backoff("eastmoney_push2"):
+        # 主源在退避窗口内: BKxxxx 系东财板块代码, 无备用源可承接 → 直接空
+        logger.info("eastmoney in backoff, skip constituents for %s", board_code)
+        return []
+
+    started = _time.monotonic()
     try:
         params = {
             "pn": "1",
@@ -537,11 +761,55 @@ def get_board_constituents(
                 "volume_ratio": _to_float(item.get("f10")),
                 "market_cap": _to_float(item.get("f20")),
                 "main_net_inflow": _to_float(item.get("f62")),
+                "source": "eastmoney_push2",
             })
+        if stocks:
+            data_health.record_ok(
+                "eastmoney_push2", "board_constituents",
+                (_time.monotonic() - started) * 1000.0,
+            )
+        else:
+            data_health.record_fail(
+                "eastmoney_push2", "board_constituents", "empty_result",
+                backoff_steps=_board_backoff_steps(), threshold=_board_fail_threshold(),
+            )
         return stocks
     except Exception as e:
+        data_health.record_fail(
+            "eastmoney_push2", "board_constituents", str(e),
+            backoff_steps=_board_backoff_steps(), threshold=_board_fail_threshold(),
+        )
         logger.warning("Board constituents fetch failed for %s: %s", board_code, e)
         return []
+
+
+def _sina_constituents_guarded(
+    board_code: str, top_n: int, sort_by: str,
+) -> list[dict]:
+    """新浪成分股取数 + 健康度记录 (备用链路专用)."""
+    from . import data_health
+
+    started = _time.monotonic()
+    try:
+        stocks = _sina_board_constituents(board_code, top_n=top_n, sort_by=sort_by)
+    except Exception as e:
+        data_health.record_fail(
+            "sina_board", "board_constituents", str(e),
+            backoff_steps=_board_backoff_steps(), threshold=_board_fail_threshold(),
+        )
+        logger.warning("Sina constituents failed for %s: %s", board_code, e)
+        return []
+    if stocks:
+        data_health.record_ok(
+            "sina_board", "board_constituents",
+            (_time.monotonic() - started) * 1000.0,
+        )
+    else:
+        data_health.record_fail(
+            "sina_board", "board_constituents", "empty_result",
+            backoff_steps=_board_backoff_steps(), threshold=_board_fail_threshold(),
+        )
+    return stocks
 
 
 def _to_float(value) -> float:

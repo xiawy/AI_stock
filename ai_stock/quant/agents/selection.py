@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field
 
 from .. import db_ops
 from ..calendar_utils import get_trade_date
+from ..data_service import get_data_service
 from ..config import (
     BONUS_UPSTREAM,
     BONUS_WAVE,
@@ -580,23 +581,31 @@ class IndustryScanAgent(BaseAgent):
         if len(picked) < MAX_SCAN_CANDIDATES:
             if not tags:
                 # Level 2 降级 (优化点 6): 无事件映射时回退量化扫描 —
-                # 涨幅榜前 10 ∪ 主力资金异动前 5, 保证无新闻时仍有候选
+                # 涨幅榜前 10 ∪ 主力资金异动前 5, 保证无新闻时仍有候选。
+                # 备用数据源 (新浪) 不提供主力净流入时, 资金维度无信息量,
+                # 直接跳过并把涨幅榜扩到候选上限, 避免按全 0 排序取到随机 5 只。
+                has_inflow = any(
+                    float(b.get("main_net_inflow", 0) or 0) != 0
+                    for b in by_code.values()
+                )
+                change_slots = 10 if has_inflow else MAX_SCAN_CANDIDATES
                 for board in sorted(
                     by_code.values(),
                     key=lambda b: float(b.get("change_pct", 0) or 0),
                     reverse=True,
-                )[:10]:
+                )[:change_slots]:
                     code = board.get("code", "")
                     if code not in picked:
                         picked[code] = {**board, "event_tag": ""}
-                for board in sorted(
-                    by_code.values(),
-                    key=lambda b: float(b.get("main_net_inflow", 0) or 0),
-                    reverse=True,
-                )[:5]:
-                    code = board.get("code", "")
-                    if code not in picked and len(picked) < MAX_SCAN_CANDIDATES:
-                        picked[code] = {**board, "event_tag": ""}
+                if has_inflow:
+                    for board in sorted(
+                        by_code.values(),
+                        key=lambda b: float(b.get("main_net_inflow", 0) or 0),
+                        reverse=True,
+                    )[:5]:
+                        code = board.get("code", "")
+                        if code not in picked and len(picked) < MAX_SCAN_CANDIDATES:
+                            picked[code] = {**board, "event_tag": ""}
             else:
                 # 有事件时用涨幅榜补足候选池 (§7.1.1)
                 for board in sorted(
@@ -1509,14 +1518,48 @@ class StockSelectionAgent(BaseAgent):
 # ---------------------------------------------------------------------------
 
 def handle_selection_start(task: dict) -> dict:
-    """selection_control 队列的 selection_start handler: 启动选股流程 (幂等)."""
+    """selection_control 队列的 selection_start handler: 启动选股流程 (幂等).
+
+    入口先做一次「数据健康预检」(A7): 板块数据是整条选股链路的第一道闸门,
+    不可用时跑完 macro_event/theme_radar/limit_up_monitor 三个 LLM 步骤再空手
+    而归, 纯属浪费调用预算 (历史: 每槽位都跑满, radar_scan_empty 918 次)。
+    预检失败直接跳过本槽位 + 告警, 由下一槽位重试。
+    """
     payload = task.get("payload", {})
     trade_date = payload.get("trade_date", get_trade_date())
     # 幂等 flow_id: 同一交易日同一时点只跑一次 (调度 idempotent_key 已保证)
     trigger = payload.get("trigger", datetime.now().strftime("%H%M"))
     flow_id = f"selection_{trade_date}_{trigger}"
+
+    blocked = _data_health_precheck(trade_date)
+    if blocked:
+        return {"skipped": True, "reason": blocked, "trade_date": trade_date}
+
     return get_orchestrator().start_flow(
         "selection",
         flow_id=flow_id,
         data={"trade_date": trade_date, "trigger": trigger},
     )
+
+
+def _data_health_precheck(trade_date: str) -> str:
+    """板块数据可用性预检. 返回空串表示通过, 否则返回跳过原因 (已告警)."""
+    try:
+        boards = get_data_service().get_all_industries()
+    except Exception as exc:
+        boards = []
+        logger.warning("selection precheck board fetch failed: %s", exc)
+    if boards:
+        return ""
+    from ..ops_monitor import WARNING, get_alerts
+
+    get_alerts().emit(
+        WARNING, "selection_data_unavailable",
+        f"{trade_date} 选股槽位跳过: 板块数据源不可用 (东财/新浪均无返回)。"
+        "请检查数据源健康矩阵与网络出口封禁情况",
+    )
+    db_ops.log_decision(
+        agent="selection_start", decision="precheck_failed",
+        reason="板块数据源不可用, 跳过本槽位以节省 LLM 调用",
+    )
+    return "板块数据源不可用"

@@ -91,13 +91,24 @@ def get_all_config() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 def upsert_optional_stock(item: dict) -> bool:
-    """新增/更新自选池标的 (status=active, observe_expire 按交易日计)."""
+    """新增/更新自选池标的 (status=active, observe_expire 按交易日计).
+
+    观察期按阶段分层 (P1-4): HEAD 10 日 / BODY 7 日 / TAIL 3 日。
+    主线鱼头横盘蓄势期需要更长观察窗, 固定 7 天会把未启动的主线提前出池。
+    """
     from .calendar_utils import advance_trading_days
-    from .config import OBSERVE_EXPIRE_TRADING_DAYS
+    from .config import (
+        OBSERVE_EXPIRE_DAYS_BY_STAGE,
+        OBSERVE_EXPIRE_TRADING_DAYS,
+    )
 
     symbol = item.get("symbol", "")
     if not symbol:
         return False
+    stage = (item.get("stage_batch", "BODY") or "BODY").upper()
+    observe_days = int(
+        OBSERVE_EXPIRE_DAYS_BY_STAGE.get(stage, OBSERVE_EXPIRE_TRADING_DAYS)
+    )
     with session_scope() as s:
         row = s.get(StockPoolOptional, symbol)
         if row is None:
@@ -129,7 +140,7 @@ def upsert_optional_stock(item: dict) -> bool:
         # 旧版写 date 对象依赖 SQLite strftime 隐式兼容, 跨后端脆弱.
         row.observe_expire = datetime.combine(
             advance_trading_days(
-                datetime.now(_MARKET_TZ).date(), OBSERVE_EXPIRE_TRADING_DAYS,
+                datetime.now(_MARKET_TZ).date(), observe_days,
             ),
             datetime.max.time(),
         ).replace(microsecond=0, tzinfo=_MARKET_TZ)
@@ -379,6 +390,7 @@ def upsert_holding(item: dict, user_id: str | None = None) -> bool:
             row = StockPoolHolding(user_id=uid, symbol=symbol)
             s.add(row)
         row.name = item.get("name", row.name or "")
+        row.industry = item.get("industry", row.industry or "")
         row.quantity = int(item.get("quantity", row.quantity or 0))
         row.available_quantity = int(
             item.get("available_quantity", row.available_quantity or 0)
@@ -1007,6 +1019,48 @@ def cache_cleanup(keep_days: int = 3) -> int:
     with session_scope() as s:
         result = s.execute(
             delete(QuantCacheData).where(QuantCacheData.expires_at < cutoff)
+        )
+        s.commit()
+        return result.rowcount or 0
+
+
+# ---------------------------------------------------------------------------
+# 归档清理 (A6): 决策日志与终态流程此前只增不减
+# ---------------------------------------------------------------------------
+
+def cleanup_decision_log(keep_days: int = 90) -> int:
+    """删除超过保留期的决策日志, 返回删除行数.
+
+    ``quant_agent_decision_log`` 是每一步 Agent 的审计主通道, 只增不减, 生产库
+    已达 2 万行且无归档策略。90 天足够覆盖回溯分析, 更早的数据价值远低于
+    维护成本 (SQLite 单文件膨胀后需要停机迁移)。
+    """
+    if keep_days <= 0:
+        return 0
+    cutoff = _now() - timedelta(days=keep_days)
+    with session_scope() as s:
+        result = s.execute(
+            delete(AgentDecisionLog).where(AgentDecisionLog.ts < cutoff)
+        )
+        s.commit()
+        return result.rowcount or 0
+
+
+def archive_finished_flows(keep_days: int = 30) -> int:
+    """删除保留期外的终态流程 (completed/failed/timeout), 返回删除行数.
+
+    running 流程永不删除 (重启恢复依赖); 每 30 分钟窗口每股一条 buy flow,
+    只增不减会持续膨胀。
+    """
+    if keep_days <= 0:
+        return 0
+    cutoff = _now() - timedelta(days=keep_days)
+    with session_scope() as s:
+        result = s.execute(
+            delete(QuantFlowState).where(
+                QuantFlowState.status.in_(("completed", "failed", "timeout")),
+                QuantFlowState.updated_at < cutoff,
+            )
         )
         s.commit()
         return result.rowcount or 0
