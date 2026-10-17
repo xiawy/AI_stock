@@ -29,8 +29,12 @@ from ai_stock.quant import theme_registry as tr  # noqa: E402
 
 
 def main() -> int:
-    seed = tr.seed_default_themes()
-    print(f"seed: created={seed['created']} skipped={seed['skipped']}\n")
+    reset = "--reset" in sys.argv
+    seed = tr.reset_seed_themes() if reset else tr.seed_default_themes()
+    print(
+        f"seed: {'reset+' if reset else ''}created={seed['created']} "
+        f"skipped={seed['skipped']}\n"
+    )
 
     results = tr.validate_all()
     results.sort(key=lambda r: (r["status"] != "active", r["name"]))

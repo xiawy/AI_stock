@@ -36,8 +36,8 @@ GATE_MAX_CR5 = 0.60            # 前 5 大权重和（仅作参考指标，不�
 # 为什么不用 CR5 做闸门：市值加权下 8~11 只票的 CR5 天然落在 78%~95%，
 # 它衡量的是"这个行业有没有大市值龙头"，而不是"是不是单票"。真正该拦的是
 # 单票绑架（max_weight）与双龙头绑架（top2）。
-GATE_MAX_SINGLE_WEIGHT = 0.35
-GATE_MAX_TOP2_WEIGHT = 0.55
+GATE_MAX_SINGLE_WEIGHT = 0.40
+GATE_MAX_TOP2_WEIGHT = 0.65
 GATE_MIN_INTERNAL_CORR = 0.35  # 冷启动用"主题内一致性"替代"与父行业 ρ"（父板块无历史）
 GATE_MAX_DISPERSION = 1.6      # 个股波动 / 主题波动
 GATE_MIN_LIQUIDITY_RATIO = 0.80
@@ -110,6 +110,28 @@ def seed_default_themes() -> dict:
 # ---------------------------------------------------------------------------
 # 读取
 # ---------------------------------------------------------------------------
+
+
+def reset_seed_themes() -> dict:
+    """清空种子主题后重建（改过成分股/改名时用）。只删 ``created_by='seed'`` 的行。
+
+    SQLite 默认不开外键级联，因此子表显式删除。
+    """
+    ensure_schema()
+    with session_scope() as session:
+        ids = [
+            r.id for r in session.execute(
+                select(QuantTheme).where(QuantTheme.created_by == "seed")
+            ).scalars().all()
+        ]
+        if ids:
+            session.execute(delete(QuantThemeDaily).where(QuantThemeDaily.theme_id.in_(ids)))
+            session.execute(delete(QuantThemeStock).where(QuantThemeStock.theme_id.in_(ids)))
+            session.execute(delete(QuantThemeAlias).where(QuantThemeAlias.theme_id.in_(ids)))
+            session.execute(delete(QuantTheme).where(QuantTheme.id.in_(ids)))
+            session.commit()
+    logger.info("theme seed reset: removed %d themes", len(ids))
+    return seed_default_themes()
 
 
 def get_theme(name: str) -> Optional[dict]:
