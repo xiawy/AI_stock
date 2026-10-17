@@ -1,0 +1,347 @@
+# 新闻榜重构方案（产品 + 实现）
+
+> 结论先行：当前新闻榜不是"新闻影响力榜"，而是"政策快讯 Top20 列表"。
+> 类型全是政策、行业/多空/涨幅全为空，不是数据源缺数据，而是**评分链路在 2026-08-30 被整体删除，只留下表结构和前端字段**。
+> 修复分两步：先让字段"有值且可信"（P0），再把"预测"变成可回测的能力（P1）。
+
+---
+
+## 一、现状：链路与线上证据
+
+### 1.1 现在的链路（4 步，没有评分环节）
+
+```
+选股流程 macro_event 步
+  └─ get_hot_news(3天)                     ~670 条（东财7x24 + 同花顺 + 新浪）
+       └─ save_news_board(news)
+            ├─ select_top_news(top20)       排序键 = (是否政策, 发布时间) 倒序
+            └─ _to_news_row()               只写 6 个字段，其余走 DB 默认值
+                 └─ impact_snapshots + news_items
+                      └─ GET /api/impact/latest  →  ImpactRanking.vue
+```
+
+代码位置：
+- 采集：`ai_stock/dataflows/pipeline_data.py::get_impact_news`
+- 分类：`ai_stock/dataflows/pipeline_data.py::classify_news`（关键词命中 ≥2 → policy）
+- 选榜：`ai_stock/pipeline/news_board.py::select_top_news`
+- 落库：`ai_stock/pipeline/news_board.py::_to_news_row`
+- 写入方：`ai_stock/quant/agents/macro_event.py:87`（唯一调用点）
+- 读取：`backend/app/api/impact.py` → `frontend/src/views/ImpactRanking.vue`
+
+### 1.2 线上证据（snapshot id=967，2026-10-16）
+
+| 指标 | 实测 | 应有 |
+|---|---|---|
+| 快照条数 | 20 | 20 |
+| `category` 分布 | **policy × 20** | 政策/行业/公司/资金/海外混合 |
+| `bull_bear_bias` 分布 | **neutral × 20** | bullish/bearish/neutral |
+| `composite_score` 非零 | **0 / 20** | 20/20 |
+| `industries_json` 非空 | **0 / 20** | ≥16/20 |
+| `expected_gain_high` 非零 | **0 / 20** | ≥16/20 |
+| `total_news_collected` | 677 条 | — |
+
+榜单实际内容（前 8 条）：港交所国债抵押、奔驰召回、工信部光伏规范、*ST卓然退市风险……
+**其中 3 条与 A 股行业景气无关**，属于 7x24 快讯流水，本不该进"影响力榜"。
+
+### 1.3 附带发现（用户未提但影响体验）
+
+| 现象 | 数据 | 原因 |
+|---|---|---|
+| 榜单一天内反复变 | 10-16 有 **12 个**快照，10-15 有 **19 个** | `save_news_board` 每次 `macro_event` 都新建快照；selection 有补跑/重驱动 → 一天写十几次 |
+| 表持续膨胀 | 45 天 **967 行**快照 × 20 条 | 无"内容未变则复用"逻辑 |
+| 低价值新闻上榜 | 奔驰召回 / 例行公告 | 只有"政策优先 + 时间倒序"，没有重要性遴选 |
+
+---
+
+## 二、根因（逐条对到代码）
+
+### 根因 1：排序键把政策类钉死在前面 → 只有政策类
+
+```python
+# ai_stock/pipeline/news_board.py::select_top_news
+valid.sort(key=lambda n: (1 if n.get("category") == "policy" else 0,
+                          str(n.get("time", ""))), reverse=True)
+top = valid[:top_n]
+```
+
+双键倒序 = **政策类优先，政策类内部按时间倒序**。677 条里只要政策类 ≥ 20 条，结果必然 100% 政策。
+这不是"新闻源只有政策"，而是"排序把其它类型全挤出去了"。
+
+### 根因 2：`category` 本身是粗关键词，且只有两类
+
+```python
+_POLICY_KEYWORDS = {"政策","央行","证监会",...,"通知","办法","条例","限制","鼓励"}
+return "policy" if hits >= 2 else "news"
+```
+
+- 只有 `policy / news` 两种，**没有"行业事件 / 公司事件 / 资金面 / 海外"维度**；
+- "办法""通知""限制"这类泛词在正文里很常见 → **公司公告（召回、退市风险）也被判成政策**，进一步放大根因 1。
+
+### 根因 3：字段不是"算出来是 0"，而是"根本没写"
+
+```python
+def _to_news_row(item):
+    return {"title_hash":..., "title":..., "content":..., "source":...,
+            "pub_time":..., "category":..., "bull_bear_bias": "neutral",  # 硬编码
+            "rank": ...}
+```
+
+`composite_score / policy_score / news_score / capital_score / sentiment_score /
+industries_json / top_stocks_json / expected_gain_low / expected_gain_high /
+debate_summary / supply_demand_json` **一个都没赋值**，全部落 DB 默认值 0 或 `""`。
+
+前端 `ImpactRanking.vue` 的列、`ImpactDetail.vue` 的四张评分卡、`/api/impact/detail`
+都是按完整结构写的 —— 数据层单方面违约，UI 只能显示 `0.0` / `中性` / `—`。
+
+### 根因 4：评分链路被删除（制度性原因）
+
+```
+commit ec4876e "优化新闻榜" (2026-08-30)
+  D  ai_stock/pipeline/pipeline.py      (-291 行, 主流程)
+  D  ai_stock/pipeline/llm_judge.py     (-355 行, 4 个评分 Agent + 结构化 schema)
+  D  ai_stock/pipeline/debate.py        (-374 行, 多空辩论)
+  D  ai_stock/pipeline/evolution.py     (-256 行)
+  A  ai_stock/pipeline/news_board.py    (+101 行, 换成"取前20条")
+```
+
+删除时的理由写在文件头："新闻榜不再走独立的重型评估流程（多 Agent 评分/辩论已移除）"。
+**但表结构、API、前端、备份都没有同步降级** → 留下一个"看起来有功能、实际全空"的界面。
+
+这才是问题 1、2 的共同根因：**契约没跟着实现一起改**。
+
+---
+
+## 三、目标产品定义
+
+用户要的不是"新闻列表"，而是一条**可交易的判断链**：
+
+```
+重要新闻（值得看）
+  → 影响哪些行业（能落到板块名，不是"利好科技"）
+    → 多空方向与强度（能做多做空/回避）
+      → 预期涨跌幅度与时间窗（能定仓位、能设目标）
+        → 事后能对照（预测准不准）
+```
+
+可量化的产品目标：
+
+| 维度 | 目标 |
+|---|---|
+| 类型多样性 | Top20 中政策 ≤ 8，行业/公司/资金/海外合计 ≥ 12 |
+| 字段完整率 | 行业、多空、重要度、预期区间 非空率 ≥ 90% |
+| 重要性 | 榜单中"无行业指向的例行快讯" ≤ 2 条 |
+| 可回测 | 每条预测记录 T+1 / T+3 实际，方向命中率 ≥ 60%、区间覆盖率 60~80% |
+| 稳定性 | 同一交易时段内榜单不反复重写（内容未变则复用快照） |
+
+---
+
+## 四、实现方案
+
+### 4.1 数据模型（`news_items` 扩列，向后兼容）
+
+保留现有列（前端零改动即可显示），新增 7 列：
+
+| 列 | 类型 | 含义 |
+|---|---|---|
+| `event_type` | str(16) | policy / industry / company / capital / overseas（五类，替代现在的 policy/news 二分） |
+| `importance` | float | 重要性 0~10（人工可解释：8+ = 必看） |
+| `bias_strength` | int | 多空强度 1~3（弱/中/强） |
+| `horizon` | str(8) | 影响窗口 1d / 3d / 1w |
+| `confidence` | float | 置信度 0~1（LLM 自评 + 数据完备度折扣） |
+| `industry_impacts_json` | text | `[{name, direction, elasticity, exp_low, exp_high, basis}]` |
+| `cluster_id` | str(16) | 事件簇 ID（同一事件多源报道合并） |
+| `source_count` | int | 该事件被几个源报道（重要性佐证） |
+
+**旧列映射**（保证 UI/API/备份兼容）：
+
+- `policy_score / news_score / capital_score / sentiment_score` → 四维分（政策/行业事件/资金/情绪），由同一次 LLM 调用产出
+- `composite_score` = `importance`
+- `bull_bear_bias` = 主方向；`industries_json` = 行业名数组
+- `top_stocks_json` = 弹性个股（含 `elasticity`）
+- `expected_gain_low/high` = 主行业的 1 日预期区间
+
+新增跟踪表 `news_impact_tracking`：`(news_id, industry, predicted_low, predicted_high, predicted_at, actual_t1, actual_t3, hit_direction, in_range)`，用于 P1 的校准闭环。
+
+### 4.2 处理流水线（新增 `ai_stock/pipeline/news_impact.py`）
+
+```
+1 gather      get_impact_news(hours=72)                    ~670 条（已有）
+2 normalize   title 规范化 + 源权重                        已有 dedup_news
+3 cluster     事件聚类（同事件多源合并）                    ← 新增
+4 prefilter   规则初筛 670 → 40                             ← 新增（省 LLM 成本）
+5 assess      一次批量 LLM 结构化评估 40 → 结构化结果        ← 新增（核心）
+6 align       行业名对齐实时板块全集（224 个）              ← 新增（防幻觉）
+7 calibrate   幅度校准（统计锚）+ 截断                      ← 新增（专业关键）
+8 rank        配额排序 + 快照节流 → 落库                    ← 改 select_top_news
+```
+
+### 4.3 事件聚类（解决"同一新闻刷屏"）
+
+不引入 embedding（成本/依赖），用轻量规则：
+
+- 同一 `cluster_id` 判定：标题规范化后 Jaccard ≥ 0.5，**或** 共享 ≥2 个实体词（公司名/行业词/数字），且发布时间在 48h 内；
+- 簇内取"信息量最大"的一条作代表（content 最长 + 源权重最高），其余只累加 `source_count`；
+- `source_count` 直接进重要性公式 —— **被 5 家媒体同时报道的事件，天然比单源快讯重要**。
+
+### 4.4 重要性遴选（规则初筛 + LLM 定档 + 配额）
+
+**第一层：规则初筛（670 → ~40，成本闸门）**
+
+- 剔除：例行公告（`回购/减持/解禁/股东大会/业绩说明会/澄清`）、纯行情播报（`涨停/跌停/成交额`）、无行业指向的纯宏观数据发布；
+- 加分：`首次/突破/停产/涨价/中标/获批/并购/超预期/独家`、多源报道、标题含具体数字（金额/产能/份额）；
+- 按分数取 40 条进入 LLM。
+
+**第二层：LLM 批量定档（40 条一次调用）**
+
+输出每条：`event_type / importance(0-10) / direction / strength(1-5) / industries[] / horizon / confidence / reasoning / top_stocks[]`。
+
+**第三层：配额排序（解决"全政策"的结构性保证）**
+
+```
+Top20 配额（可配置）：
+  政策 policy      ≤ 8
+  行业 industry    ≥ 6
+  公司 company     ≥ 3
+  资金 capital     ≥ 2
+  海外 overseas    ≥ 1
+```
+每类内部按 `importance × freshness × min(source_count,3)` 排序；某类不足时，名额让给其它类 —— **用配额保证多样性，而不是靠调排序权重碰运气**。
+
+### 4.5 行业映射：白名单对齐（防幻觉）
+
+LLM 天生爱输出"利好科技/新能源"这种没法交易的词。做法：
+
+1. 把**实时板块全集**（行业 + 概念，生产实测 224 个：49 行业 + 175 概念）作为白名单塞进 prompt；
+2. 输出后用三级匹配收敛：精确 → 去后缀子串 → 已知别名表（`封测→先进封装`、`光模块→光通信模块`）；
+3. 仍匹配不上的丢弃并计数（`unmatched_industry` 指标），不回落到一级行业 —— **宁可少一个行业，也不要一个不能交易的行业**。
+
+### 4.6 多空与幅度：LLM 只给强度，幅度由统计锚定（核心专业判断）
+
+**不要让 LLM 直接吐百分比** —— 它没有波动率概念，会给出"预期涨 20%"这种无法交易的数字。
+正确做法是"相对强度 + 统计尺度"：
+
+```
+LLM 输出：direction(±) / strength 1~5 / elasticity 1.0~2.0 / horizon
+
+校准：
+  σ_ref      = 沪深300 近 20 日收益率标准差（日）        # 市场尺度
+  coef       = {1:0.3, 2:0.6, 3:1.0, 4:1.5, 5:2.2}     # 强度→倍数
+  exp_1d     = direction × coef[strength] × σ_ref × elasticity
+  区间        = [0.6 × exp_1d, 1.4 × exp_1d]
+  截断        = ±8%（单日）、±15%（3日）                 # 防离谱值
+  3日累计     = exp_1d × horizon_factor(policy 2.5 / industry 1.5 / company 1.2)
+```
+
+举例：σ_ref=1.0%，某政策 strength=4、行业 elasticity=1.5 → 单日预期 +2.25%，区间 +1.35%~+3.15%。这是**可下单、可设目标价**的量级。
+
+为什么不直接用行业自身 σ：目前没有板块历史波动序列（东财板块 K 线被封、新浪无板块历史）。
+P1 阶段新增 `quant_board_daily` 表（每日 224 个板块的 `change_pct` 快照，一天 224 行），
+积累 20 个交易日后切换为**行业自身 σ**，精度会明显提升；在此之前用沪深300 σ × 弹性系数是合理近似。
+
+### 4.7 快照节流（解决一天重写十几次）
+
+```
+写入条件（满足任一才落新快照）：
+  a) 距上次快照 ≥ 2 小时
+  b) Top20 内容哈希变化 ≥ 30%（集合差异）
+  c) 手动触发
+否则复用上一份快照（只更新 total_news_collected）
+```
+顺带把现有 967 行历史收敛：保留每日最后一个 completed 快照，其余归档。
+
+### 4.8 Prompt 骨架（一次调用，40 条批量）
+
+```
+你是 A 股事件驱动分析师。下面是 40 条候选新闻（已去重、带来源数）。
+对每条判断：事件类型 / 重要性 / 利好还是利空 / 影响强度 / 影响行业 / 时间窗 / 受益个股。
+
+约束：
+1) 行业名必须从给定板块白名单中选择（见附录），选不出就留空，禁止自创；
+2) 只输出相对强度（1~5），不要给涨跌百分比（幅度由系统按波动率校准）；
+3) 同一事件的多条新闻只评一条（cluster 内已合并）；
+4) 无行业指向的纯宏观/例行公告，importance ≤ 3；
+5) 每条给出 1 句 reasoning，必须引用新闻中的事实（金额/产能/时间/部门）。
+```
+
+输出 schema 用现有 `ai_stock/quant/llm_helper.py::structured_invoke` + Pydantic，失败自动降级 JSON 解析（该能力已具备，见历史 `llm_judge.py` 的 `BatchScoreResult` 设计，可直接复用思路）。
+
+### 4.9 前端改造（`ImpactRanking.vue` / `ImpactDetail.vue`）
+
+表格列（在现有基础上调整）：
+
+| 列 | 内容 |
+|---|---|
+| 排名 | 1-20 |
+| 标题 | 类型标签（政策/行业/公司/资金/海外，五色）+ 标题 |
+| 行业 | 主行业（带 ↑↓ 箭头）+ 次要行业 |
+| 重要度 | `importance`，≥8 用强调色 |
+| 多空 | 方向 + 强度（强多/中多/弱多…） |
+| 预期影响 | `1日 +1.4%~+3.2%`（hover 显示校准依据：σ_ref/强度） |
+| 置信度 | 高/中/低（>0.7 / 0.4~0.7 / <0.4） |
+| 来源 | 源名 + `×3 家报道` |
+
+详情弹窗：事件摘要 → 影响链（行业 + 幅度）→ 弹性个股 → 同日同类事件 → **预测跟踪（T+1 实际 vs 预测，P1 上线）**。
+
+### 4.10 成本估算
+
+| 项 | 量 | 说明 |
+|---|---|---|
+| LLM 调用 | 3~6 次/日 | 每次 40 条批量（≈3k 输入 / 1.5k 输出），远低于历史"每条×4 Agent" |
+| 规则初筛 | 本地 CPU | 670→40，不耗 token |
+| 板块白名单 | 复用缓存 | 224 个板块名，来自现有 `get_all_industries` |
+| 数据请求 | 0 新增 | 全部复用现有采集与板块接口 |
+
+对比历史实现（每条新闻 4 次评分 + 辩论），新方案 token 消耗约为 **1/20**。
+
+---
+
+## 五、分阶段落地
+
+### P0（先让字段有值、可看，1~2 天）
+
+1. `_to_news_row` 补齐字段（先接 `macro_event` 已有产出：`events[].impact_industries / influence_score / event_type`）——**零新增 LLM 成本**，榜单立刻有行业与重要度；
+2. `select_top_news` 改配额排序（政策 ≤ 8，其它类保底）→ 立刻解决"全政策"；
+3. `classify_news` 扩成五类（关键词表 + 公司名正则），修正"召回被判政策"；
+4. 快照节流，止住一天十几次重写；
+5. 前端加类型标签与"来源数"。
+
+> P0 完成后：类型分布正常、行业列有值、重要度可排序；多空/幅度仍为空（下一步）。
+
+### P1（多空 + 幅度 + 可回测，3~5 天）
+
+6. 新增 `news_impact.py`（聚类 / 初筛 / 批量评估 / 行业对齐 / 幅度校准）；
+7. `news_items` 扩列 + `news_impact_tracking` 建表（幂等补列，与既有迁移风格一致）；
+8. 每日 224 板块 `change_pct` 落 `quant_board_daily`，为行业 σ 积累样本；
+9. 日报增加"新闻预测命中率 / 区间覆盖率"。
+
+### P2（产品化，1~2 周）
+
+10. 新闻 → 选股闭环：`importance ≥ 8 且 direction=利好` 的行业，自动进入候选池加权（现有 `macro_event` 已有 industry 映射，接上即可）；
+11. 详情页"同类事件历史对照"（同行业上一次同类事件后的 5 日走势）；
+12. 预测跟踪看板：按类型/来源统计准确率，反哺 prompt 与 coef 表。
+
+---
+
+## 六、验收标准
+
+| 项 | 标准 | 验证方式 |
+|---|---|---|
+| 类型多样性 | Top20 中非政策 ≥ 12 | 落库后 SQL 统计 category/event_type |
+| 字段完整率 | 行业/多空/重要度/区间 非空 ≥ 90% | SQL 统计 |
+| 重要性有效性 | `importance ≥ 7` 的条目，T+1 行业 |涨跌| 显著大于低分组（秩相关 > 0.3） | 跟踪表 |
+| 方向命中率 | ≥ 60%（T+1 行业涨跌方向） | 跟踪表周报 |
+| 区间覆盖率 | 60%~80% | 跟踪表周报 |
+| 稳定性 | 单日快照 ≤ 6 份 | `impact_snapshots` 按日计数 |
+| 成本 | LLM 增量 ≤ 10k tokens/日 | 日志统计 |
+
+---
+
+## 七、风险与回退
+
+| 风险 | 应对 |
+|---|---|
+| LLM 行业名幻觉 | 白名单三级匹配 + 未匹配计数告警，绝不放行自创行业 |
+| 幅度预测过度自信 | 只输出区间不给点值；截断 ±8%/±15%；先观察 1 个月命中率再用于仓位 |
+| LLM 超时/失败 | 单次评估失败 → 保留规则初筛结果（importance=规则分，行业留空），榜单不空 |
+| 成本失控 | 40 条批量 + 快照节流 + 同内容复用；`importance` 缓存按 `title_hash` 复用 24h |
+| 与选股链路耦合过深 | 新闻评估独立模块，选股只读取结果；P2 才做加权联动 |
