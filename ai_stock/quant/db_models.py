@@ -26,6 +26,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Float,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -552,3 +553,96 @@ class QuantIndustryBoard(QuantBase):
             "leader_stocks": json.loads(self.leader_stocks_json or "[]"),
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+# ---------------------------------------------------------------------------
+# L3 细分赛道 (Theme) 体系 — 见 docs/THEME_TAXONOMY_DESIGN.md
+# ---------------------------------------------------------------------------
+# 为什么单独建表: 数据源的 224 个板块标签里混着「含B股/融资融券/黄河三角」这类
+# 非行业标签, 且缺「半导体」这种关键细分。对外唯一口径必须是自建的 L3 主题,
+# 它带成分股、权重、驱动关键词与日收益序列, 才能做新闻匹配与幅度校准。
+
+
+class QuantTheme(QuantBase):
+    """细分赛道主数据 (L3). 一个主题 = 一组可交易的股票 + 一句话驱动逻辑."""
+
+    __tablename__ = "quant_theme"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    parent_industry: Mapped[str] = mapped_column(String(32), default="")   # L1 申万一级
+    # split=从大板块切分 / compose=跨板块拼装 / emergent=数据源还没有的新题材
+    origin: Mapped[str] = mapped_column(String(16), default="compose")
+    # proposal | candidate | shadow | active | retired | rejected
+    status: Mapped[str] = mapped_column(String(16), default="candidate", index=True)
+    thesis: Mapped[str] = mapped_column(Text, default="")                  # 一句话驱动逻辑
+    driver_keywords_json: Mapped[str] = mapped_column(Text, default="[]")
+    legacy_board_codes_json: Mapped[str] = mapped_column(Text, default="[]")
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}")          # 6 道校验结果
+    created_by: Mapped[str] = mapped_column(String(32), default="seed")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    shadow_since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    def to_dict(self) -> dict:
+        import json
+
+        return {
+            "id": self.id,
+            "name": self.name,
+            "parent_industry": self.parent_industry,
+            "origin": self.origin,
+            "status": self.status,
+            "thesis": self.thesis,
+            "driver_keywords": json.loads(self.driver_keywords_json or "[]"),
+            "legacy_board_codes": json.loads(self.legacy_board_codes_json or "[]"),
+            "metrics": json.loads(self.metrics_json or "{}"),
+            "created_by": self.created_by,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
+        }
+
+
+class QuantThemeStock(QuantBase):
+    """主题成分股 (含权重与角色). 一只票可属多个主题, 但需区分主次."""
+
+    __tablename__ = "quant_theme_stock"
+
+    theme_id: Mapped[int] = mapped_column(
+        ForeignKey("quant_theme.id", ondelete="CASCADE"), primary_key=True
+    )
+    symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
+    weight: Mapped[float] = mapped_column(Float, default=0.0)     # 自由流通市值权重
+    role: Mapped[str] = mapped_column(String(16), default="core")  # leader|core|peripheral
+    main_business_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class QuantThemeAlias(QuantBase):
+    """主题别名 (新闻匹配用): 海风→风电（出海）、封测→半导体（先进封装）."""
+
+    __tablename__ = "quant_theme_alias"
+
+    alias: Mapped[str] = mapped_column(String(64), primary_key=True)
+    theme_id: Mapped[int] = mapped_column(
+        ForeignKey("quant_theme.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+
+class QuantThemeDaily(QuantBase):
+    """主题日收益序列 —— 幅度校准与回测的统计基础."""
+
+    __tablename__ = "quant_theme_daily"
+
+    theme_id: Mapped[int] = mapped_column(
+        ForeignKey("quant_theme.id", ondelete="CASCADE"), primary_key=True
+    )
+    trade_date: Mapped[str] = mapped_column(String(10), primary_key=True)
+    ret: Mapped[float] = mapped_column(Float, default=0.0)
+    turnover: Mapped[float] = mapped_column(Float, default=0.0)
+    breadth: Mapped[float] = mapped_column(Float, default=0.0)     # 上涨家数占比
+    sigma20: Mapped[float] = mapped_column(Float, default=0.0)
