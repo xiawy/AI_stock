@@ -19,6 +19,7 @@ from .broker import OrderSide, get_broker
 from .config import (
     BUY_POSITION_RATIO,
     INDUSTRY_CONCENTRATION_MAX,
+    MARKET_TIMING_ENABLED,
     MAX_HOLDING_COUNT,
     NEW_LISTING_MIN_BARS,
     POSITION_RATIO_HARD_CAP,
@@ -255,8 +256,16 @@ def _same_industry(left: str, right: str) -> bool:
 def _market_timing_check() -> str:
     """大盘择时门 (T3). 返回拒绝原因, 通过返回空串.
 
-    数据不可用 (regime='unknown') 时不拦截 —— 数据故障不应变成交易开关。
+    - 开关走**运行时配置** ``market_timing_enable`` (默认取常量
+      ``MARKET_TIMING_ENABLED``): 运维在配置界面拨开关立即生效, 与
+      ``global_trade_enable`` 同一套「无需重启」语义。
+    - 数据不可用 (regime='unknown') 时不拦截 —— 数据故障不应变成交易开关。
     """
+    default = "1" if MARKET_TIMING_ENABLED else "0"
+    enabled = str(db_ops.get_config_value("market_timing_enable", default)).strip().lower()
+    if enabled not in ("1", "true", "yes", "on"):
+        return ""
+
     try:
         from .market_regime import get_market_regime
 

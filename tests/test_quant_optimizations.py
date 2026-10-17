@@ -328,6 +328,27 @@ class TestMarketTimingGate:
                 "total_assets": 1_000_000.0, "drawdown_pct": 0.0, "daily_pnl": 0.0}
         assert risk_control.pre_trade_check(_buy_order(qty=1000), snap).ok
 
+    def test_runtime_switch_disables_gate(self, quant_env, market, monkeypatch):
+        """market_timing_enable=0 必须真正关闭择时门 (运营开关, 无需重启)."""
+        from ai_stock.quant import db_ops, market_regime, risk_control
+
+        market.quotes["600000"] = {
+            "price": 10.0, "name": "浦发银行", "limit_up": 11.0, "limit_down": 9.0,
+        }
+        monkeypatch.setattr(
+            market_regime, "get_market_regime",
+            lambda force=False: {"regime": "risk_off", "ok": True,
+                                 "reason": "沪深300 跌破 MA20"},
+        )
+        snap = {"available_cash": 1_000_000.0, "market_value": 0.0,
+                "total_assets": 1_000_000.0, "drawdown_pct": 0.0, "daily_pnl": 0.0}
+
+        db_ops.set_config_value("market_timing_enable", "1")
+        assert not risk_control.pre_trade_check(_buy_order(qty=1000), snap).ok
+
+        db_ops.set_config_value("market_timing_enable", "0")
+        assert risk_control.pre_trade_check(_buy_order(qty=1000), snap).ok
+
 
 # ---------------------------------------------------------------------------
 # T9: ST / 停牌 / 次新
