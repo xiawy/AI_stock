@@ -246,6 +246,26 @@ class TestMatchingAndReview:
         hits = tr.match_themes("BC电池扩产，背接触路线受关注")
         assert hits and hits[0]["name"] == "光伏（BC电池）"
 
+    def test_price_and_macro_news_do_not_own_commodity_themes(self, theme_env):
+        """商品价格/宏观流动性只是背景音，不能直接给主题。
+
+        线上实测：「布伦特原油升至 110 美元」「纽约原油暗盘突破 99 美元」都曾
+        挂到油服（703 条里大半是这种），「资金面宽松、债市冲高」挂到黄金。
+        """
+        from ai_stock.quant import theme_registry as tr
+
+        tr.seed_default_themes()
+        self._activate_all()
+
+        assert tr.match_themes("布伦特原油期货价格自5月20日以来首次升至每桶110美元") == []
+        assert tr.match_themes("纽约原油暗盘突破99美元，日内涨超3%") == []
+        assert tr.match_themes("资金面延续宽松，债市冲高回落，降息预期升温") == []
+        # 真·油服/黄金新闻仍要命中
+        hits = tr.match_themes("中海油服日费率上调，钻井平台利用率回升")
+        assert [h["name"] for h in hits][0] == "油服（钻井/工程）"
+        hits = tr.match_themes("金价创新高，黄金矿企利润弹性显现")
+        assert [h["name"] for h in hits][0] == "黄金（矿企弹性）"
+
     def test_auto_review_retires_only_after_two_failures(self, theme_env, monkeypatch):
         """单次不达标只记 streak，连续两次才退休 —— 一次停牌不该杀掉赛道。"""
         from ai_stock.quant import theme_registry as tr
