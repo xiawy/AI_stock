@@ -66,6 +66,16 @@
         </p>
       </div>
 
+      <div v-else class="section no-impact">
+        <h4>影响行业</h4>
+        <p>
+          这条新闻<strong>没有落到任何细分赛道</strong>。它要么是宏观背景信息
+          （商品价格、汇率利率、海外事件），要么对 A 股没有明确的传导链。
+          按口径不给方向和幅度 —— 用「半导体」「家电」这类大行业硬套，
+          只会让榜单看起来完整、实际不可交易。
+        </p>
+      </div>
+
       <div v-if="news.top_stocks?.length" class="section">
         <h4>弹性个股</h4>
         <el-table :data="news.top_stocks" size="small" stripe>
@@ -247,6 +257,19 @@ function fmtGain(v) {
   font-size: 0.75rem;
   opacity: 0.75;
   margin-top: 6px;
+}
+/* 无主题说明：一条左侧虚线，避免读成"加载失败/数据缺失" */
+.no-impact {
+  padding: 10px 12px;
+  border-left: 3px solid var(--border-color, rgba(128, 128, 128, 0.45));
+  border-radius: 3px;
+  background: var(--bg-dim, rgba(128, 128, 128, 0.06));
+}
+.no-impact h4 {
+  margin-bottom: 6px;
+}
+.no-impact strong {
+  color: var(--text);
 }
 .content-section {
   margin-top: 16px;

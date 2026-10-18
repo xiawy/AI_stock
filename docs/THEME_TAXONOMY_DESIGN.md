@@ -375,3 +375,54 @@ v2 换成「清洁电器」（科沃斯/石头/九号 + 富佳/德昌/春光代�
 **两次尝试都失败 → 结论是家电内部没有可交易的 L3**，而不是"再换一版成分股试试"。
 这与"赛道容量是硬约束"是同一类判断：**有些赛道不存在，承认它不存在比硬造一个更负责**。
 以旧换新、家电补贴这类需求侧政策的影响，只在 L1 行业层面体现，不进主题榜。
+
+---
+
+## 十五、运营：周检、误杀防护与"不硬凑"的边界
+
+### 1. 为什么是每周而不是每季度
+
+种子是按"逻辑上该在这个赛道"写的，但市场会变：戴帽、退市、主业转型、市值
+结构漂移。首轮体检就查出 4 只成分股已经 ST（南都电源、荃银高科、诺泰生物、
+易华录）。等三个月才剔一次，代价太大。
+
+`ops/ai-stock-theme-refresh.timer` 每周一 08:30（盘前 45 分钟）跑
+`scripts/theme_refresh.py`：
+
+1. 剔除 ST/*ST/退市/无行情
+2. 按最新自由流通市值重算 `weight` 与 `role`
+3. `auto_review()` 复审
+4. 成员跌破 8 只的主题**只告警、不自动补位** —— 补位需要人判断"哪只票真的
+   属于这个赛道"，自动补只会把不相关的票塞进来
+
+### 2. 两道误杀防护（都是被真实事故逼出来的）
+
+**数据源健康闸门**：数据源被限流/熔断时，所有主题的 `hist` 都是空的，校验会
+把"拿不到数据"算成"相关性不达标"—— 一次就能把 25 个主题全杀。所以先统计
+"无历史"比例，超过 30% 直接**整轮放弃，不写任何状态**。
+
+**连续失败才退休**：单次不达标（某只票停牌、某天板块大跌）不该否定一个赛道。
+`fail_streak` 连续 2 次复审不达标才 `retired`，任何一次通过就清零。
+
+### 3. 不做的事
+
+- 不因为"凑不够 8 只"就把不相关的票塞进主题（家电两次尝试都失败后直接留档
+  rejected，而不是继续换成分股试到通过）
+- 不自动补位、不自动豁免闸门
+- 不在数据异常的轮次里改任何状态
+
+### 4. 部署与巡检
+
+```bash
+# 一键部署（含前端构建，必须 root）
+/deploy/AI_stock/scripts/deploy.sh
+/deploy/AI_stock/scripts/deploy.sh --no-frontend   # 只更后端
+
+# 主题周检（timer 自动跑，也可手工）
+sudo -u www-data env PROJECT_ROOT=/deploy/AI_stock \
+  /deploy/AI_stock/backend/.venv/bin/python /deploy/AI_stock/scripts/theme_refresh.py --dry-run
+
+# 新闻回测
+sudo -u www-data env PROJECT_ROOT=/deploy/AI_stock \
+  /deploy/AI_stock/backend/.venv/bin/python /deploy/AI_stock/scripts/news_impact_review.py
+```

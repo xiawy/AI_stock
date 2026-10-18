@@ -57,9 +57,22 @@ def _now() -> datetime:
 
 
 def ensure_schema() -> None:
-    """建表（4 张表都是新增表，create_all 即可，无需 ALTER）。"""
+    """建表 + 幂等补列（quant_theme 在现网库里已存在，create_all 不会补列）。"""
+    from sqlalchemy import inspect, text
+
     init_quant_db()
-    QuantBase.metadata.create_all(bind=get_engine())
+    engine = get_engine()
+    QuantBase.metadata.create_all(bind=engine)
+
+    try:
+        cols = {c["name"] for c in inspect(engine).get_columns("quant_theme")}
+    except Exception:  # pragma: no cover - 表不存在时上面已建好
+        return
+    if "fail_streak" not in cols:
+        with engine.begin() as conn:
+            conn.execute(
+                text("ALTER TABLE quant_theme ADD COLUMN fail_streak INTEGER DEFAULT 0")
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -465,23 +478,85 @@ def auto_promote_shadow(min_days: int = 5) -> list[str]:
     return promoted
 
 
-def auto_review() -> dict:
-    """季度复审：active 主题复检，不达标直接 retired（保留历史序列）。"""
-    retired, kept = [], 0
-    for theme in list_themes(STATUS_ACTIVE):
-        result = validate_theme(theme["name"], apply_status=False)
-        if result["passed"]:
+AUTO_RETIRE_STREAK = 2          # 连续 N 次复审不达标才退休
+DATA_BREAK_RATIO = 0.30         # 超过 30% 主题"无历史" → 判定数据源故障，整轮跳过
+
+
+def auto_review(dry_run: bool = False) -> dict:
+    """复审 active 主题：不达标记一次 streak，连续 ``AUTO_RETIRE_STREAK`` 次才 retired。
+
+    两道保护（都是被真实事故逼出来的）：
+
+    1. **数据源健康闸门**：数据源被限流/熔断时，所有主题的 ``hist`` 都是空的，
+       校验会把"拿不到数据"算成"相关性不达标"，一次就能把 23 个主题全杀。
+       所以先统计"无历史"比例，超过 ``DATA_BREAK_RATIO`` 直接整轮放弃。
+    2. **连续失败才退休**：单次不达标（某只票停牌、某天板块大跌）不该否定一个
+       赛道，必须连续两次复审都不过才退。任何一次通过就把 streak 清零。
+
+    返回 ``{"kept", "warned", "retired", "aborted"}``。
+    """
+    themes = list_themes(STATUS_ACTIVE)
+    if not themes:
+        return {"kept": 0, "warned": [], "retired": [], "aborted": "no_active_theme"}
+
+    results: list[tuple[dict, dict]] = []
+    no_history = 0
+    for theme in themes:
+        try:
+            r = validate_theme(theme["name"], apply_status=False)
+        except Exception as exc:
+            logger.warning("review %s failed: %s", theme["name"], exc)
+            no_history += 1
+            continue
+        if not (r.get("metrics") or {}).get("history_days"):
+            no_history += 1
+        results.append((theme, r))
+
+    if themes and no_history / len(themes) > DATA_BREAK_RATIO:
+        msg = "data_suspect(%d/%d themes without history)" % (no_history, len(themes))
+        logger.warning("theme auto_review aborted: %s", msg)
+        return {"kept": 0, "warned": [], "retired": [], "aborted": msg}
+
+    kept, warned, retired = 0, [], []
+    for theme, r in results:
+        if r["passed"]:
             kept += 1
+            if theme.get("fail_streak"):
+                _set_fail_streak(theme["id"], 0)
+            continue
+        streak = int(theme.get("fail_streak") or 0) + 1
+        if dry_run:
+            warned.append({"name": theme["name"], "reasons": r["reasons"],
+                           "would_retire": streak >= AUTO_RETIRE_STREAK})
+            continue
+        _set_fail_streak(theme["id"], streak, metrics=r.get("metrics"))
+        if streak < AUTO_RETIRE_STREAK:
+            warned.append({"name": theme["name"], "reasons": r["reasons"],
+                           "streak": streak})
             continue
         with session_scope() as session:
             row = session.get(QuantTheme, theme["id"])
             if row is not None:
                 row.status = STATUS_RETIRED
                 row.reviewed_at = _now()
-                row.metrics_json = json.dumps(result["metrics"], ensure_ascii=False)
+                row.metrics_json = json.dumps(r["metrics"], ensure_ascii=False)
             session.commit()
-        retired.append({"name": theme["name"], "reasons": result["reasons"]})
-    return {"kept": kept, "retired": retired}
+        retired.append({"name": theme["name"], "reasons": r["reasons"]})
+
+    return {"kept": kept, "warned": warned, "retired": retired, "aborted": ""}
+
+
+def _set_fail_streak(theme_id: int, streak: int, metrics: dict | None = None) -> None:
+    with session_scope() as session:
+        row = session.get(QuantTheme, theme_id)
+        if row is None:
+            return
+        row.fail_streak = int(streak)
+        row.reviewed_at = _now()
+        if metrics:
+            row.metrics_json = json.dumps(metrics, ensure_ascii=False)
+        session.commit()
+
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,22 @@
+[Unit]
+# 生产单元文件的版本留档。安装：cp 到 /etc/systemd/system/ 后 daemon-reload。
+# 与线上原件的差异只有 ExecStart 的 --workers（1 → 2）。
+Description=AI Stock FastAPI Backend
+After=network.target redis-server.service
+
+[Service]
+WorkingDirectory=/deploy/AI_stock/backend
+# --workers 2：一个领导者跑交易子系统（消费者/调度器/清扫器），另一个只服务
+# API。领导者由 ai_stock/quant/leader.py 的文件锁选出，只有它启动
+# cleanup / pipeline / evolution 调度 —— 见 backend/app/main.py::lifespan。
+# 单 worker 时行为完全等价（谁抢到锁谁就是领导者）。
+# 注意别再往上加：SQLite 是单写者，写并发靠 WAL + busy_timeout 兜，超过 2~3 个
+# worker 会开始出现 database is locked 的重试抖动。
+ExecStart=/deploy/AI_stock/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2
+Restart=always
+User=www-data
+EnvironmentFile=/deploy/AI_stock/.env
+Environment=HOME=/home/www-data
+
+[Install]
+WantedBy=multi-user.target

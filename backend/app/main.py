@@ -107,9 +107,6 @@ async def lifespan(_: FastAPI):
     # Create SQLite tables on first start; Alembic owns later migrations.
     init_db()
 
-    _reap_orphaned_tasks()
-    _reap_orphaned_snapshots()
-
     if not _background_jobs_enabled():
         logger.info("Background jobs disabled via AISTOCK_DISABLE_SCHEDULERS")
         yield
@@ -124,39 +121,12 @@ async def lifespan(_: FastAPI):
     except Exception as exc:
         logger.warning("Analysis task heartbeat init failed (non-fatal): %s", exc)
 
-    # Data retention: 诊股 > 20 days / 热股榜·新闻榜 > 70 days. One pass now
-    # (background thread) and daily at 03:30 afterwards.
-    try:
-        from app.services.cleanup import (
-            start_cleanup_scheduler,
-            start_initial_cleanup,
-        )
-
-        start_initial_cleanup()
-        start_cleanup_scheduler()
-    except Exception as exc:
-        logger.warning("Cleanup scheduler init failed (non-fatal): %s", exc)
-
-    # Initialize the ranking service (新闻榜由选股流程落库; 这里只管备份调度).
-    try:
-        from ai_stock.default_config import DEFAULT_CONFIG
-        from app.services.pipeline_service import get_pipeline_service
-
-        svc = get_pipeline_service()
-        svc.initialize(DEFAULT_CONFIG)
-        # Compensate for a missed 23:30 ranking backup (backend was down at
-        # the slot): back up now if it is already past the slot and today's
-        # backup file is absent.
-        svc.ensure_today_backup()
-    except Exception as exc:
-        logger.warning(
-            "Pipeline service init failed (non-fatal): %s", exc,
-        )
-
-    # Start the quant trading subsystem (V3.0): MQ consumers + scheduler +
-    # FSM recovery. 默认允许模拟盘下单 (P0-2: global_trade_enable 种子改为 1,
-    # 并由配置迁移下发到存量库); 实盘需另行开启 QUANT_LIVE_MODE。
-    # 启动失败对 API 非致命。
+    # ── 领导者选举必须先跑 ────────────────────────────────────────────
+    # 多 worker（uvicorn --workers N）时，只有抢到文件锁的 worker 启动交易
+    # 子系统与各类后台调度；其余 worker 只服务 API。下面 cleanup / pipeline /
+    # evolution 一律用 leader.is_leader() 兜住，否则 N 个 worker 各跑一份
+    # 清理、备份和学习调度 —— 幂等不代表无害，重复清扫会互相抢锁、重复备份
+    # 会覆盖文件、学习调度会重复消耗 LLM。
     try:
         if settings.quant_enabled:
             from app.services.quant_service import start_quant_service
@@ -166,6 +136,58 @@ async def lifespan(_: FastAPI):
             logger.info("Quant service disabled via QUANT_ENABLED")
     except Exception as exc:
         logger.warning("Quant service init failed (non-fatal): %s", exc)
+
+    def _is_leader() -> bool:
+        """单 worker 部署下永远为 True；多 worker 下仅领导者为 True。"""
+        try:
+            from ai_stock.quant import leader
+
+            # 未启用量化时没人抢锁，此时退化为「全部允许」。
+            return leader.is_leader() or not settings.quant_enabled
+        except Exception:
+            return True
+
+    leader_mode = _is_leader()
+    if not leader_mode:
+        logger.info("This worker serves API only (background jobs owned by leader)")
+
+    # 孤儿回收只在领导者里跑：多个 worker 同时扫同一个 running 任务会把
+    # 别人的活判成超时（心跳列还没来得及刷新），A5 状态机会来回跳。
+    if leader_mode:
+        _reap_orphaned_tasks()
+        _reap_orphaned_snapshots()
+
+    # Data retention: 诊股 > 20 days / 热股榜·新闻榜 > 70 days. One pass now
+    # (background thread) and daily at 03:30 afterwards.
+    if leader_mode:
+        try:
+            from app.services.cleanup import (
+                start_cleanup_scheduler,
+                start_initial_cleanup,
+            )
+
+            start_initial_cleanup()
+            start_cleanup_scheduler()
+        except Exception as exc:
+            logger.warning("Cleanup scheduler init failed (non-fatal): %s", exc)
+
+    # Initialize the ranking service (新闻榜由选股流程落库; 这里只管备份调度).
+    if leader_mode:
+        try:
+            from ai_stock.default_config import DEFAULT_CONFIG
+            from app.services.pipeline_service import get_pipeline_service
+
+            svc = get_pipeline_service()
+            svc.initialize(DEFAULT_CONFIG)
+            # Compensate for a missed 23:30 ranking backup (backend was down at
+            # the slot): back up now if it is already past the slot and today's
+            # backup file is absent.
+            svc.ensure_today_backup()
+        except Exception as exc:
+            logger.warning(
+                "Pipeline service init failed (non-fatal): %s", exc,
+            )
+
 
     # Start the evolution review scheduler. It only generates learning
     # summaries + strategy *drafts* on schedule — nothing is applied without
@@ -178,11 +200,15 @@ async def lifespan(_: FastAPI):
         from app.services.evolution_service import get_evolution_service
 
         if DEFAULT_CONFIG.get("evolution_enabled", True):
+            if not leader_mode:
+                # 学习调度会调 LLM 生成复盘，多个 worker 各跑一份既费钱又会
+                # 生成互相矛盾的草稿。
+                logger.info("Evolution scheduler skipped on non-leader worker")
             # The volatility trigger needs a market-data callback; keep the
             # periodic review job only for now (schedule lives in config).
             sched_cfg = {**DEFAULT_CONFIG, "review_volatility_trigger": False}
             evo_svc = get_evolution_service()
-            evo_scheduler = EvolutionScheduler(
+            evo_scheduler = None if not leader_mode else EvolutionScheduler(
                 agents=evo_review.AGENTS,
                 config=sched_cfg,
                 review_fn=lambda agent: evo_review.run_review_for_agent(
@@ -193,7 +219,8 @@ async def lifespan(_: FastAPI):
                 ),
                 volatility_fn=None,
             )
-            evo_scheduler.start()
+            if evo_scheduler is not None:
+                evo_scheduler.start()
         else:
             logger.info("Evolution disabled via config — review scheduler not started")
     except Exception as exc:

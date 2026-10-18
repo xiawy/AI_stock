@@ -174,6 +174,66 @@ class NewsItem(Base):
         }
 
 
+class NewsAssessCache(Base):
+    """LLM 评估结果缓存（按新闻标题 + 提示词版本）。
+
+    选股每 10 分钟一轮、新闻榜 2 小时一次，同一条新闻一天内会被反复评估。
+    一次批量评估约 40 条 / 数万 token，命中率实测 >70%，缓存直接把这块成本
+    压掉大头。key 里带 ``prompt_version``：改了提示词口径就必须重新评估，
+    否则旧口径的结论会一直沿用（这是最容易踩的坑）。
+    """
+
+    __tablename__ = "news_assess_cache"
+
+    cache_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    title_hash: Mapped[str] = mapped_column(String(32), default="", index=True)
+    title: Mapped[str] = mapped_column(String(512), default="")
+    prompt_version: Mapped[str] = mapped_column(String(16), default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="")   # NewsAssessment 序列化
+    model: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
+
+
+class NewsImpactTracking(Base):
+    """新闻影响力回测台账（预测 → 事后验证）。
+
+    每条落榜新闻的每个主题影响各写一行，``horizon`` 决定验证日：
+    1d 下一交易日、3d 三个交易日、1w 五个交易日。``scripts/news_impact_review.py``
+    按主题取成分股等权收益回填 ``actual_return``，再判定方向是否命中。
+
+    这张表是"幅度/方向到底靠不靠谱"的唯一客观依据 —— 没有它，所有校准参数
+    （``STRENGTH_COEF`` / ``elasticity``）都只是拍脑袋。
+    """
+
+    __tablename__ = "news_impact_tracking"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    news_title_hash: Mapped[str] = mapped_column(String(32), default="", index=True)
+    title: Mapped[str] = mapped_column(String(512), default="")
+    theme: Mapped[str] = mapped_column(String(64), default="", index=True)
+    direction: Mapped[str] = mapped_column(String(16), default="neutral")
+    strength: Mapped[int] = mapped_column(Integer, default=1)
+    horizon: Mapped[str] = mapped_column(String(8), default="1d")
+    base_date: Mapped[str] = mapped_column(String(10), default="", index=True)  # YYYY-MM-DD
+    exp_low: Mapped[float] = mapped_column(Float, default=0.0)
+    exp_high: Mapped[float] = mapped_column(Float, default=0.0)
+    actual_return: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    direction_hit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    range_hit: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    verified_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
 # ── 幂等补列 ────────────────────────────────────────────────────────────
 # create_all 不会给**已存在**的表补列，而 news_items 在现网库里已经跑了一年多。
 # 这里的列清单必须与 NewsItem 的映射保持一致，两个进程（backend / quant worker）
@@ -227,3 +287,61 @@ def ensure_news_impact_schema(bind=None) -> None:
                 conn.execute(text(f"ALTER TABLE news_items ADD COLUMN {name} {ddl}"))
     _schema_ready = True
 
+
+def ensure_support_tables(bind=None) -> None:
+    """幂等创建缓存表与回测表（DDL 直建，不依赖 Base.metadata）。
+
+    这两张表在 backend 与 quant 两个进程里都可能首次出现，而两边导入的
+    ``Base`` 未必是同一个对象（backend 用 app.core.database.Base，quant 用
+    QuantBase），走 create_all 有概率漏建。用 ``CREATE TABLE IF NOT EXISTS``
+    最稳，且对已有表零影响。
+    """
+    from sqlalchemy import text
+
+    if bind is None:
+        try:
+            from app.core.database import engine as bind  # backend 进程
+        except ImportError:
+            try:
+                from backend.app.core.database import engine as bind
+            except ImportError:
+                from ai_stock.quant.db import get_engine  # quant 独立进程
+
+                bind = get_engine()
+
+    ddl = (
+        """CREATE TABLE IF NOT EXISTS news_assess_cache (
+            cache_key VARCHAR(64) NOT NULL PRIMARY KEY,
+            title_hash VARCHAR(32) DEFAULT '',
+            title VARCHAR(512) DEFAULT '',
+            prompt_version VARCHAR(16) DEFAULT '',
+            payload_json TEXT DEFAULT '',
+            model VARCHAR(64) DEFAULT '',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_news_assess_created ON news_assess_cache (created_at)",
+        """CREATE TABLE IF NOT EXISTS news_impact_tracking (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            snapshot_id INTEGER DEFAULT 0,
+            news_title_hash VARCHAR(32) DEFAULT '',
+            title VARCHAR(512) DEFAULT '',
+            theme VARCHAR(64) DEFAULT '',
+            direction VARCHAR(16) DEFAULT 'neutral',
+            strength INTEGER DEFAULT 1,
+            horizon VARCHAR(8) DEFAULT '1d',
+            base_date VARCHAR(10) DEFAULT '',
+            exp_low FLOAT DEFAULT 0,
+            exp_high FLOAT DEFAULT 0,
+            actual_return FLOAT,
+            direction_hit INTEGER,
+            range_hit INTEGER,
+            verified_at DATETIME,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_news_track_theme ON news_impact_tracking (theme)",
+        "CREATE INDEX IF NOT EXISTS ix_news_track_base ON news_impact_tracking (base_date)",
+        "CREATE INDEX IF NOT EXISTS ix_news_track_snap ON news_impact_tracking (snapshot_id)",
+    )
+    with bind.begin() as conn:
+        for stmt in ddl:
+            conn.execute(text(stmt))

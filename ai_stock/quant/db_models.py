@@ -587,6 +587,9 @@ class QuantTheme(QuantBase):
     shadow_since: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # 连续复审不达标次数。单次不达标不退休 —— 数据源抖动（限流/熔断）会让
+    # 全市场的相关性指标一起归零，一次误判就把主题杀掉是不可接受的。
+    fail_streak: Mapped[int] = mapped_column(Integer, default=0)
 
     def to_dict(self) -> dict:
         import json
@@ -604,6 +607,7 @@ class QuantTheme(QuantBase):
             "created_by": self.created_by,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
+            "fail_streak": int(self.fail_streak or 0),
         }
 
 

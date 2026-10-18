@@ -1,0 +1,19 @@
+[Unit]
+Description=AI Stock — 主题成分股周检（剔除 ST + 重算权重 + 复审）
+Documentation=file:///deploy/AI_stock/docs/THEME_TAXONOMY_DESIGN.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/deploy/AI_stock
+# PROJECT_ROOT 必须给：脚本按它定位 backend/data/aistock.db
+Environment=PROJECT_ROOT=/deploy/AI_stock
+Environment=HOME=/home/www-data
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/deploy/AI_stock/backend/.venv/bin/python /deploy/AI_stock/scripts/theme_refresh.py
+# 跑 15 分钟还没完说明取数被拖住了，没必要继续占着
+TimeoutStartSec=900
+Nice=10

@@ -107,12 +107,16 @@ def save_news_board(
     """
     from . import db_ops, news_impact
     from .config import TOP_N_IMPACT
-    from .db_models import ensure_news_impact_schema
+    from .db_models import ensure_news_impact_schema, ensure_support_tables
 
     if top_n is None:
         top_n = TOP_N_IMPACT
 
     ensure_news_impact_schema()
+    try:
+        ensure_support_tables()
+    except Exception as exc:
+        logger.debug("support tables ensure skipped: %s", exc)
 
     prepared = news_impact.prepare(news_items)
     if not prepared:
@@ -164,6 +168,11 @@ def save_news_board(
             snapshot_id, saved, len(news_items or []),
             _type_histogram(top),
         )
+        # 回测台账（静默失败，不影响榜单）
+        try:
+            news_impact.record_tracking(top, snapshot_id)
+        except Exception as exc:
+            logger.debug("impact tracking skipped: %s", exc)
         return {"snapshot_id": snapshot_id, "saved": saved, "skipped": ""}
     except Exception as exc:
         logger.warning("News board save failed: %s", exc)

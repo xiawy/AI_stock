@@ -192,7 +192,8 @@ class TestMatchingAndReview:
         hits = tr.match_themes("海风订单超预期，塔筒涨价")
         assert hits and hits[0]["name"] == "风电（出海）"
 
-    def test_auto_review_retires_degraded_theme(self, theme_env, monkeypatch):
+    def test_auto_review_retires_only_after_two_failures(self, theme_env, monkeypatch):
+        """单次不达标只记 streak，连续两次才退休 —— 一次停牌不该杀掉赛道。"""
         from ai_stock.quant import theme_registry as tr
 
         _seed_one("会退化的主题（测试）", 10)
@@ -208,5 +209,41 @@ class TestMatchingAndReview:
         illiquid["volumes"] = [1e4] * len(illiquid["closes"])
         monkeypatch.setattr(tr, "_history", lambda s, days=65: illiquid)
 
+        first = tr.auto_review()
+        assert first["retired"] == []
+        assert any(x["name"] == "会退化的主题（测试）" for x in first["warned"])
+        assert tr.get_theme("会退化的主题（测试）")["status"] == "active"
+        assert tr.get_theme("会退化的主题（测试）")["fail_streak"] == 1
+
+        second = tr.auto_review()
+        assert any(x["name"] == "会退化的主题（测试）" for x in second["retired"])
+        assert tr.get_theme("会退化的主题（测试）")["status"] == "retired"
+
+    def test_auto_review_aborts_when_data_source_is_down(self, theme_env, monkeypatch):
+        """全部主题"拿不到历史" = 数据源故障，不能当成"全部不合格"。"""
+        from ai_stock.quant import theme_registry as tr
+
+        for i in range(3):
+            _seed_one(
+                "数据故障主题%d（测试）" % i, 10,
+                aliases=("测试别名%d" % i,),
+            )
+        monkeypatch.setattr(tr, "_caps", lambda syms: {s: 1e10 for s in syms})
+        monkeypatch.setattr(
+            "ai_stock.dataflows.a_stock._tencent_quote",
+            lambda codes: {c: {"name": "测试"} for c in codes},
+        )
+        monkeypatch.setattr(tr, "_history", lambda s, days=65: _noisy_history())
+        for i in range(3):
+            tr.validate_theme("数据故障主题%d（测试）" % i)
+
+        # 熔断/限流：所有票都取不到日线
+        monkeypatch.setattr(tr, "_history", lambda s, days=65: None)
+
         review = tr.auto_review()
-        assert any(x["name"] == "会退化的主题（测试）" for x in review["retired"])
+        assert review["aborted"], "数据源故障必须整轮放弃"
+        assert review["retired"] == []
+        for i in range(3):
+            theme = tr.get_theme("数据故障主题%d（测试）" % i)
+            assert theme["status"] == "active", "不得因为取不到数据而退休"
+            assert theme["fail_streak"] == 0, "取不到数据不该计入 streak"

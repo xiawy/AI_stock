@@ -1,0 +1,14 @@
+[Unit]
+Description=每周一盘前 08:30 触发主题成分股周检
+
+[Timer]
+# 周一 08:30 —— 盘前，离 9:15 集合竞价还有 45 分钟，不干扰交易。
+# 频率选周而非季度：ST 戴帽是随时发生的，等三个月才剔一次代价太大；
+# 复审有 fail_streak 缓冲（连续两次不达标才退休），跑勤一点也不会误杀。
+OnCalendar=Mon *-*-* 08:30:00
+# 机器关机/重启错过了就补跑一次（Review 只在开机后触发）
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

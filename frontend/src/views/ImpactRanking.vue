@@ -45,6 +45,13 @@
                 {{ typeLabel(row.event_type) }}
               </span>
               <span class="title-text">{{ row.title }}</span>
+              <el-tooltip
+                v-if="isBackfilled(row)"
+                content="历史数据：2026-10 重构前落库的旧新闻用规则补齐字段，置信度固定 0.30，非当时 LLM 判断"
+                placement="top"
+              >
+                <span class="backfill-tag">回填</span>
+              </el-tooltip>
             </div>
           </template>
         </el-table-column>
@@ -62,7 +69,13 @@
                 <em>{{ dirArrow(impactOf(row, ind).direction) }}</em>
               </span>
             </template>
-            <span v-else class="dim">—</span>
+            <el-tooltip
+              v-else
+              placement="top"
+              content="宏观背景类新闻：商品价格、汇率利率或海外事件，对 A 股没有明确传导链。按口径不给方向与幅度，也不套用大行业。"
+            >
+              <span class="dim no-theme">无对应细分</span>
+            </el-tooltip>
           </template>
         </el-table-column>
 
@@ -230,6 +243,12 @@ function confClass(c) {
   return 'low'
 }
 
+// 历史回填标记：2026-10 重构前落库的旧新闻用规则补字段，置信度固定 0.30
+// （实时规则降级是 0.35），用来和"当时的 LLM 判断"区分，不冒充新结论。
+function isBackfilled(row) {
+  return row.confidence > 0 && row.confidence <= 0.31
+}
+
 onMounted(loadData)
 </script>
 
@@ -335,5 +354,22 @@ onMounted(loadData)
 }
 .dim {
   color: var(--text-dim);
+}
+/* 无主题是"有意的空"，不是缺失数据：用虚线下划线表明可悬停看解释 */
+.no-theme {
+  font-size: 0.78rem;
+  border-bottom: 1px dashed var(--text-dim);
+  cursor: help;
+}
+/* 历史回填标记：极淡，只用来区分数据来源，不抢标题注意力 */
+.backfill-tag {
+  flex: none;
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 2px;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.35));
+  cursor: help;
 }
 </style>

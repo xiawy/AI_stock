@@ -418,6 +418,133 @@ def assess(items: list[dict], llm=None) -> dict[int, NewsAssessment]:
 
 
 # ---------------------------------------------------------------------------
+# 3b. 评估结果缓存
+# ---------------------------------------------------------------------------
+# 口径变了必须改版本号，否则旧口径的结论会被一直复用 —— 这是缓存最容易出事
+# 的地方（改了提示词却看不到效果，因为全命中旧 key）。
+PROMPT_VERSION = "3"
+CACHE_TTL_DAYS = 7
+
+
+def _cache_key(title: str) -> str:
+    import hashlib
+
+    from .news_board import normalize_title
+
+    norm = normalize_title(title) or str(title or "").strip()
+    if not norm:
+        return ""
+    return hashlib.sha1(f"{PROMPT_VERSION}|{norm}".encode("utf-8")).hexdigest()[:32]
+
+
+def _utcnow_naive():
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def title_digest(text_: str) -> str:
+    import hashlib
+
+    return hashlib.md5(str(text_ or "").encode("utf-8")).hexdigest()
+
+
+def load_cached(items: list[dict], *, ttl_days: int = CACHE_TTL_DAYS) -> dict[int, NewsAssessment]:
+    """按标题批量查缓存，返回 ``{列表下标: NewsAssessment}``。
+
+    任何异常都返回空字典 —— 缓存是加速手段，不能成为落库的故障点。
+    """
+    if not items:
+        return {}
+    keys = [_cache_key(str(it.get("title", ""))) for it in items]
+    wanted = {k: i for i, k in enumerate(keys) if k}
+    if not wanted:
+        return {}
+    from datetime import timedelta
+
+    try:
+        from sqlalchemy import bindparam, text
+
+        from .db_ops import _get_session
+
+        stmt = text(
+            "SELECT cache_key, payload_json FROM news_assess_cache "
+            "WHERE cache_key IN :keys AND created_at >= :cutoff"
+        ).bindparams(bindparam("keys", expanding=True))
+        cutoff = _utcnow_naive() - timedelta(days=ttl_days)
+        session = _get_session()
+        try:
+            rows = session.execute(
+                stmt, {"keys": list(wanted), "cutoff": cutoff}
+            ).fetchall()
+        finally:
+            session.close()
+    except Exception as exc:
+        logger.debug("news assess cache read skipped: %s", exc)
+        return {}
+
+    out: dict[int, NewsAssessment] = {}
+    for key, payload in rows:
+        try:
+            model = NewsAssessment.model_validate_json(payload or "{}")
+        except Exception:
+            continue
+        model.index = 0
+        out[wanted[key]] = model
+    if out:
+        logger.info("news assess cache hit %d/%d", len(out), len(items))
+    return out
+
+
+def save_cached(items: list[dict], assessed: dict[int, NewsAssessment], *, model: str = "") -> int:
+    """把本轮新评估写回缓存（同 key 覆盖，刷新时间戳）。"""
+    if not items or not assessed:
+        return 0
+    rows: list[dict] = []
+    for idx, a in assessed.items():
+        if not (0 <= idx < len(items)):
+            continue
+        title = str(items[idx].get("title", ""))
+        key = _cache_key(title)
+        if not key:
+            continue
+        a.index = 0
+        rows.append({
+            "k": key,
+            "h": title_digest(title),
+            "t": title[:500],
+            "v": PROMPT_VERSION,
+            "p": a.model_dump_json(),
+            "m": model[:60],
+            "now": _utcnow_naive(),
+        })
+    if not rows:
+        return 0
+    try:
+        from sqlalchemy import text
+
+        from .db_ops import _get_session
+
+        session = _get_session()
+        try:
+            session.execute(
+                text(
+                    "INSERT OR REPLACE INTO news_assess_cache "
+                    "(cache_key, title_hash, title, prompt_version, payload_json, model, created_at) "
+                    "VALUES (:k, :h, :t, :v, :p, :m, :now)"
+                ),
+                rows,
+            )
+            session.commit()
+        finally:
+            session.close()
+    except Exception as exc:
+        logger.debug("news assess cache write skipped: %s", exc)
+        return 0
+    return len(rows)
+
+
+# ---------------------------------------------------------------------------
 # 4. 主题对齐（闭集 + 三级匹配）
 # ---------------------------------------------------------------------------
 
@@ -781,16 +908,39 @@ def _rule_impacts(item: dict, text: str) -> list[dict]:
     return impacts
 
 
-def enrich(prepared: list[dict], llm=None, *, llm_limit: int = LLM_LIMIT) -> list[dict]:
+def enrich(
+    prepared: list[dict], llm=None, *, llm_limit: int = LLM_LIMIT,
+    use_cache: bool = True,
+) -> list[dict]:
     """给候选池补事件类型/重要性/多空/主题/幅度。
 
-    有 LLM 时：前 ``llm_limit`` 条走批量评估，其余用规则；LLM 失败整体降级。
-    返回的每条含 ``industry_impacts``（list[dict]）与兼容旧字段的
-    ``industries`` / ``expected_gain_low/high`` / ``bull_bear_bias``。
+    有 LLM 时：前 ``llm_limit`` 条走批量评估（先查缓存，只把未命中的送去
+    LLM），其余用规则；LLM 失败整体降级。返回的每条含 ``industry_impacts``
+    （list[dict]）与兼容旧字段的 ``industries`` / ``expected_gain_low/high``
+    / ``bull_bear_bias``。
     """
     if not prepared:
         return []
-    assessed = assess(prepared[:llm_limit], llm) if llm is not None else {}
+    assessed: dict[int, NewsAssessment] = {}
+    if llm is not None:
+        head = prepared[:llm_limit]
+        assessed = load_cached(head) if use_cache else {}
+        missing = [i for i in range(len(head)) if i not in assessed]
+        mapped: dict[int, NewsAssessment] = {}
+        if missing:
+            fresh = assess([head[i] for i in missing], llm)
+            # assess 返回的下标是子集内序号，映射回 head 的下标
+            mapped = {
+                missing[local]: a for local, a in fresh.items()
+                if 0 <= local < len(missing)
+            }
+            if mapped:
+                save_cached(head, mapped, model=type(llm).__name__)
+                assessed.update(mapped)
+            logger.info(
+                "news assess: %d items, %d cache hit, %d llm, %d rule",
+                len(head), len(head) - len(missing), len(mapped), len(missing) - len(mapped),
+            )
 
     out: list[dict] = []
     for idx, item in enumerate(prepared):
@@ -894,3 +1044,77 @@ def content_diff(a: set[str], b: set[str]) -> float:
     if not a or not b:
         return 1.0
     return 1.0 - len(a & b) / max(1, min(len(a), len(b)))
+
+
+# ---------------------------------------------------------------------------
+# 9. 回测台账
+# ---------------------------------------------------------------------------
+
+
+def record_tracking(
+    items: list[dict], snapshot_id: int, *, base_date: str = "",
+) -> int:
+    """把本轮的（主题, 方向, 区间）写入回测台账，留给事后验证。
+
+    ``base_date`` 是预测基准日（默认今天）。同一快照 + 同一新闻 + 同一主题
+    只写一次；脚本 ``scripts/news_impact_review.py`` 按 horizon 回填
+    ``actual_return`` 并判定方向/区间是否命中。
+
+    静默失败：台账缺数据只会让复盘样本变少，不该影响榜单落库。
+    """
+    if not items:
+        return 0
+    from datetime import date
+
+    base = base_date or date.today().isoformat()
+    rows: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for item in items:
+        for imp in item.get("industry_impacts") or []:
+            theme = str(imp.get("name", "") or "")
+            if not theme:
+                continue
+            digest = title_digest(str(item.get("title", "")))
+            if (digest, theme) in seen:
+                continue
+            seen.add((digest, theme))
+            rows.append({
+                "snapshot_id": int(snapshot_id or 0),
+                "news_title_hash": digest,
+                "title": str(item.get("title", ""))[:500],
+                "theme": theme[:64],
+                "direction": str(imp.get("direction") or "neutral"),
+                "strength": int(imp.get("strength") or 1),
+                "horizon": str(item.get("horizon") or "1d"),
+                "base_date": base,
+                "exp_low": float(imp.get("exp_low") or 0.0),
+                "exp_high": float(imp.get("exp_high") or 0.0),
+                "now": _utcnow_naive(),
+            })
+    if not rows:
+        return 0
+    try:
+        from sqlalchemy import text
+
+        from .db_ops import _get_session
+
+        session = _get_session()
+        try:
+            session.execute(
+                text(
+                    "INSERT INTO news_impact_tracking "
+                    "(snapshot_id, news_title_hash, title, theme, direction, strength, "
+                    " horizon, base_date, exp_low, exp_high, created_at) "
+                    "VALUES (:snapshot_id, :news_title_hash, :title, :theme, :direction, "
+                    " :strength, :horizon, :base_date, :exp_low, :exp_high, :now)"
+                ),
+                rows,
+            )
+            session.commit()
+        finally:
+            session.close()
+    except Exception as exc:
+        logger.debug("impact tracking write skipped: %s", exc)
+        return 0
+    logger.info("impact tracking: %d rows recorded for snapshot %s", len(rows), snapshot_id)
+    return len(rows)
