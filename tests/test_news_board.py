@@ -355,3 +355,30 @@ def test_dedup_keeps_rewritten_titles():
         _item("华康洁净：9018.65万元中标项目被废标", "2026-08-30 08:00"),
     ]
     assert len(dedup_news(news)) == 2
+
+
+def test_empty_theme_has_no_bias_strength():
+    """没有主题就不该带多空强度。
+
+    落库字段原来是 ``bias_strength or strength``，而空主题的 0 是 falsy，
+    于是被 LLM 的整体 strength 兜底 —— 前端显示"强多"却指不出行业。
+    """
+    from ai_stock.pipeline.news_board import _to_news_row
+
+    row = _to_news_row({
+        "title": "某宏观新闻", "event_type": "overseas", "importance": 6.5,
+        "strength": 3, "bias_strength": 0, "industry_impacts": [],
+        "industries": [], "confidence": 0.6,
+    })
+    assert row["bias_strength"] == 0
+    assert row["industries"] == []
+
+    # 有主题时照常透传
+    row2 = _to_news_row({
+        "title": "海上风电塔筒中标", "event_type": "industry", "importance": 7.0,
+        "strength": 3, "bias_strength": 3,
+        "industry_impacts": [{"name": "风电（出海）", "strength": 3,
+                              "exp_low": 1.2, "exp_high": 2.8}],
+        "industries": ["风电（出海）"], "confidence": 0.6,
+    })
+    assert row2["bias_strength"] == 3

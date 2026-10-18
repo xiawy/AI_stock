@@ -126,6 +126,33 @@ def _fetch(limit_snapshots: int) -> list[tuple]:
         s.close()
 
 
+def _fix_empty_bias(apply: bool) -> int:
+    """空主题的行不该带多空强度，返回需要/已修正的行数。
+
+    落库字段曾是 ``bias_strength or strength`` —— 空主题的 0 是 falsy，被 LLM
+    的整体 strength 兜底，前端于是显示"强多"却指不出行业。方向已由
+    ``bull_bear_bias`` 单独承担（空主题一律 neutral），这里只清强度。
+    """
+    from sqlalchemy import text
+
+    where = (
+        "(industries_json IN ('', '[]') OR industries_json IS NULL) "
+        "AND bias_strength <> 0"
+    )
+    s = _session()
+    try:
+        n = int(s.execute(text(f"SELECT COUNT(*) FROM news_items WHERE {where}")).scalar() or 0)
+        if apply and n:
+            s.execute(text(f"UPDATE news_items SET bias_strength = 0 WHERE {where}"))
+            s.commit()
+        return n
+    except Exception:
+        s.rollback()
+        raise
+    finally:
+        s.close()
+
+
 def scan(rows: list[tuple], apply: bool) -> dict:
     stats = {"scanned": 0, "rows_changed": 0, "impacts": 0,
              "downgraded": 0, "dropped": 0, "samples": []}
@@ -233,6 +260,7 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     _guard_db_file()
+    orphan = _fix_empty_bias(apply=not args.dry_run)
     rows = _fetch(args.snapshots)
     stats = scan(rows, apply=not args.dry_run)
 
@@ -241,6 +269,11 @@ def main() -> int:
         f"{stats['impacts']} 个主题：改 {stats['rows_changed']} 行，"
         f"降权 {stats['downgraded']} 个，摘掉 {stats['dropped']} 个"
     )
+    if orphan:
+        print(
+            f"{'需' if args.dry_run else '已'}修正空主题却带强度的行：{orphan}"
+            f"（bias_strength 0 被 `or strength` 兜底成 LLM 整体强度）"
+        )
     for s_, t_, n_, st, st2, el, el2, low, high in stats["samples"]:
         print(f"  [{s_}] {t_:<36} {n_:<18} s{st}·e{el} → s{st2}·e{el2}  {low:+.2f}~{high:+.2f}%")
     return 0

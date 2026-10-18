@@ -243,7 +243,10 @@ def _to_news_row(item: dict) -> dict:
         # 事件维度（新）
         "event_type": etype,
         "importance": importance,
-        "bias_strength": int(item.get("bias_strength") or item.get("strength") or 0),
+        # 没有主题就没有"多空强度"。0 是合法值（falsy），不能用 ``or strength``
+        # 兜底 —— 否则空主题的行会被写上 LLM 的整体 strength，前端显示"强多"
+        # 却指不出行业（2026-10-18 快照 976 实测 17/20 空主题行都是这种）。
+        "bias_strength": (int(item.get("bias_strength") or 0) if impacts else 0),
         "horizon": item.get("horizon", ""),
         "confidence": float(item.get("confidence") or 0.0),
         "industry_impacts_json": json.dumps(impacts, ensure_ascii=False),
