@@ -152,9 +152,10 @@ def scan(rows: list[tuple], apply: bool) -> dict:
                 el = float(imp.get("elasticity") or 1.0)
                 basis = imp.get("basis") or ""
                 direction = imp.get("direction") or "neutral"
-                has_ev = True if evidence is None else (name in evidence)
+                # 命中任意主题 = 落在体系覆盖的赛道内（见 news_impact._temper_impact）
+                in_uni = True if evidence is None else bool(evidence)
                 keep, st2, el2 = ni._temper_impact(
-                    st, el, basis, reasoning or "", has_evidence=has_ev,
+                    st, el, basis, reasoning or "", in_universe=in_uni,
                 )
                 if not keep:
                     dropped.append((name, ni._transmission_hops(basis)))

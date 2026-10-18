@@ -1101,7 +1101,7 @@ def _theme_evidence(text: str, theme_names: list[str]) -> set[str] | None:
 
 def _temper_impact(
     strength: int, elasticity: float, basis: str, reasoning: str = "",
-    has_evidence: bool = True,
+    in_universe: bool = True,
 ) -> tuple[bool, int, float]:
     """按传导级数与自述强弱修正强度；返回 ``(是否保留, strength, elasticity)``。
 
@@ -1116,11 +1116,15 @@ def _temper_impact(
 
     但**只看箭头数会误伤**：LLM 写链条爱堆箭头，「光迅科技净利超预期→800G 需求
     确认→上游光模块受益」也有 3 个箭头，而光迅本身就是成分股，这是一级驱动。
-    所以"链条长"只有在**正文里找不到该主题的任何专指证据**时才算问题 —— 那才是
-    纯粹的跨行业联想。三档：
+    「混合键合设备→北方华创平台化→上游零部件」同理，它命中了「设备零部件」，
+    属于半导体产业链内部延伸。
+
+    所以"链条长"只有在**新闻整条落在主题体系之外**（任何主题的关键词/成分股都
+    没命中）时才算问题 —— 那才是纯粹的跨行业联想，比如「外骨骼医保→关节模组」。
+    三档：
 
     - 自述弱（"弹性存疑/仅部分重叠"）且 ≥2 跳 → 丢弃，不构成可交易映射；
-    - 无专指证据且 ≥3 跳 → 保留但压到 strength=1、elasticity≤1.0（约 ±1%）；
+    - 落在主题体系外且 ≥3 跳 → 保留但压到 strength=1、elasticity≤1.0（约 ±1%）；
     - 自述弱（无论几跳）→ 同样压强度；
     - 其余不动（含"光迅业绩超预期"这类成分股自身的一级驱动）。
     """
@@ -1128,7 +1132,7 @@ def _temper_impact(
     weak = any(x in f"{basis} {reasoning}" for x in _CHAIN_WEAK)
     if weak and hops >= 2:
         return False, strength, elasticity
-    if weak or (not has_evidence and hops >= 3):
+    if weak or (not in_universe and hops >= 3):
         return True, min(int(strength or 1), 1), min(float(elasticity or 1.0), 1.0)
     return True, strength, elasticity
 
@@ -1149,7 +1153,7 @@ def _apply_assessment(item: dict, a: NewsAssessment) -> None:
     # LLM 给了主题名才允许关键词归一；给了空数组说明它判定"没有传导链"，
     # 这时再让规则匹配等于推翻它的判断（实测会把「AI 短剧出海」认成风电）。
     aligned = align_themes(text, chosen, limit=2, allow_match=bool(chosen))
-    # "正文里有没有这个主题的专指证据"决定能不能按链条长度降权（见 _temper_impact）。
+    # "这条新闻在不在主题体系覆盖的赛道内"决定能不能按链条长度降权（见 _temper_impact）。
     # 取数异常时 evidence=None，一律不降权 —— 宁可放过，不可误伤。
     catalog, _ = _theme_catalog()
     evidence = _theme_evidence(text, catalog)
@@ -1173,7 +1177,10 @@ def _apply_assessment(item: dict, a: NewsAssessment) -> None:
         # 链条太长、或自己承认"弹性存疑" → 压强度甚至丢弃（见 _temper_impact）
         keep, strength, elasticity = _temper_impact(
             strength, elasticity, basis, a.reasoning or "",
-            has_evidence=True if evidence is None else (name in evidence),
+            # 只要命中了**任意**主题，说明这条新闻落在体系覆盖的赛道内，LLM 给的
+            # 相邻主题大概率是产业链延伸（设备→封装、HBM→存储）；一条都没命中
+            # 才是纯联想。取数失败（None）按"在体系内"处理，不降权。
+            in_universe=True if evidence is None else bool(evidence),
         )
         if not keep:
             logger.debug(

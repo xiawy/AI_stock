@@ -716,3 +716,27 @@ def test_theme_evidence_separates_keywords_from_stock_lookup(monkeypatch):
     # 关键词那一路挂掉 → 判定不了，返回 None（调用方不降权）
     monkeypatch.setattr(tr, "match_themes", boom)
     assert ni._theme_evidence("海上风电塔筒中标", ["风电（出海）"]) is None
+
+
+def test_adjacent_sector_counts_as_in_universe(monkeypatch):
+    """混合键合设备 → 先进封装：3 跳，但正文命中了「设备零部件」，属产业链内部延伸。
+
+    判据是"这条新闻在不在主题体系覆盖的赛道内"，不是"这条新闻有没有命中**该**
+    主题"—— 后者会把设备→封装、HBM→存储这类正确延伸一起降权。
+    """
+    monkeypatch.setattr(
+        ni, "assess",
+        lambda items, llm=None: _assess_one(
+            theme="半导体（存储涨价）", strength=3, elasticity=1.2,
+            basis="HBM 占全球需求比重提升→高端 DRAM 产能挤压→存储颗粒涨价→模组厂毛利↑",
+        ),
+    )
+    monkeypatch.setattr(
+        ni, "_theme_evidence",
+        lambda text, names: {"半导体（先进封装）"},      # 命中相邻主题即可
+    )
+    out = ni.enrich(
+        ni.prepare([_n("瑞银：预计 2027 年 HBM 占全球总需求比重将达到 39%")]),
+        llm=object(), use_cache=False,
+    )
+    assert out[0]["bias_strength"] == 3
