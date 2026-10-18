@@ -123,6 +123,15 @@ _SIGNAL_KW = (
 
 _NUM_RE = re.compile(r"\d+(?:\.\d+)?\s*(?:亿|万|吨|GW|GWh|MW|%|台|片|辆)")
 
+# 仪式性新闻：有活动、无结果。提示词对 LLM 明确要求这类不给主题，
+# 规则降级路径必须遵守同一口径，否则「中国航展海上装备展示区将带来全新体验」
+# 会被关键词匹配到「机器人（关节模组）」——同一个口径不能只有 LLM 守。
+_CEREMONIAL_KW = (
+    "举办", "召开", "开幕", "闭幕", "揭牌", "签约仪式", "启动仪式",
+    "论坛", "峰会", "发布会", "致辞", "参观", "调研", "展示区",
+    "带来全新体验", "亮相", "交流会", "座谈会", "圆桌",
+)
+
 
 # ---------------------------------------------------------------------------
 # 1. 规则分类 / 打分（无 LLM 也能出完整字段）
@@ -557,6 +566,7 @@ def align_themes(
     alias_map: dict[str, str] | None = None,
     limit: int = 2,
     allow_match: bool = True,
+    min_score: float = 1.0,
 ) -> list[str]:
     """把 LLM 给的主题名收敛到 active 集合内，落不到就换关键词/成分股反查。
 
@@ -590,7 +600,7 @@ def align_themes(
     try:
         from ai_stock.quant.theme_registry import match_themes
 
-        for hit in match_themes(text, limit=limit):
+        for hit in match_themes(text, limit=limit, min_score=min_score):
             if hit["name"] in allowed and hit["name"] not in out:
                 out.append(hit["name"])
             if len(out) >= limit:
@@ -895,9 +905,23 @@ def prepare(news_items: list[dict], limit: int = PREFILTER_LIMIT) -> list[dict]:
     return clustered
 
 
+def is_ceremonial(text: str) -> bool:
+    """活动报道而非结果：命中仪式性词且**没有任何量化结果**。"""
+    if _NUM_RE.search(text or ""):
+        return False
+    return _count_hits(text or "", _CEREMONIAL_KW) > 0
+
+
 def _rule_impacts(item: dict, text: str, *, basis: str = "规则匹配（LLM 未参与）") -> list[dict]:
-    """规则降级：用 match_themes / 成分股反查拿主题，幅度按规则强度校准。"""
-    themes = align_themes(text, item.get("themes"), limit=2)
+    """规则降级：用 match_themes / 成分股反查拿主题，幅度按规则强度校准。
+
+    两道保守约束（与 LLM 的口径对齐）：
+    - 仪式性新闻不给主题（有活动无结果，谈不上传导链）
+    - 关键词命中门槛 2 分：单个泛词不算数，至少一个别名或两个关键词
+    """
+    if is_ceremonial(text):
+        return []
+    themes = align_themes(text, item.get("themes"), limit=2, min_score=2.0)
     impacts: list[dict] = []
     for name in themes:
         low, high = calibrate(

@@ -33,7 +33,7 @@ def _offline(monkeypatch):
     monkeypatch.setattr(ni, "_stock_cache", {})
     monkeypatch.setattr(
         "ai_stock.quant.theme_registry.match_themes",
-        lambda text, limit=2: [], raising=False,
+        lambda text, limit=2, min_score=1.0: [], raising=False,
     )
 
 
@@ -122,12 +122,23 @@ def test_align_limits_to_two():
 
 
 def test_align_uses_keyword_match_when_llm_silent(monkeypatch):
+    """LLM 没给主题名、但调用方允许兜底时（如纯规则模式），关键词仍可命中。"""
     monkeypatch.setattr(
         "ai_stock.quant.theme_registry.match_themes",
-        lambda text, limit=2: [{"name": "风电（出海）", "score": 3.0}],
+        lambda text, limit=2, min_score=1.0: [{"name": "风电（出海）", "score": 3.0}],
         raising=False,
     )
     assert ni.align_themes("海上风电塔筒出海订单", []) == ["风电（出海）"]
+
+
+def test_align_can_be_barred_from_keyword_match(monkeypatch):
+    """``allow_match=False`` 时只认闭集：LLM 说没有传导链就不许关键词补。"""
+    monkeypatch.setattr(
+        "ai_stock.quant.theme_registry.match_themes",
+        lambda text, limit=2, min_score=1.0: [{"name": "风电（出海）", "score": 3.0}],
+        raising=False,
+    )
+    assert ni.align_themes("海上风电塔筒出海订单", [], allow_match=False) == []
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +327,7 @@ def test_llm_empty_themes_blocks_rule_fallback(monkeypatch):
     # 关键词匹配"本来能命中"，用来验证它被 allow_match=False 拦住
     monkeypatch.setattr(
         "ai_stock.quant.theme_registry.match_themes",
-        lambda text, limit=2: [{"name": "风电（出海）", "score": 9.0}],
+        lambda text, limit=2, min_score=1.0: [{"name": "风电（出海）", "score": 9.0}],
         raising=False,
     )
 
@@ -342,10 +353,38 @@ def test_llm_theme_name_is_normalized_by_keywords(monkeypatch):
     )
     monkeypatch.setattr(
         "ai_stock.quant.theme_registry.match_themes",
-        lambda text, limit=2: [{"name": "风电（出海）", "score": 8.0}],
+        lambda text, limit=2, min_score=1.0: [{"name": "风电（出海）", "score": 8.0}],
         raising=False,
     )
 
     news = [_n("海上风电塔筒中标 12 亿元", "欧洲订单落地")]
     out = ni.enrich(ni.prepare(news), llm=object(), use_cache=False)
     assert out[0]["industries"] == ["风电（出海）"]
+
+
+def test_rule_mode_skips_ceremonial_news(monkeypatch):
+    """规则模式必须和 LLM 守同一口径：仪式性新闻不给主题。
+
+    实测过「中国航展海上装备展示区将带来全新体验」被关键词匹配到
+    「机器人（关节模组）」—— 有活动、无结果，谈不上传导链。
+    """
+    monkeypatch.setattr(
+        "ai_stock.quant.theme_registry.match_themes",
+        lambda text, limit=2, min_score=1.0: [{"name": "机器人（关节模组）", "score": 9.0}],
+        raising=False,
+    )
+    news = [_n("中国航展海上装备展示区将带来全新体验", "观众可现场参观")]
+    out = ni.enrich(ni.prepare(news), llm=None)
+    assert out[0]["industry_impacts"] == []
+
+    # 有量化结果的同类新闻不受影响（"3 亿元"是结果，不是活动）
+    news2 = [_n("航展现场签约 3 亿元订单，关节模组批量供货", "")]
+    out2 = ni.enrich(ni.prepare(news2), llm=None)
+    assert out2[0]["industries"] == ["机器人（关节模组）"]
+
+
+def test_is_ceremonial_requires_no_quantified_result():
+    assert ni.is_ceremonial("第三届全球数字贸易博览会开幕")
+    assert ni.is_ceremonial("公司举行揭牌仪式")
+    assert not ni.is_ceremonial("论坛现场签约 12 亿元项目")
+    assert not ni.is_ceremonial("公司扩产 5 万吨产能")

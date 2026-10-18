@@ -564,11 +564,16 @@ def _set_fail_streak(theme_id: int, streak: int, metrics: dict | None = None) ->
 # ---------------------------------------------------------------------------
 
 
-def match_themes(text: str, limit: int = 2) -> list[dict]:
+def match_themes(text: str, limit: int = 2, min_score: float = 1.0) -> list[dict]:
     """按别名与驱动关键词给 active 主题打分，返回 top-N。
 
     alias 命中权重 3（"海风"这种专指性强），关键词命中权重 1。
     匹配不到返回空列表 —— 调用方据此走 ``theme_proposal`` 队列。
+
+    ``min_score`` 用于抑制单词误配：正文里出现一个泛化关键词（比如"装备"）
+    就命中主题，会把「航展海上装备展示区」这类新闻错配到「机器人（关节模组）」。
+    规则降级路径用 2.0（至少要一个别名、或两个关键词），LLM 结果归一用 1.0
+    （LLM 已经判过有传导链，只需要把名字对齐）。
     """
     if not text:
         return []
@@ -593,7 +598,7 @@ def match_themes(text: str, limit: int = 2) -> list[dict]:
                 for kw in json.loads(theme.driver_keywords_json or "[]"):
                     if kw and kw.lower() in lowered:
                         score += 1.0
-                if score > 0:
+                if score >= min_score:
                     scores[theme.name] = score
     except Exception as exc:
         logger.warning("match_themes failed: %s", exc)

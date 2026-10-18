@@ -35,7 +35,7 @@ def _no_theme_db(monkeypatch):
     monkeypatch.setattr(news_impact, "_themes_by_stock_name", lambda text, names: [])
     monkeypatch.setattr(
         "ai_stock.quant.theme_registry.match_themes",
-        lambda text, limit=2: [], raising=False,
+        lambda text, limit=2, min_score=1.0: [], raising=False,
     )
     monkeypatch.setattr(news_impact, "_stock_cache", {})
     monkeypatch.setattr(news_impact, "_sigma_for", lambda theme: 0.015)
