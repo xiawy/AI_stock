@@ -1072,8 +1072,28 @@ def _transmission_hops(basis: str) -> int:
     return sum(t.count(x) for x in _ARROW_TOKENS)
 
 
+def _theme_evidence(text: str, theme_names: list[str]) -> set[str] | None:
+    """正文里**确实提到了**该主题的证据：专指词 1 分即算，或点名成分股。
+
+    只认专指词（``min_score=1.0``；泛词在 ``match_themes`` 里记 0 分，不会被
+    算进来），所以「外骨骼医保」这种正文里一个"关节模组/减速器/丝杠"都没有的
+    新闻，拿不到机器人主题的证据。
+
+    返回 ``None`` 表示**判断不了**（取数异常）—— 调用方据此不降权，宁可放过
+    也不要因为一次 DB 抖动把正确主题全降成微弱。
+    """
+    try:
+        names = {h["name"] for h in match_themes(text, limit=8, min_score=1.0)}
+        names.update(_themes_by_stock_name(text, theme_names))
+        return names
+    except Exception as exc:
+        logger.debug("theme evidence unavailable: %s", exc)
+        return None
+
+
 def _temper_impact(
     strength: int, elasticity: float, basis: str, reasoning: str = "",
+    has_evidence: bool = True,
 ) -> tuple[bool, int, float]:
     """按传导级数与自述强弱修正强度；返回 ``(是否保留, strength, elasticity)``。
 
@@ -1084,17 +1104,23 @@ def _temper_impact(
 
     外骨骼整机年出货万台级，减速器采购额对双环/绿的的收入贡献不到 1%，却因为
     σ20 用的是人形机器人主题的 4%，被算成接近单日上限的涨幅 —— 驱动因子根本
-    不是同一个。这里做三档：
+    不是同一个。
 
-    - 又长又弱（自述"弹性存疑/仅部分重叠"且 ≥2 跳）→ 丢弃，不构成可交易映射；
-    - 弱 或 ≥3 跳 → 保留但压到 strength=1、elasticity≤1.0（约 ±1% 量级）；
-    - 其余不动（2 跳以内的正常写法，如「HBM 需求↑→存储涨价→毛利↑」）。
+    但**只看箭头数会误伤**：LLM 写链条爱堆箭头，「光迅科技净利超预期→800G 需求
+    确认→上游光模块受益」也有 3 个箭头，而光迅本身就是成分股，这是一级驱动。
+    所以"链条长"只有在**正文里找不到该主题的任何专指证据**时才算问题 —— 那才是
+    纯粹的跨行业联想。三档：
+
+    - 自述弱（"弹性存疑/仅部分重叠"）且 ≥2 跳 → 丢弃，不构成可交易映射；
+    - 无专指证据且 ≥3 跳 → 保留但压到 strength=1、elasticity≤1.0（约 ±1%）；
+    - 自述弱（无论几跳）→ 同样压强度；
+    - 其余不动（含"光迅业绩超预期"这类成分股自身的一级驱动）。
     """
     hops = _transmission_hops(basis)
     weak = any(x in f"{basis} {reasoning}" for x in _CHAIN_WEAK)
     if weak and hops >= 2:
         return False, strength, elasticity
-    if weak or hops >= 3:
+    if weak or (not has_evidence and hops >= 3):
         return True, min(int(strength or 1), 1), min(float(elasticity or 1.0), 1.0)
     return True, strength, elasticity
 
@@ -1115,6 +1141,10 @@ def _apply_assessment(item: dict, a: NewsAssessment) -> None:
     # LLM 给了主题名才允许关键词归一；给了空数组说明它判定"没有传导链"，
     # 这时再让规则匹配等于推翻它的判断（实测会把「AI 短剧出海」认成风电）。
     aligned = align_themes(text, chosen, limit=2, allow_match=bool(chosen))
+    # "正文里有没有这个主题的专指证据"决定能不能按链条长度降权（见 _temper_impact）。
+    # 取数异常时 evidence=None，一律不降权 —— 宁可放过，不可误伤。
+    catalog, _ = _theme_catalog()
+    evidence = _theme_evidence(text, catalog)
     impacts = []
     for name in aligned:
         src = next((t for t in a.themes if
@@ -1135,6 +1165,7 @@ def _apply_assessment(item: dict, a: NewsAssessment) -> None:
         # 链条太长、或自己承认"弹性存疑" → 压强度甚至丢弃（见 _temper_impact）
         keep, strength, elasticity = _temper_impact(
             strength, elasticity, basis, a.reasoning or "",
+            has_evidence=True if evidence is None else (name in evidence),
         )
         if not keep:
             logger.debug(

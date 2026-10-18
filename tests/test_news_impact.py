@@ -591,19 +591,44 @@ def test_three_hop_chain_is_downgraded_not_dropped(monkeypatch):
     不同源 —— 外骨骼的驱动是医保支付，不是「人形机器人量产」。降到 strength=1
     后幅度应落到 ±2% 以内。
     """
-    monkeypatch.setattr(
-        ni, "assess",
-        lambda items, llm=None: _assess_one(
-            theme="机器人（关节模组）", strength=3, elasticity=1.4,
-            basis="医保局规划→纳入北京上海江苏浙江多地医保→整机采购放量→关节模组需求↑",
-        ),
-    )
+    monkeypatch.setattr(ni, "assess",
+                        lambda items, llm=None: _assess_one(
+                            theme="机器人（关节模组）", strength=3, elasticity=1.4,
+                            basis="医保局规划→纳入北京上海江苏浙江多地医保→整机采购放量→关节模组需求↑",
+                        ))
+    # 正文里没有任何该主题的专指证据（这是"跨行业联想"的判据）
+    monkeypatch.setattr(ni, "_theme_evidence", lambda text, names: set())
     out = ni.enrich(
         ni.prepare([_n("医用外骨骼康复训练项目纳入多地医保")]), llm=object(), use_cache=False,
     )
     assert out[0]["industries"] == ["机器人（关节模组）"]     # 保留主题
     assert out[0]["bias_strength"] == 1                      # 但只算微弱
     assert out[0]["expected_gain_high"] <= 2.0
+
+
+def test_long_chain_with_evidence_is_not_downgraded(monkeypatch):
+    """HBM 占比提升的报告 → 存储涨价，3 个箭头但正文里有专指证据（HBM）。
+
+    只看箭头数会把这类降到微弱（线上回扫实测误伤 7 条，含光迅科技净利超预期），
+    所以必须结合"正文里有没有该主题的专指证据"。
+    """
+    monkeypatch.setattr(
+        ni, "assess",
+        lambda items, llm=None: _assess_one(
+            theme="半导体（存储涨价）", strength=4, elasticity=1.0,
+            basis="HBM 需求占比提升→存储颗粒涨价→模组厂成本上行→模组厂提价转嫁",
+        ),
+    )
+    monkeypatch.setattr(
+        ni, "_theme_evidence",
+        lambda text, names: {"半导体（存储涨价）"},
+    )
+    out = ni.enrich(
+        ni.prepare([_n("瑞银：预计 2027 年 HBM 占全球总需求比重将达到 39%")]),
+        llm=object(), use_cache=False,
+    )
+    assert out[0]["bias_strength"] == 4
+    assert out[0]["expected_gain_high"] > 2.0
 
 
 def test_weak_and_long_chain_is_dropped(monkeypatch):

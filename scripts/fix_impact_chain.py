@@ -96,9 +96,10 @@ def _fetch(limit_snapshots: int) -> list[tuple]:
     try:
         rows = s.execute(text(
             """
-            SELECT id, snapshot_id, title, industries_json, industry_impacts_json,
-                   bull_bear_bias, bias_strength, expected_gain_low, expected_gain_high,
-                   horizon, top_stocks_json, debate_summary
+            SELECT id, snapshot_id, title, content, industries_json,
+                   industry_impacts_json, bull_bear_bias, bias_strength,
+                   expected_gain_low, expected_gain_high, horizon, top_stocks_json,
+                   debate_summary
             FROM news_items
             WHERE industry_impacts_json IS NOT NULL
               AND industry_impacts_json NOT IN ('', '[]')
@@ -130,7 +131,8 @@ def scan(rows: list[tuple], apply: bool) -> dict:
              "downgraded": 0, "dropped": 0, "samples": []}
     s = _session() if apply else None
     try:
-        for (rid, sid, title, ind_json, imp_json, bias, strength0,
+        catalog, _ = ni._theme_catalog()
+        for (rid, sid, title, content, ind_json, imp_json, bias, strength0,
              low0, high0, horizon, tops_json, reasoning) in rows:
             stats["scanned"] += 1
             try:
@@ -140,6 +142,8 @@ def scan(rows: list[tuple], apply: bool) -> dict:
             if not impacts:
                 continue
 
+            text_ = f"{title or ''} {content or ''}"
+            evidence = ni._theme_evidence(text_, catalog)
             kept, dropped, changed = [], [], False
             for imp in impacts:
                 stats["impacts"] += 1
@@ -148,7 +152,10 @@ def scan(rows: list[tuple], apply: bool) -> dict:
                 el = float(imp.get("elasticity") or 1.0)
                 basis = imp.get("basis") or ""
                 direction = imp.get("direction") or "neutral"
-                keep, st2, el2 = ni._temper_impact(st, el, basis, reasoning or "")
+                has_ev = True if evidence is None else (name in evidence)
+                keep, st2, el2 = ni._temper_impact(
+                    st, el, basis, reasoning or "", has_evidence=has_ev,
+                )
                 if not keep:
                     dropped.append((name, ni._transmission_hops(basis)))
                     stats["dropped"] += 1
