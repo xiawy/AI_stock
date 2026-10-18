@@ -26,6 +26,7 @@ from sqlalchemy import delete, select
 
 from .db import QuantBase, get_engine, init_quant_db, session_scope
 from .db_models import QuantTheme, QuantThemeAlias, QuantThemeDaily, QuantThemeStock
+from .theme_seed import GENERIC_TOKENS
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,50 @@ def seed_default_themes() -> dict:
 # ---------------------------------------------------------------------------
 # 读取
 # ---------------------------------------------------------------------------
+
+
+def sync_seed_themes() -> dict:
+    """把种子里的**文案/关键词/别名**同步到库，不动 status、metrics、成分股。
+
+    ``seed_default_themes`` 只在主题不存在时插入，所以改了 seed 里的关键词
+    （比如删掉会让「AI 短剧出海」误配风电的裸词"出海"）生产库不会跟着变。
+    直接 ``reset_seed_themes`` 又会把 active/rejected 裁决和 theme_daily 历史
+    一起清空，代价太大。折中办法就是本函数：原地 UPDATE 文本与别名。
+    """
+    from .theme_seed import DEFAULT_THEMES
+
+    ensure_schema()
+    updated, missing = 0, []
+    with session_scope() as session:
+        for item in DEFAULT_THEMES:
+            theme = session.execute(
+                select(QuantTheme).where(QuantTheme.name == item["name"])
+            ).scalar_one_or_none()
+            if theme is None:
+                missing.append(item["name"])
+                continue
+            theme.thesis = item.get("thesis", theme.thesis)
+            theme.parent_industry = item.get("parent_industry", theme.parent_industry)
+            theme.origin = item.get("origin", theme.origin)
+            theme.driver_keywords_json = json.dumps(
+                item.get("keywords", []), ensure_ascii=False
+            )
+            want = list(item.get("aliases", []))
+            have = {
+                a.alias: a for a in session.execute(
+                    select(QuantThemeAlias).where(QuantThemeAlias.theme_id == theme.id)
+                ).scalars().all()
+            }
+            for alias in want:
+                if alias not in have:
+                    session.add(QuantThemeAlias(alias=alias, theme_id=theme.id))
+            for alias, row in have.items():
+                if alias not in want:
+                    session.delete(row)
+            updated += 1
+        session.commit()
+    logger.info("theme seed sync: updated=%d, missing=%d", updated, len(missing))
+    return {"updated": updated, "missing": missing}
 
 
 def reset_seed_themes() -> dict:
@@ -564,7 +609,33 @@ def _set_fail_streak(theme_id: int, streak: int, metrics: dict | None = None) ->
 # ---------------------------------------------------------------------------
 
 
-def match_themes(text: str, limit: int = 2, min_score: float = 1.0) -> list[dict]:
+def _token_hit(token: str, lowered: str) -> bool:
+    """子串命中；纯 ASCII 且不超过 2 字符的 token 额外加词边界。
+
+    子串匹配对 "BC"（光伏 BC 电池的别名）这种两字母 token 太宽松 —— 正文里
+    出现 "ABC"/"CBD"/"BCI" 都会命中，而权重 3 分的别名一命中就直接过门槛。
+    只对 ≤2 字符的 ASCII token 加边界；"HBM" 这类要能命中 "HBM3E"、"800G" 要能
+    命中 "800G 光模块"，加边界反而漏，所以不加。
+    """
+    t = token.lower()
+    if not t:
+        return False
+    if not (len(t) <= 2 and t.isascii() and t.isalnum()):
+        return t in lowered
+    start = 0
+    while True:
+        i = lowered.find(t, start)
+        if i < 0:
+            return False
+        head_ok = i == 0 or not lowered[i - 1].isalnum() or not lowered[i - 1].isascii()
+        j = i + len(t)
+        tail_ok = j >= len(lowered) or not lowered[j].isalnum() or not lowered[j].isascii()
+        if head_ok and tail_ok:
+            return True
+        start = i + 1
+
+
+def match_themes(text: str, limit: int = 2, min_score: float = 2.0) -> list[dict]:
     """按别名与驱动关键词给 active 主题打分，返回 top-N。
 
     alias 命中权重 3（"海风"这种专指性强），关键词命中权重 1。
@@ -572,8 +643,12 @@ def match_themes(text: str, limit: int = 2, min_score: float = 1.0) -> list[dict
 
     ``min_score`` 用于抑制单词误配：正文里出现一个泛化关键词（比如"装备"）
     就命中主题，会把「航展海上装备展示区」这类新闻错配到「机器人（关节模组）」。
-    规则降级路径用 2.0（至少要一个别名、或两个关键词），LLM 结果归一用 1.0
-    （LLM 已经判过有传导链，只需要把名字对齐）。
+    默认 **2.0**：至少要一个别名、或两个关键词。规则降级路径与 LLM 归一后的
+    补位路径都用这个口径 —— 之前 LLM 路径用 1.0，结果「AI 短剧出海」靠"出海"
+    这 1 分就补出个「风电（出海）」，线上榜单出现"传媒 + 风电"的荒唐组合。
+
+    ``GENERIC_TOKENS``（出海/订单/涨价/招标…）一律记 0 分：它们是语境词，
+    不是"这条新闻属于哪个赛道"的证据。
     """
     if not text:
         return []
@@ -593,10 +668,10 @@ def match_themes(text: str, limit: int = 2, min_score: float = 1.0) -> list[dict
             for tid, theme in themes.items():
                 score = 0.0
                 for alias in alias_map.get(tid, []):
-                    if alias and alias.lower() in lowered:
+                    if alias and alias.lower() not in GENERIC_TOKENS and _token_hit(alias, lowered):
                         score += 3.0
                 for kw in json.loads(theme.driver_keywords_json or "[]"):
-                    if kw and kw.lower() in lowered:
+                    if kw and kw.lower() not in GENERIC_TOKENS and _token_hit(kw, lowered):
                         score += 1.0
                 if score >= min_score:
                     scores[theme.name] = score

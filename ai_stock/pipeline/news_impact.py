@@ -566,7 +566,7 @@ def align_themes(
     alias_map: dict[str, str] | None = None,
     limit: int = 2,
     allow_match: bool = True,
-    min_score: float = 1.0,
+    min_score: float = 2.0,
 ) -> list[str]:
     """把 LLM 给的主题名收敛到 active 集合内，落不到就换关键词/成分股反查。
 
@@ -580,6 +580,11 @@ def align_themes(
     （``themes`` 给空数组）时必须关掉兜底：实测「AI 短剧出海」会被关键词
     "出海"匹配到「风电（出海）」、「原油暗盘突破」会被匹配到「油服」并顶到
     榜首 —— 规则能匹配上的词，恰恰是 LLM 刚刚否掉的那条新闻。
+
+    ``min_score`` 默认 **2.0**（一个别名或两个关键词）。LLM 已经给了主题时也
+    不放松：那时第 2 步只是"给第二个空位补位"，1 分的关键词补进来的往往是
+    泛词误配 —— 「AI 短剧出海」= 传媒（AI应用，LLM 给的）+ 风电（出海，靠
+    "出海"补的）就是这么来的。
     """
     if not text and not llm_themes:
         return []

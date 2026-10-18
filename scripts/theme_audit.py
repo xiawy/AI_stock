@@ -30,6 +30,12 @@ from ai_stock.quant import theme_registry as tr  # noqa: E402
 
 def main() -> int:
     reset = "--reset" in sys.argv
+    if "--sync" in sys.argv:
+        # 只同步关键词/别名/文案进库，保留已有 active/rejected 裁决，也不重跑校验
+        res = tr.sync_seed_themes()
+        print(f"seed sync: updated={res['updated']} missing={res['missing']}")
+        return 0
+
     seed = tr.reset_seed_themes() if reset else tr.seed_default_themes()
     print(
         f"seed: {'reset+' if reset else ''}created={seed['created']} "

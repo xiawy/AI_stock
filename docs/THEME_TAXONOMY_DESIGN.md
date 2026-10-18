@@ -176,6 +176,19 @@ quant_theme_daily
 **硬约束**：LLM 只能从 active 主题清单里选，不能自创名字 —— 自创必须走 §四 的提案流程。
 这样就同时满足了"要细分"和"不能乱造标签"。
 
+### 泛词纪律（2026-10-18 线上事故后补）
+
+匹配是**子串**匹配，所以关键词表里一个跨行业通用词就能污染整张榜：
+
+| 项 | 内容 |
+|---|---|
+| 现场 | 榜单第 9 条「国金证券：当前 AI 短剧出海仍处渗透率低位…」→ 行业显示「传媒（AI应用）+ 风电（出海）」 |
+| 触发 | 风电关键词表里有裸词 `出海`；标题含"AI短剧**出海**" → 1 分；LLM 只给了 1 个主题，`align_themes` 用 `limit=2` 还差一个空位，补位门槛当时是 1.0 → 这个 1 分的泛词命中被写成第二个主题 |
+| 同源隐患 | `出海` 同时出现在「风电（出海）」与「医药（创新药出海）」的关键词里 —— 一个词属于两个主题，本身就证明它不是赛道特征；同理 `涨价`+`配额` 会一起把稀土新闻凑成氟化工，`总装` 会把汽车新闻凑成导弹链 |
+| 口径 | ① `GENERIC_TOKENS`（出海/订单/涨价/招标/产能/资本开支…）在 `match_themes` 里**记 0 分**；② 补位/规则两条路径的 `min_score` 统一 **2.0**（一个别名，或两个专指关键词）；③ 种子体检用例禁止泛词入表、禁止一词跨两主题；④ ≤2 字符的 ASCII 别名（`BC`）加词边界，不再命中 `ABC` |
+| 代价 | 单个关键词（1 分）不再够用。指向性强的词应提到 `aliases`（3 分）而不是降门槛 —— 本次把 `人形机器人`/`灵巧手` 提到了机器人主题的别名档 |
+| 存量修复 | `scripts/theme_audit.py --sync` 把新关键词同步进库（不动 status/metrics）；`scripts/fix_theme_misfire.py --dry-run` 回扫历史行，把"完全由泛词支撑"的主题摘掉 |
+
 ---
 
 ## 七、细分赛道上的幅度预测
@@ -426,4 +439,14 @@ sudo -u www-data env PROJECT_ROOT=/deploy/AI_stock \
 # 新闻回测
 sudo -u www-data env PROJECT_ROOT=/deploy/AI_stock \
   /deploy/AI_stock/backend/.venv/bin/python /deploy/AI_stock/scripts/news_impact_review.py
+
+# 关键词口径变更后（只同步关键词/别名，保留 active/rejected 裁决，不重跑校验）
+sudo -u www-data env PROJECT_ROOT=/deploy/AI_stock \
+  /deploy/AI_stock/backend/.venv/bin/python /deploy/AI_stock/scripts/theme_audit.py --sync
+
+# 诊断"这条新闻为什么配到这个行业" / 回扫并摘掉泛词误配
+sudo -u www-data env PROJECT_ROOT=/deploy/AI_stock \
+  /deploy/AI_stock/backend/.venv/bin/python /deploy/AI_stock/scripts/fix_theme_misfire.py --explain "新闻标题"
+sudo -u www-data env PROJECT_ROOT=/deploy/AI_stock \
+  /deploy/AI_stock/backend/.venv/bin/python /deploy/AI_stock/scripts/fix_theme_misfire.py --dry-run
 ```

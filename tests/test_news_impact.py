@@ -141,6 +141,51 @@ def test_align_can_be_barred_from_keyword_match(monkeypatch):
     assert ni.align_themes("海上风电塔筒出海订单", [], allow_match=False) == []
 
 
+def test_align_supplementary_theme_needs_two_points(monkeypatch):
+    """LLM 给了一个主题、补第二个空位时，1 分的泛词命中不许补进来。
+
+    线上事故：国金证券「AI 短剧出海」→ 传媒（AI应用）+ 风电（出海）。
+    后者只靠"出海"这一个泛词（1 分），旧代码补位门槛是 1.0 就放进来了。
+    """
+    catalog = ["传媒（AI应用）", "风电（出海）"]
+    monkeypatch.setattr(
+        ni, "_theme_catalog",
+        lambda: (catalog, {n: n for n in catalog}),
+    )
+    seen = {}
+
+    def fake(text, limit=2, min_score=2.0):
+        seen["min_score"] = min_score
+        # 1 分的泛词命中：只有门槛低于 2 时才会被当作"第二个主题"
+        return [{"name": "风电（出海）", "score": 1.0}] if min_score < 2.0 else []
+
+    monkeypatch.setattr(
+        "ai_stock.quant.theme_registry.match_themes", fake, raising=False
+    )
+    out = ni.align_themes(
+        "国金证券：当前AI短剧出海仍处渗透率低位，远期市场空间有望持续扩容",
+        ["传媒（AI应用）"],
+    )
+    assert out == ["传媒（AI应用）"]
+    assert seen["min_score"] == 2.0
+
+
+def test_align_supplementary_theme_still_allowed_with_strong_hit(monkeypatch):
+    """门槛提到 2 分不等于关掉补位：别名级别的强命中仍然可以补第二个主题。"""
+    catalog = ["传媒（AI应用）", "风电（出海）"]
+    monkeypatch.setattr(
+        ni, "_theme_catalog",
+        lambda: (catalog, {n: n for n in catalog}),
+    )
+    monkeypatch.setattr(
+        "ai_stock.quant.theme_registry.match_themes",
+        lambda text, limit=2, min_score=2.0: [{"name": "风电（出海）", "score": 3.0}],
+        raising=False,
+    )
+    out = ni.align_themes("短剧出海+海风招标", ["传媒（AI应用）"])
+    assert out == ["传媒（AI应用）", "风电（出海）"]
+
+
 # ---------------------------------------------------------------------------
 # 幅度校准
 # ---------------------------------------------------------------------------

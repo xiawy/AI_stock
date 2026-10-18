@@ -192,6 +192,60 @@ class TestMatchingAndReview:
         hits = tr.match_themes("海风订单超预期，塔筒涨价")
         assert hits and hits[0]["name"] == "风电（出海）"
 
+    def _activate_all(self) -> None:
+        from sqlalchemy import update
+
+        from ai_stock.quant.db import session_scope
+        from ai_stock.quant.db_models import QuantTheme
+
+        with session_scope() as s:
+            s.execute(update(QuantTheme).values(status="active"))
+            s.commit()
+
+    def test_generic_overseas_keyword_does_not_leak_into_wind(self, theme_env):
+        """线上事故回归：「AI 短剧出海」曾被判成「风电（出海）」。"""
+        from ai_stock.quant import theme_registry as tr
+
+        tr.seed_default_themes()
+        self._activate_all()
+
+        text = "国金证券：当前AI短剧出海仍处渗透率低位，远期市场空间有望持续扩容"
+        assert tr.match_themes(text) == []
+        # 真·海风新闻仍要命中，门槛提高不能把对的也拦掉
+        hits = tr.match_themes("海风订单超预期，塔筒涨价")
+        assert hits and hits[0]["name"] == "风电（出海）"
+
+    def test_generic_token_is_zero_weight(self, theme_env):
+        """就算库里有坏种子（关键词写成"出海"），泛词也不给分。"""
+        from sqlalchemy import update
+
+        from ai_stock.quant import theme_registry as tr
+        from ai_stock.quant.db import session_scope
+        from ai_stock.quant.db_models import QuantTheme
+
+        tid = _seed_one("坏种子（测试）", 10, keywords=("出海", "订单"), aliases=("测试",))
+        with session_scope() as s:
+            s.execute(
+                update(QuantTheme).where(QuantTheme.id == tid).values(status="active")
+            )
+            s.commit()
+
+        assert tr.match_themes("当前AI短剧出海仍处渗透率低位", min_score=1.0) == []
+        hits = tr.match_themes("电子出海订单大增，测试品种涨价", min_score=1.0)
+        assert [h["name"] for h in hits] == ["坏种子（测试）"]
+        assert hits[0]["score"] == 3.0      # 只剩别名"测试"那 3 分
+
+    def test_two_letter_ascii_alias_needs_word_boundary(self, theme_env):
+        """"BC"这种两字母别名不能命中 "ABC"/"CBD"。"""
+        from ai_stock.quant import theme_registry as tr
+
+        tr.seed_default_themes()
+        self._activate_all()
+
+        assert tr.match_themes("ABC策略组合本周调仓") == []
+        hits = tr.match_themes("BC电池扩产，背接触路线受关注")
+        assert hits and hits[0]["name"] == "光伏（BC电池）"
+
     def test_auto_review_retires_only_after_two_failures(self, theme_env, monkeypatch):
         """单次不达标只记 streak，连续两次才退休 —— 一次停牌不该杀掉赛道。"""
         from ai_stock.quant import theme_registry as tr
