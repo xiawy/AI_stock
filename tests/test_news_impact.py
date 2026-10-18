@@ -265,3 +265,28 @@ def test_content_diff_uses_containment_not_jaccard():
     assert ni.content_diff(set(), last) == 1.0
     half = {f"t{i}" for i in range(10)} | {f"x{i}" for i in range(10)}
     assert ni.content_diff(pool, half) == 0.5
+
+
+def test_theme_linked_news_outranks_macro_noise():
+    """能落到主题的条目排前面：原油/金价这类背景信息不该压住可交易信号。"""
+    macro = _typed("overseas", 2, "m", importance=8.0)
+    for item in macro:
+        item["industry_impacts"] = []
+        item["source_count"] = 3
+    signal = _typed("company", 2, "s", importance=6.0)
+    for item in signal:
+        item["industry_impacts"] = [{"name": "风电（出海）", "direction": "bullish"}]
+    top = ni.rank_with_quota(macro + signal, 4)
+    assert len(top) == 4                      # 配额保底: 海外仍在榜
+    assert top[0]["industry_impacts"]         # 但榜首是能落到主题的
+    assert top[0]["title"].startswith("s")
+    assert top[-1]["industry_impacts"] == []  # 背景信息沉到末尾
+
+
+def test_no_theme_means_neutral_direction():
+    """落不到主题时不显示多空：没有承受对象的方向箭头是噪音。"""
+    news = [_n("暗盘金价跌破 4150 美元/盎司", "外盘商品波动。")]
+    enriched = ni.enrich(ni.prepare(news), llm=None)
+    assert enriched[0]["industry_impacts"] == []
+    assert enriched[0]["bull_bear_bias"] == "neutral"
+    assert enriched[0]["bias_strength"] == 0

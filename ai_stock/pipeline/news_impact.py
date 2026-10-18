@@ -599,6 +599,16 @@ def _freshness(pub_time: str) -> float:
     return max(0.1, 1.0 - hours / 48.0)
 
 
+def _rank_key(item: dict) -> tuple[bool, float]:
+    """榜单排序键：**能落到主题的排前面**，同组内再比重要性/新鲜度/源数。
+
+    原油暗盘、外盘金价、欧央行表态这类信息价值在"背景"而不在"信号"：它们
+    仍然进榜（海外/政策各有保底名额），但不该压住"光模块净利超预期"这种
+    能直接对应 L3 主题 + 预期幅度的条目 —— 用户要的是可交易的判断链。
+    """
+    return (bool(item.get("industry_impacts")), float(item.get("_order") or 0.0))
+
+
 def rank_with_quota(items: list[dict], top_n: int = 20) -> list[dict]:
     """配额排序选 Top-N 并写 rank。
 
@@ -618,7 +628,7 @@ def rank_with_quota(items: list[dict], top_n: int = 20) -> list[dict]:
         )
         scored[etype].append(item)
     for bucket in scored.values():
-        bucket.sort(key=lambda x: x["_order"], reverse=True)
+        bucket.sort(key=_rank_key, reverse=True)
 
     picked: list[dict] = []
     seen_clusters: set[str] = set()
@@ -647,7 +657,7 @@ def rank_with_quota(items: list[dict], top_n: int = 20) -> list[dict]:
     take("policy", min(QUOTA_MAX["policy"], top_n - len(picked)))  # 2) 政策上限
     rest = sorted(                                  # 3) 剩余名额按分数补齐
         [x for bucket in scored.values() for x in bucket],
-        key=lambda x: x["_order"], reverse=True,
+        key=_rank_key, reverse=True,
     )
     counts = {t: 0 for t in EVENT_TYPES}
     for item in picked:
@@ -692,7 +702,7 @@ def rank_with_quota(items: list[dict], top_n: int = 20) -> list[dict]:
         picked.extend(rest[:top_n])
     picked = picked[:top_n]
 
-    picked.sort(key=lambda x: x["_order"], reverse=True)
+    picked.sort(key=_rank_key, reverse=True)
     for i, item in enumerate(picked, 1):
         item["rank"] = i
     return picked
@@ -816,10 +826,10 @@ def enrich(prepared: list[dict], llm=None, *, llm_limit: int = LLM_LIMIT) -> lis
         item["industry_impacts"] = impacts
         item["industries"] = [i["name"] for i in impacts]
         primary = impacts[0] if impacts else None
-        item["bull_bear_bias"] = (
-            primary["direction"] if primary else item.get("direction", "neutral")
-        )
-        item["bias_strength"] = int(primary["strength"]) if primary else int(item.get("strength", 1))
+        # 落不到主题时一律中性：\"利空\"没有承受对象就是噪音（如外盘金价下跌），
+        # 榜单上给个方向箭头却指不出行业，比不给更糟。
+        item["bull_bear_bias"] = primary["direction"] if primary else "neutral"
+        item["bias_strength"] = int(primary["strength"]) if primary else 0
         item["expected_gain_low"] = primary["exp_low"] if primary else 0.0
         item["expected_gain_high"] = primary["exp_high"] if primary else 0.0
         item["top_stocks"] = _top_stocks(primary["name"]) if primary else []
