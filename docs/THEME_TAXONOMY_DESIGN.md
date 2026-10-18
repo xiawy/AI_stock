@@ -414,9 +414,10 @@ v2 换成「清洁电器」（科沃斯/石头/九号 + 富佳/德昌/春光代�
 ### 4. 部署与巡检
 
 ```bash
-# 一键部署（含前端构建，必须 root）
-/deploy/AI_stock/scripts/deploy.sh
-/deploy/AI_stock/scripts/deploy.sh --no-frontend   # 只更后端
+# 一键部署（含前端构建，必须 root）。用 bash 调用，不依赖执行位
+# —— Windows 下 git 记录不了 +x（core.fileMode=false），clone 出来是 644。
+sudo bash /deploy/AI_stock/scripts/deploy.sh
+sudo bash /deploy/AI_stock/scripts/deploy.sh --no-frontend   # 只更后端
 
 # 主题周检（timer 自动跑，也可手工）
 sudo -u www-data env PROJECT_ROOT=/deploy/AI_stock \
