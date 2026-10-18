@@ -388,3 +388,20 @@ def test_is_ceremonial_requires_no_quantified_result():
     assert ni.is_ceremonial("公司举行揭牌仪式")
     assert not ni.is_ceremonial("论坛现场签约 12 亿元项目")
     assert not ni.is_ceremonial("公司扩产 5 万吨产能")
+
+
+def test_rule_mode_skips_neutral_direction(monkeypatch):
+    """规则判不出方向就不给主题：没方向的"传导链"等于没判断。
+
+    「布伦特原油升至每桶 110 美元」只描述价格本身，rule_direction 给 neutral，
+    这时配一个「油服」主题会让人误以为我们判断过方向。
+    """
+    monkeypatch.setattr(
+        "ai_stock.quant.theme_registry.match_themes",
+        lambda text, limit=2, min_score=1.0: [{"name": "风电（出海）", "score": 9.0}],
+        raising=False,
+    )
+    news = [_n("布伦特原油期货价格自5月20日以来首次升至每桶110美元", "")]
+    out = ni.enrich(ni.prepare(news), llm=None)
+    assert out[0]["direction"] == "neutral"
+    assert out[0]["industry_impacts"] == []

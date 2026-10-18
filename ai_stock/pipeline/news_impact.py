@@ -918,7 +918,12 @@ def _rule_impacts(item: dict, text: str, *, basis: str = "规则匹配（LLM 未
     两道保守约束（与 LLM 的口径对齐）：
     - 仪式性新闻不给主题（有活动无结果，谈不上传导链）
     - 关键词命中门槛 2 分：单个泛词不算数，至少一个别名或两个关键词
+    - 规则判不出方向（neutral）时不给主题：没有方向的"传导链"和"无主题"
+      在展示上等价，但前者会让人以为我们判断过 —— 「布伦特原油升至 110
+      美元」这类只描述价格本身的新闻就属于此列
     """
+    if item.get("direction", "neutral") == "neutral":
+        return []
     if is_ceremonial(text):
         return []
     themes = align_themes(text, item.get("themes"), limit=2, min_score=2.0)
