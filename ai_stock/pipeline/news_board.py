@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime
 from typing import Optional
@@ -38,6 +39,12 @@ _NON_WORD_RE = re.compile(r"\W+", re.UNICODE)
 # 快照节流：距上一份快照 < 2h 且榜单内容差异 < 30% 时复用
 THROTTLE_HOURS = 2.0
 THROTTLE_DIFF = 0.30
+
+# 榜单二次评估：首轮 LLM 只覆盖 prefilter 前 40 条，而配额排序是从更大的候选池
+# 里挑 20 条上榜 —— 没被评估到的条目只能用规则（无传导链、无理由）。这里对
+# 上榜条目补一次批量调用，每次快照 +1 次 LLM 调用。
+# 环境变量 ``NEWS_BOARD_RECHECK=0`` 可关掉（省调用，代价是部分条目降级为规则）。
+RECHECK_TOP = os.getenv("NEWS_BOARD_RECHECK", "1").lower() not in ("0", "false", "no", "off")
 
 
 def normalize_title(title: str) -> str:
@@ -144,6 +151,13 @@ def save_news_board(
         top = news_impact.rank_with_quota(enriched, top_n)
         if not top:
             return {"snapshot_id": None, "saved": 0, "skipped": "empty"}
+        # 二次评估：首轮 LLM 只覆盖 prefilter 前 40 条，配额排序却会从更大的
+        # 候选池里挑上榜条目 —— 实测快照 973 有 13/20 是规则票。榜单是用户
+        # 唯一会看的内容，这里对"上榜但没被 LLM 评估过"的补一次，再按新的
+        # importance 重排。失败保持原样（recheck 内部吞异常）。
+        if client is not None and RECHECK_TOP and top:
+            news_impact.recheck(top, client)
+            news_impact.rerank(top)
 
         period = "AM" if datetime.now().hour < 12 else "PM"
         snapshot_id = db_ops.create_snapshot(

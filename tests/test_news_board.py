@@ -214,6 +214,52 @@ def test_save_force_bypasses_throttle(monkeypatch):
     assert result["saved"] == len(news)
 
 
+def test_save_rechecks_board_items_when_llm_available(monkeypatch):
+    """上榜但首轮只走了规则的条目，要再补一次 LLM（一次批量调用）。"""
+    from ai_stock.pipeline import db_ops, news_impact
+
+    calls: dict = {}
+    monkeypatch.setattr(
+        news_impact, "recheck",
+        lambda items, llm, **kw: calls.update(recheck=len(items)) or items,
+    )
+    monkeypatch.setattr(
+        news_impact, "rerank",
+        lambda items: calls.update(rerank=True) or items,
+    )
+    monkeypatch.setattr(db_ops, "get_recent_snapshot_titles", lambda hours=2.0: None)
+    monkeypatch.setattr(db_ops, "create_snapshot", lambda **kwargs: 11)
+    monkeypatch.setattr(db_ops, "save_news_items", lambda sid, rows: len(rows))
+    monkeypatch.setattr(db_ops, "update_snapshot", lambda sid, **kwargs: True)
+
+    class _LLM:
+        def pick(self):
+            return object()
+
+    news = [_item(f"n{i}", f"2026-08-30 08:{i:02d}") for i in range(6)]
+    result = save_news_board(news, top_n=5, llm=_LLM())
+    assert result["snapshot_id"] == 11
+    assert calls["recheck"] == 5
+    assert calls["rerank"] is True
+
+
+def test_save_skips_recheck_without_llm(monkeypatch):
+    """LLM 不可用（规则模式）时不能调 recheck —— 那是纯浪费。"""
+    from ai_stock.pipeline import db_ops, news_impact
+
+    monkeypatch.setattr(
+        news_impact, "recheck",
+        lambda *a, **k: pytest.fail("规则模式不该二次评估"),
+    )
+    monkeypatch.setattr(db_ops, "get_recent_snapshot_titles", lambda hours=2.0: None)
+    monkeypatch.setattr(db_ops, "create_snapshot", lambda **kwargs: 12)
+    monkeypatch.setattr(db_ops, "save_news_items", lambda sid, rows: len(rows))
+    monkeypatch.setattr(db_ops, "update_snapshot", lambda sid, **kwargs: True)
+
+    news = [_item(f"n{i}", f"2026-08-30 08:{i:02d}") for i in range(4)]
+    assert save_news_board(news, top_n=3)["snapshot_id"] == 12
+
+
 def test_save_swallows_db_errors(monkeypatch):
     from ai_stock.pipeline import db_ops
 

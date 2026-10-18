@@ -986,60 +986,127 @@ def enrich(
 
     out: list[dict] = []
     for idx, item in enumerate(prepared):
-        text = f"{item.get('title', '')} {item.get('content', '')}"
         a = assessed.get(idx)
         if a is not None:
-            item["event_type"] = a.event_type if a.event_type in EVENT_TYPES else item["event_type"]
-            item["category"] = "policy" if item["event_type"] == "policy" else "news"
-            item["importance"] = round(float(a.importance), 2)
-            item["direction"] = a.direction
-            item["strength"] = a.strength
-            item["horizon"] = a.horizon if a.horizon in HORIZON_FACTOR else "1d"
-            item["confidence"] = round(float(a.confidence), 2)
-            item["reasoning"] = a.reasoning
-
-            chosen = [t.theme for t in a.themes if t.theme]
-            # LLM 给了主题名才允许关键词归一；给了空数组说明它判定"没有传导链"，
-            # 这时再让规则匹配等于推翻它的判断（实测会把「AI 短剧出海」认成风电）。
-            aligned = align_themes(text, chosen, limit=2, allow_match=bool(chosen))
-            impacts = []
-            for name in aligned:
-                src = next((t for t in a.themes if
-                            (t.theme == name or t.theme in name)), None)
-                direction = (src.direction if src and src.direction in
-                             ("bullish", "bearish", "neutral") else a.direction)
-                strength = src.strength if src else a.strength
-                elasticity = src.elasticity if src else 1.0
-                low, high = calibrate(
-                    direction, strength, elasticity, _sigma_for(name), item["horizon"],
-                )
-                impacts.append({
-                    "name": name,
-                    "direction": direction,
-                    "strength": strength,
-                    "elasticity": round(elasticity, 2),
-                    "exp_low": low,
-                    "exp_high": high,
-                    "basis": (src.basis if src and src.basis else a.reasoning or "")[:120],
-                })
-            # chosen 非空但收敛失败时，align_themes 内部的 match_themes 已经
-            # 做过关键词/成分股归一了，这里不必再跑一次规则（同样的逻辑）。
-            # chosen 为空则**不做任何兜底** —— 那是 LLM 明确判定"没有传导链"。
+            _apply_assessment(item, a)
+            item["assess_source"] = "llm"
         else:
-            impacts = _rule_impacts(item, text)
-
-        item["industry_impacts"] = impacts
-        item["industries"] = [i["name"] for i in impacts]
-        primary = impacts[0] if impacts else None
-        # 落不到主题时一律中性：\"利空\"没有承受对象就是噪音（如外盘金价下跌），
-        # 榜单上给个方向箭头却指不出行业，比不给更糟。
-        item["bull_bear_bias"] = primary["direction"] if primary else "neutral"
-        item["bias_strength"] = int(primary["strength"]) if primary else 0
-        item["expected_gain_low"] = primary["exp_low"] if primary else 0.0
-        item["expected_gain_high"] = primary["exp_high"] if primary else 0.0
-        item["top_stocks"] = _top_stocks(primary["name"]) if primary else []
+            _apply_rule(item)
+            item["assess_source"] = "rule"
         out.append(item)
     return out
+
+
+def _finish_impacts(item: dict, impacts: list[dict]) -> None:
+    """主题列表 → 条目上的行业/多空/幅度/个股字段（LLM 与规则共用）。"""
+    item["industry_impacts"] = impacts
+    item["industries"] = [i["name"] for i in impacts]
+    primary = impacts[0] if impacts else None
+    # 落不到主题时一律中性："利空"没有承受对象就是噪音（如外盘金价下跌），
+    # 榜单上给个方向箭头却指不出行业，比不给更糟。
+    item["bull_bear_bias"] = primary["direction"] if primary else "neutral"
+    item["bias_strength"] = int(primary["strength"]) if primary else 0
+    item["expected_gain_low"] = primary["exp_low"] if primary else 0.0
+    item["expected_gain_high"] = primary["exp_high"] if primary else 0.0
+    item["top_stocks"] = _top_stocks(primary["name"]) if primary else []
+
+
+def _apply_assessment(item: dict, a: NewsAssessment) -> None:
+    """把一次 LLM 评估写进条目（事件类型/重要性/主题归一/幅度校准）。"""
+    text = f"{item.get('title', '')} {item.get('content', '')}"
+    item["event_type"] = a.event_type if a.event_type in EVENT_TYPES else item["event_type"]
+    item["category"] = "policy" if item["event_type"] == "policy" else "news"
+    item["importance"] = round(float(a.importance), 2)
+    item["direction"] = a.direction
+    item["strength"] = a.strength
+    item["horizon"] = a.horizon if a.horizon in HORIZON_FACTOR else "1d"
+    item["confidence"] = round(float(a.confidence), 2)
+    item["reasoning"] = a.reasoning
+
+    chosen = [t.theme for t in a.themes if t.theme]
+    # LLM 给了主题名才允许关键词归一；给了空数组说明它判定"没有传导链"，
+    # 这时再让规则匹配等于推翻它的判断（实测会把「AI 短剧出海」认成风电）。
+    aligned = align_themes(text, chosen, limit=2, allow_match=bool(chosen))
+    impacts = []
+    for name in aligned:
+        src = next((t for t in a.themes if
+                    (t.theme == name or t.theme in name)), None)
+        direction = (src.direction if src and src.direction in
+                     ("bullish", "bearish", "neutral") else a.direction)
+        strength = src.strength if src else a.strength
+        elasticity = src.elasticity if src else 1.0
+        low, high = calibrate(
+            direction, strength, elasticity, _sigma_for(name), item["horizon"],
+        )
+        impacts.append({
+            "name": name,
+            "direction": direction,
+            "strength": strength,
+            "elasticity": round(elasticity, 2),
+            "exp_low": low,
+            "exp_high": high,
+            "basis": (src.basis if src and src.basis else a.reasoning or "")[:120],
+        })
+    # chosen 非空但收敛失败时，align_themes 内部的 match_themes 已经做过
+    # 关键词/成分股归一了，这里不必再跑一次规则（同样的逻辑）。
+    # chosen 为空则**不做任何兜底** —— 那是 LLM 明确判定"没有传导链"。
+    _finish_impacts(item, impacts)
+
+
+def _apply_rule(item: dict) -> None:
+    """规则降级：只用关键词/成分股拿主题，幅度按规则强度校准。"""
+    text = f"{item.get('title', '')} {item.get('content', '')}"
+    _finish_impacts(item, _rule_impacts(item, text))
+
+
+def recheck(items: list[dict], llm=None, *, use_cache: bool = True) -> list[dict]:
+    """榜单二次评估：给"已上榜但只走了规则"的条目补一次 LLM。
+
+    首轮 LLM 只覆盖 prefilter 头部 ``LLM_LIMIT`` 条，而配额排序是从更大的候选
+    池里挑 20 条上板 —— 生产快照 973 实测 **13/20 是规则票**：没有传导链、没有
+    理由、幅度按规则强度粗校准。这些恰恰是用户唯一会看到的内容。
+
+    这里只补"没被 LLM 评估过"的那部分，一次批量调用（缓存仍先生效）；失败就
+    保持规则结果不动，榜单不会因为二次评估挂掉。
+    """
+    if not items or llm is None:
+        return items
+    todo = [i for i, it in enumerate(items) if it.get("assess_source") != "llm"]
+    if not todo:
+        return items
+    subset = [items[i] for i in todo]
+    assessed: dict[int, NewsAssessment] = load_cached(subset) if use_cache else {}
+    missing = [k for k in range(len(subset)) if k not in assessed]
+    if missing:
+        fresh = assess([subset[k] for k in missing], llm)
+        mapped = {missing[local]: a for local, a in fresh.items()
+                  if 0 <= local < len(missing)}
+        if mapped:
+            save_cached(subset, mapped, model=type(llm).__name__)
+            assessed.update(mapped)
+        logger.info(
+            "news recheck: %d items, %d cache hit, %d llm, %d rule",
+            len(subset), len(subset) - len(missing), len(mapped),
+            len(missing) - len(mapped),
+        )
+    for k, a in assessed.items():
+        _apply_assessment(subset[k], a)
+        subset[k]["assess_source"] = "llm"
+    return items
+
+
+def rerank(items: list[dict]) -> list[dict]:
+    """重算顺序分并按榜单键重排（二次评估改了 importance 之后调用）。"""
+    for item in items:
+        item["_order"] = (
+            float(item.get("importance") or 0.0)
+            * _freshness(item.get("pub_time", ""))
+            * min(int(item.get("source_count", 1)), 3)
+        )
+    items.sort(key=_rank_key, reverse=True)
+    for i, item in enumerate(items, 1):
+        item["rank"] = i
+    return items
 
 
 _stock_cache: dict[str, list[dict]] = {}

@@ -462,4 +462,12 @@ sudo -u www-data env PROJECT_ROOT=/deploy/AI_stock \
   /deploy/AI_stock/backend/.venv/bin/python /deploy/AI_stock/scripts/fix_theme_misfire.py --explain "新闻标题"
 sudo -u www-data env PROJECT_ROOT=/deploy/AI_stock \
   /deploy/AI_stock/backend/.venv/bin/python /deploy/AI_stock/scripts/fix_theme_misfire.py --dry-run
+
+# 漏配扫描（补种子词用）：A 提到成分股名却无主题 / B 只命中 1 个专指词 / C 分数够却没挂上
+sudo -u www-data env PROJECT_ROOT=/deploy/AI_stock \
+  /deploy/AI_stock/backend/.venv/bin/python /deploy/AI_stock/scripts/theme_miss_scan.py --limit 3000
 ```
+
+`theme_miss_scan.py` 是补词的入口：门槛 2.0 之后，"词表里根本没有那个词"的赛道
+新闻会静默留空（半导体测试机/混合键合设备就是这样被发现的），只能靠回扫发现。
+它只统计规则行 —— LLM 判的空是它的明确结论，不能拿关键词去覆盖。

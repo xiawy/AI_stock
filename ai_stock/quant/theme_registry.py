@@ -610,26 +610,29 @@ def _set_fail_streak(theme_id: int, streak: int, metrics: dict | None = None) ->
 
 
 def _token_hit(token: str, lowered: str) -> bool:
-    """子串命中；纯 ASCII 且不超过 2 字符的 token 额外加词边界。
+    """子串命中；纯 ASCII 字母 token 加词边界，含数字的保持子串。
 
-    子串匹配对 "BC"（光伏 BC 电池的别名）这种两字母 token 太宽松 —— 正文里
-    出现 "ABC"/"CBD"/"BCI" 都会命中，而权重 3 分的别名一命中就直接过门槛。
-    只对 ≤2 字符的 ASCII token 加边界；"HBM" 这类要能命中 "HBM3E"、"800G" 要能
-    命中 "800G 光模块"，加边界反而漏，所以不加。
+    - ≤2 字符（"BC"）：两边都要边界 —— "ABC"/"CBD" 不能命中；
+    - ≥3 字符（"GIS"）：左边要边界，右边允许接数字（"HBM" 要能命中 "HBM3E"）。
+      否则 "logistics"/"register" 里的 "gis" 会把物流、券商稿算成电网设备
+      （2026-10-18 生产实测：3000 行空主题里 26 条是这么来的）；
+    - 含数字的 token（"800G"/"1.6T"/"2.5D"）保持子串匹配：它们几乎不会被别的
+      词包含，而 "800G 光模块" 这类写法需要能命中。
     """
     t = token.lower()
     if not t:
         return False
-    if not (len(t) <= 2 and t.isascii() and t.isalnum()):
+    if not (t.isascii() and t.isalpha()):
         return t in lowered
     start = 0
     while True:
         i = lowered.find(t, start)
         if i < 0:
             return False
-        head_ok = i == 0 or not lowered[i - 1].isalnum() or not lowered[i - 1].isascii()
+        head_ok = i == 0 or not (lowered[i - 1].isalnum() and lowered[i - 1].isascii())
         j = i + len(t)
-        tail_ok = j >= len(lowered) or not lowered[j].isalnum() or not lowered[j].isascii()
+        tail = lowered[j] if j < len(lowered) else ""
+        tail_ok = (not tail) or (not (tail.isalpha() and tail.isascii()))
         if head_ok and tail_ok:
             return True
         start = i + 1

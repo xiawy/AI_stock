@@ -450,3 +450,68 @@ def test_rule_mode_skips_neutral_direction(monkeypatch):
     out = ni.enrich(ni.prepare(news), llm=None)
     assert out[0]["direction"] == "neutral"
     assert out[0]["industry_impacts"] == []
+
+
+# ---------------------------------------------------------------------------
+# 榜单二次评估（recheck）
+# ---------------------------------------------------------------------------
+
+
+def test_enrich_marks_assess_source(monkeypatch):
+    """每条都要标出"这次结论是 LLM 给的还是规则推的"，二次评估靠它挑活。"""
+    monkeypatch.setattr(ni, "assess", lambda items, llm=None: {})
+    rule_only = ni.enrich(ni.prepare([_n("存储涨价：DRAM 报价上调 15%")]), llm=object())
+    assert rule_only[0]["assess_source"] == "rule"
+
+    monkeypatch.setattr(
+        ni, "assess",
+        lambda items, llm=None: {
+            0: ni.NewsAssessment(
+                index=0, event_type="industry", importance=6,
+                direction="bullish", strength=2, themes=[],
+            )
+        },
+    )
+    via_llm = ni.enrich(ni.prepare([_n("某公司发布新品")]), llm=object(), use_cache=False)
+    assert via_llm[0]["assess_source"] == "llm"
+
+
+def test_recheck_only_assesses_rule_items(monkeypatch):
+    """只补"上榜但没被 LLM 看过"的条目，一次批量调用，不重复花钱。"""
+    calls: list[list[str]] = []
+
+    def fake_assess(items, llm=None):
+        calls.append([i["title"] for i in items])
+        return {
+            0: ni.NewsAssessment(
+                index=0, event_type="industry", importance=9, direction="bullish",
+                strength=3, confidence=0.6,
+                themes=[ni.ThemeImpact(theme="风电（出海）", direction="bullish", strength=3)],
+            )
+        }
+
+    monkeypatch.setattr(ni, "assess", fake_assess)
+    monkeypatch.setattr(ni, "save_cached", lambda *a, **k: 0)
+
+    done = ni.enrich(ni.prepare([_n("海上风电塔筒中标 12 亿元")]), llm=None)[0]
+    done["assess_source"] = "llm"                     # 已经评估过，不该再送
+    todo = ni.enrich(ni.prepare([_n("海上风电海缆招标落地")]), llm=None)[0]
+    assert todo["assess_source"] == "rule"
+
+    out = ni.recheck([done, todo], llm=object(), use_cache=False)
+
+    assert calls == [["海上风电海缆招标落地"]]
+    assert out[1]["assess_source"] == "llm"
+    assert out[1]["industries"] == ["风电（出海）"]
+    assert out[1]["confidence"] == 0.6                # 从规则票升级为 LLM 票
+    assert out[0]["confidence"] < 0.5                # 已评估的没被动过
+
+
+def test_recheck_is_fail_safe(monkeypatch):
+    """LLM 挂了就保持规则结果，榜单不能因为二次评估挂掉。"""
+    monkeypatch.setattr(ni, "assess", lambda items, llm=None: {})
+    items = ni.enrich(ni.prepare([_n("海上风电塔筒中标 12 亿元")]), llm=None)
+    before = [dict(i) for i in items]
+    out = ni.recheck(items, llm=object(), use_cache=False)
+    assert out[0]["industries"] == before[0]["industries"]
+    assert out[0]["assess_source"] == "rule"

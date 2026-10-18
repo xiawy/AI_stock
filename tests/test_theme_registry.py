@@ -246,6 +246,37 @@ class TestMatchingAndReview:
         hits = tr.match_themes("BC电池扩产，背接触路线受关注")
         assert hits and hits[0]["name"] == "光伏（BC电池）"
 
+    def test_ascii_token_does_not_hit_inside_english_word(self, theme_env):
+        """"GIS"不能命中 "logistics"/"register" —— 生产 3000 行里 26 条这么来的。
+
+        同时 "HBM" 仍要能命中 "HBM3E"（右边界放过数字），"800G" 也照旧子串匹配。
+        """
+        from ai_stock.quant import theme_registry as tr
+
+        tr.seed_default_themes()
+        self._activate_all()
+
+        assert tr.match_themes("摩根士丹利：logistics 成本上升，register 数据走弱") == []
+        # 真·特高压 GIS 设备新闻
+        hits = tr.match_themes("特高压 GIS 设备招标落地，换流阀同步核准")
+        assert hits and hits[0]["name"] == "电网（特高压）"
+        # 含数字的 token 保持子串：HBM3E / 800G 光模块
+        assert tr._token_hit("HBM", "hbm3e 扩产")
+        assert tr._token_hit("800G", "800g光模块放量")
+        assert not tr._token_hit("GIS", "logistics")
+
+    def test_semiconductor_equipment_covers_test_and_bonding(self, theme_env):
+        """漏配扫描工单：「测试机」「混合键合」两条上过榜却落空。"""
+        from ai_stock.quant import theme_registry as tr
+
+        tr.seed_default_themes()
+        self._activate_all()
+
+        hits = tr.match_themes("直击2026湾芯展｜订单超全年营收两倍 国产半导体测试机厂商密集扩产")
+        assert hits and hits[0]["name"] == "半导体（设备零部件）"
+        hits = tr.match_themes("混合键合设备国产化驶入快车道")
+        assert hits and hits[0]["name"] == "半导体（设备零部件）"
+
     def test_price_and_macro_news_do_not_own_commodity_themes(self, theme_env):
         """商品价格/宏观流动性只是背景音，不能直接给主题。
 
