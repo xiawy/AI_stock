@@ -77,9 +77,13 @@ RETIRED_TOKENS: dict[str, tuple[str, ...]] = {
     "家电（清洁电器）": ("代工", "海外收入"),
     "农业（种业转基因）": ("商业化推广",),
     "建筑（水利投资）": ("重大项目",),
-    "油服（钻井/工程）": ("资本开支", "油价", "原油", "布伦特", "wti", "opec"),
+    "油服（钻井/工程）": ("资本开支", "油价", "原油", "布伦特", "wti", "opec", "开采"),
     "黄金（矿企弹性）": ("避险", "降息", "实际利率"),
+    "有色（钕铁硼磁材）": ("出口管制",),
 }
+
+# 规则路径写进 basis 的开头（见 ``news_impact._rule_impacts`` / 回填脚本）
+RULE_BASIS_PREFIXES = ("规则", "历史规则")
 
 
 def _session():
@@ -229,8 +233,17 @@ def repair(rows: list[tuple], tokens: dict, dry_run: bool) -> dict:
                     kept.append(imp)
                     continue
                 strong, _, generic = evidence(text_, tk, RETIRED_TOKENS.get(name, ()))
-                if strong <= 0 and generic:
-                    dropped.append((name, generic))
+                basis = imp.get("basis") or ""
+                if basis.startswith(RULE_BASIS_PREFIXES):
+                    # 规则/回填行要按**当前**口径复核：现在 2 分才够，1 分的
+                    # 单关键词（"开采"→油服）、0 分的历史残留（"RBC"→BC 电池）
+                    # 都该摘。LLM 行不适用 —— 它靠 basis 里的传导链，不靠关键词。
+                    bad = strong < 2.0
+                else:
+                    # LLM 行：只有"完全靠泛词"才算误配，别推翻它写的传导链
+                    bad = strong < 2.0 and bool(generic)
+                if bad:
+                    dropped.append((name, generic or ["证据不足"]))
                 else:
                     kept.append(imp)
             if not dropped:
