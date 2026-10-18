@@ -515,3 +515,53 @@ def test_recheck_is_fail_safe(monkeypatch):
     out = ni.recheck(items, llm=object(), use_cache=False)
     assert out[0]["industries"] == before[0]["industries"]
     assert out[0]["assess_source"] == "rule"
+
+
+def _assess_one(theme="风电（出海）", direction="bullish", basis="海风订单↑→塔筒出货↑"):
+    return {
+        0: ni.NewsAssessment(
+            index=0, event_type="industry", importance=6, direction=direction,
+            strength=3, confidence=0.6,
+            themes=[ni.ThemeImpact(
+                theme=theme, direction=direction, strength=3,
+                elasticity=1.0, basis=basis,
+            )],
+        )
+    }
+
+
+def test_neutral_theme_is_dropped(monkeypatch):
+    """方向不明的主题不成立：给了 industry 却不说涨跌，观众会以为我们判断过。
+
+    线上原样：北京「十五五」交通规划（轨道 1050 公里）被挂到
+    「建筑（水利投资）」，basis 自己写着「水利方向无直接对应」。
+    """
+    monkeypatch.setattr(ni, "assess", lambda items, llm=None: _assess_one(direction="neutral"))
+    out = ni.enrich(ni.prepare([_n("某市发布综合交通规划")]), llm=object(), use_cache=False)
+    assert out[0]["industry_impacts"] == []
+    assert out[0]["bull_bear_bias"] == "neutral"
+
+
+def test_basis_that_negates_chain_drops_theme(monkeypatch):
+    """basis 里自己写了"没有传导链"，主题就不该挂 —— 哪怕 direction 给了 bullish。"""
+    monkeypatch.setattr(
+        ni, "assess",
+        lambda items, llm=None: _assess_one(
+            basis="长鑫科技参与战略轮融资仅为股权投资行为，不构成存储供需的传导链",
+        ),
+    )
+    out = ni.enrich(ni.prepare([_n("某芯片公司完成战略融资")]), llm=object(), use_cache=False)
+    assert out[0]["industries"] == []
+    assert out[0]["expected_gain_high"] == 0.0
+
+    # 反向：正常的传导链照旧保留
+    monkeypatch.setattr(ni, "assess", lambda items, llm=None: _assess_one())
+    out = ni.enrich(ni.prepare([_n("海上风电塔筒中标 12 亿元")]), llm=object(), use_cache=False)
+    assert out[0]["industries"] == ["风电（出海）"]
+
+
+def test_double_negative_basis_is_not_dropped():
+    """「不构成利空」是给了方向，不是否定链条。"""
+    assert not ni._basis_negates_chain("订单落地，不构成利空")
+    assert ni._basis_negates_chain("无 A 股订单落地")
+    assert ni._basis_negates_chain("链条偏弱，仅供观察")

@@ -398,8 +398,13 @@ def _build_prompt(items: list[dict], theme_names: list[str]) -> str:
         "   宁可不给主题，也不要为了有输出硬凑一个弱相关主题 —— 榜单上一条错误的"
         "行业映射，比一条空映射的代价大得多。\n"
         "5) 每个 theme 的 basis 必须写出传导链条（如「HBM 需求↑→存储涨价→模组厂毛利↑」）；"
-        "写不出链条就不要给这个 theme\n"
-        "6) 一条新闻只能出现在一个事件里，请全部评估，不要遗漏\n\n"
+        "写不出链条就不要给这个 theme。**basis 里一旦出现「不构成/无直接对应/仅为股权投资/"
+        "链条偏弱/无 A 股订单」这类否定表述，就说明你自己也认为没有链条，必须删掉该 theme**\n"
+        "6) 主题名括号里的限定词是**准入条件**，不是修饰语：选「建筑（水利投资）」要求新闻主线"
+        "是水利/水网/防洪，轨道交通、公路、机场、市政景观一律留空；选「电网（特高压）」要求"
+        "出现特高压/直流输电/换流阀；选「风电（出海）」要求是海上风电或海外订单。限定词对不上，"
+        "宁可换一个能对上的主题，或者留空\n"
+        "7) 一条新闻只能出现在一个事件里，请全部评估，不要遗漏\n\n"
         "新闻列表：\n" + "\n".join(lines)
     )
 
@@ -431,7 +436,8 @@ def assess(items: list[dict], llm=None) -> dict[int, NewsAssessment]:
 # ---------------------------------------------------------------------------
 # 口径变了必须改版本号，否则旧口径的结论会被一直复用 —— 这是缓存最容易出事
 # 的地方（改了提示词却看不到效果，因为全命中旧 key）。
-PROMPT_VERSION = "3"
+# v4：加"限定词准入"与"basis 自否定即弃"两条（2026-10-18 二次评估上线后）。
+PROMPT_VERSION = "4"
 CACHE_TTL_DAYS = 7
 
 
@@ -1011,6 +1017,26 @@ def _finish_impacts(item: dict, impacts: list[dict]) -> None:
     item["top_stocks"] = _top_stocks(primary["name"]) if primary else []
 
 
+# 依据里自己写了"没有传导链"的，主题不成立：LLM 有时为了凑满 slot 硬塞一个，
+# 再在 basis 里否定它。线上原样（快照 974）：
+#   「综合交通规划含轨道 1050 公里目标→…，但水利方向无直接对应，链条偏弱」
+#   「长鑫科技参与…仅为股权投资行为，不构成存储供需或价格的传导链」
+#   「…为一级市场融资，无 A 股域控供应商订单落地」
+_CHAIN_NEGATION = (
+    "不构成", "无直接", "并非", "谈不上", "链条偏弱", "无A股", "无 A 股",
+    "仅为股权", "不形成", "不受益", "难言",
+)
+# 双重否定不能误伤：basis 说"不构成利空"其实是给了方向
+_CHAIN_NEGATION_EXEMPT = ("不构成利空", "不构成利好", "不构成明显利空", "不构成明显利好")
+
+
+def _basis_negates_chain(basis: str) -> bool:
+    text_ = basis or ""
+    if any(x in text_ for x in _CHAIN_NEGATION_EXEMPT):
+        return False
+    return any(x in text_ for x in _CHAIN_NEGATION)
+
+
 def _apply_assessment(item: dict, a: NewsAssessment) -> None:
     """把一次 LLM 评估写进条目（事件类型/重要性/主题归一/幅度校准）。"""
     text = f"{item.get('title', '')} {item.get('content', '')}"
@@ -1035,6 +1061,15 @@ def _apply_assessment(item: dict, a: NewsAssessment) -> None:
                      ("bullish", "bearish", "neutral") else a.direction)
         strength = src.strength if src else a.strength
         elasticity = src.elasticity if src else 1.0
+        basis = (src.basis if src and src.basis else a.reasoning or "")
+        # 口径：主题必须带方向 —— "没有方向的主题"和"没有主题"在展示上等价，
+        # 但前者会让人以为我们判断过（规则路径早就是这么做的，LLM 路径要对齐）。
+        if direction not in ("bullish", "bearish"):
+            continue
+        # basis 自己否定了传导链 → 这个主题不成立（见 _CHAIN_NEGATION）
+        if _basis_negates_chain(basis):
+            logger.debug("drop theme %s: basis negates chain (%s)", name, basis[:40])
+            continue
         low, high = calibrate(
             direction, strength, elasticity, _sigma_for(name), item["horizon"],
         )
@@ -1045,7 +1080,7 @@ def _apply_assessment(item: dict, a: NewsAssessment) -> None:
             "elasticity": round(elasticity, 2),
             "exp_low": low,
             "exp_high": high,
-            "basis": (src.basis if src and src.basis else a.reasoning or "")[:120],
+            "basis": basis[:120],
         })
     # chosen 非空但收敛失败时，align_themes 内部的 match_themes 已经做过
     # 关键词/成分股归一了，这里不必再跑一次规则（同样的逻辑）。

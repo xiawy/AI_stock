@@ -67,8 +67,8 @@ def fetch_rows(limit: int, only_empty: bool = True) -> list[tuple]:
     s = _session()
     try:
         return s.execute(text(
-            f"SELECT id, title, content, confidence, industries_json, bull_bear_bias "
-            f"FROM news_items {where}ORDER BY id DESC LIMIT :lim"
+            f"SELECT id, title, content, confidence, industries_json, bull_bear_bias, "
+            f"snapshot_id FROM news_items {where}ORDER BY id DESC LIMIT :lim"
         ), {"lim": limit}).fetchall()
     finally:
         s.close()
@@ -91,8 +91,12 @@ def scan(rows: list[tuple], tokens: dict, names: dict[str, str]) -> dict:
     token: dict[tuple[str, str], list[tuple]] = defaultdict(list)
     near: list[tuple] = []
     rule_rows = 0
+    # C 类只认最近 8 个快照：更早的行是"当时词表还没有这个词"留下的存量，
+    # 不会自动重算，混进来会把工单变成噪音（2026-10-18 实测：测试机那两条
+    # 在补词后得分够了，但历史行仍在库里留空）。
+    latest = sorted({r[6] for r in rows if r[6] is not None}, reverse=True)[:8]
 
-    for rid, title, content, conf, ind_json, bias in rows:
+    for rid, title, content, conf, ind_json, bias, sid in rows:
         if (ind_json or "[]") not in ("[]", ""):
             continue
         if (conf or 0.0) >= RULE_CONF_MAX:
@@ -111,7 +115,8 @@ def scan(rows: list[tuple], tokens: dict, names: dict[str, str]) -> dict:
         best.sort(reverse=True)
 
         if best and best[0][0] >= 2.0:
-            near.append((rid, (title or "")[:TITLE_SAMPLE], best[0][2], best[0][1]))
+            if sid in latest:
+                near.append((rid, (title or "")[:TITLE_SAMPLE], best[0][2], best[0][1]))
             continue
         for strong, hits, theme in best[:2]:
             for hit in hits:
@@ -142,7 +147,7 @@ def report(result: dict, *, top: int = 20) -> None:
         theme, hit = key.split("|", 1)
         print(f"  {hit:<14} {theme:<20} {len(items):>4} 条  例：{items[0][1]}")
 
-    print(f"\n=== C. 得分够了却没挂上：{len(result['near'])} 条（仪式性/中性拦截或主题 retired）===")
+    print(f"\n=== C. 得分够了却没挂上：{len(result['near'])} 条（最近 8 个快照；仪式性/中性拦截或主题 retired）===")
     for rid, title, theme, hits in result["near"][:top]:
         print(f"  #{rid} {title}  -> {theme} {hits}")
 
