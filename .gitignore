@@ -228,3 +228,6 @@ backend/data/
 .workbuddy/
 
 custom_strategies
+
+# 相对路径陷阱：在仓库根跑脚本时 sqlite 会建出 ./data/（真实库在 backend/data/）
+/data/

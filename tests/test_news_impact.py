@@ -331,7 +331,10 @@ def test_theme_linked_news_outranks_macro_noise():
         item["source_count"] = 3
     signal = _typed("company", 2, "s", importance=6.0)
     for item in signal:
-        item["industry_impacts"] = [{"name": "风电（出海）", "direction": "bullish"}]
+        # strength 必须 ≥2 才算"可交易主题"（见 news_impact._tradable）
+        item["industry_impacts"] = [
+            {"name": "风电（出海）", "direction": "bullish", "strength": 3},
+        ]
     top = ni.rank_with_quota(macro + signal, 4)
     assert len(top) == 4                      # 配额保底: 海外仍在榜
     assert top[0]["industry_impacts"]         # 但榜首是能落到主题的
@@ -517,14 +520,17 @@ def test_recheck_is_fail_safe(monkeypatch):
     assert out[0]["assess_source"] == "rule"
 
 
-def _assess_one(theme="风电（出海）", direction="bullish", basis="海风订单↑→塔筒出货↑"):
+def _assess_one(
+    theme="风电（出海）", direction="bullish", basis="海风订单↑→塔筒出货↑",
+    strength=3, elasticity=1.0, reasoning="",
+):
     return {
         0: ni.NewsAssessment(
             index=0, event_type="industry", importance=6, direction=direction,
-            strength=3, confidence=0.6,
+            strength=strength, confidence=0.6, reasoning=reasoning,
             themes=[ni.ThemeImpact(
-                theme=theme, direction=direction, strength=3,
-                elasticity=1.0, basis=basis,
+                theme=theme, direction=direction, strength=strength,
+                elasticity=elasticity, basis=basis,
             )],
         )
     }
@@ -565,3 +571,96 @@ def test_double_negative_basis_is_not_dropped():
     assert not ni._basis_negates_chain("订单落地，不构成利空")
     assert ni._basis_negates_chain("无 A 股订单落地")
     assert ni._basis_negates_chain("链条偏弱，仅供观察")
+
+
+# ---------------------------------------------------------------------------
+# 传导级数：三级传导不能按一级受益给强度
+# ---------------------------------------------------------------------------
+
+
+def test_transmission_hops_counts_arrows():
+    assert ni._transmission_hops("") == 0
+    assert ni._transmission_hops("医保纳入→整机放量→零部件需求↑") == 2
+    assert ni._transmission_hops("A→B->C=>D") == 3
+
+
+def test_three_hop_chain_is_downgraded_not_dropped(monkeypatch):
+    """线上原样（快照 975 第 1 位）：外骨骼医保 → 机器人（关节模组）+3.4~8.0%。
+
+    3 跳链条，σ20 用人形机器人主题的 4%，算出来贴着单日上限。真问题是驱动因子
+    不同源 —— 外骨骼的驱动是医保支付，不是「人形机器人量产」。降到 strength=1
+    后幅度应落到 ±2% 以内。
+    """
+    monkeypatch.setattr(
+        ni, "assess",
+        lambda items, llm=None: _assess_one(
+            theme="机器人（关节模组）", strength=3, elasticity=1.4,
+            basis="医保局规划→纳入北京上海江苏浙江多地医保→整机采购放量→关节模组需求↑",
+        ),
+    )
+    out = ni.enrich(
+        ni.prepare([_n("医用外骨骼康复训练项目纳入多地医保")]), llm=object(), use_cache=False,
+    )
+    assert out[0]["industries"] == ["机器人（关节模组）"]     # 保留主题
+    assert out[0]["bias_strength"] == 1                      # 但只算微弱
+    assert out[0]["expected_gain_high"] <= 2.0
+
+
+def test_weak_and_long_chain_is_dropped(monkeypatch):
+    """自己写"仅部分重叠、弹性存疑"，链条还要过 2 跳 → 不构成可交易映射。
+
+    线上原样（快照 974 reasoning）：「与清单主题仅部分重叠，弹性存疑」。
+    """
+    monkeypatch.setattr(
+        ni, "assess",
+        lambda items, llm=None: _assess_one(
+            theme="机器人（关节模组）", strength=2, elasticity=1.3,
+            basis="多地纳入医保→终端放量→外骨骼本体与减速器供应商订单增加",
+            reasoning="与清单主题仅部分重叠，弹性存疑",
+        ),
+    )
+    out = ni.enrich(ni.prepare([_n("医用外骨骼康复纳入多地医保")]), llm=object(), use_cache=False)
+    assert out[0]["industries"] == []
+    assert out[0]["expected_gain_high"] == 0.0
+
+
+def test_normal_two_hop_chain_untouched(monkeypatch):
+    """正常写法（HBM→涨价→毛利）不能被降权误伤。"""
+    monkeypatch.setattr(
+        ni, "assess",
+        lambda items, llm=None: _assess_one(
+            theme="半导体（存储涨价）", strength=3, elasticity=1.2,
+            basis="HBM 需求↑→存储涨价→模组厂毛利↑",
+        ),
+    )
+    out = ni.enrich(ni.prepare([_n("DRAM 报价上调 15%")]), llm=object(), use_cache=False)
+    assert out[0]["bias_strength"] == 3
+    assert out[0]["expected_gain_high"] > 2.0
+
+
+def test_weak_theme_does_not_get_rank_boost():
+    """strength=1 的主题不该享受"命中主题"的置顶 —— 否则排序在奖励凑主题。"""
+    weak = {"industry_impacts": [{"name": "机器人（关节模组）", "strength": 1}], "_order": 9.0}
+    none = {"industry_impacts": [], "_order": 5.0}
+    strong = {"industry_impacts": [{"name": "风电（出海）", "strength": 3}], "_order": 4.0}
+
+    assert ni._tradable(weak) is False
+    assert ni._tradable(none) is False
+    assert ni._tradable(strong) is True
+    # 微弱主题和空主题同组，靠 _order 决胜；强主题永远在前
+    assert ni._rank_key(strong) > ni._rank_key(weak)
+    assert ni._rank_key(weak)[0] == ni._rank_key(none)[0] == False   # noqa: E712
+
+
+def test_weak_theme_does_not_get_rank_boost():
+    """strength=1 的主题不该享受"命中主题"的置顶 —— 否则排序在奖励凑主题。"""
+    weak = {"industry_impacts": [{"name": "机器人（关节模组）", "strength": 1}], "_order": 9.0}
+    none = {"industry_impacts": [], "_order": 5.0}
+    strong = {"industry_impacts": [{"name": "风电（出海）", "strength": 3}], "_order": 4.0}
+
+    assert ni._tradable(weak) is False
+    assert ni._tradable(none) is False
+    assert ni._tradable(strong) is True
+    # 微弱主题和空主题同组，靠 _order 决胜；强主题永远在前
+    assert ni._rank_key(strong) > ni._rank_key(weak)
+    assert ni._rank_key(weak)[0] == ni._rank_key(none)[0] == False   # noqa: E712

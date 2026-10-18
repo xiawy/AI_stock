@@ -387,9 +387,11 @@ def _build_prompt(items: list[dict], theme_names: list[str]) -> str:
         "硬约束：\n"
         f"1) theme 必须从下列清单中原样选择，禁止自创、禁止写「半导体」这类大行业：\n   {catalog}\n"
         "2) 只给相对强度 1~5，**不要给涨跌百分比**（幅度由系统按波动率校准）\n"
-        "3) elasticity 是成分股相对主题的弹性，0.5~2.0，龙头小市值给高值\n"
-        "4) 只有存在**明确的 A 股传导链**才给 theme（产品涨价→生产商 / 招标中标→施工单位 / "
-        "医保纳入→供应商 / 大厂扩产→设备与零部件）。下列情况 themes 必须给空数组：\n"
+        "3) elasticity 是**成分股收入对该驱动的暴露度**（营收占比 × 量价弹性），0.5~2.0；"
+        "不要用它表达「我觉得这事重要」—— 重要程度归 strength。链条里有 2 个以上箭头的"
+        "间接传导，elasticity 不得高于 1.0\n"
+        "4) 只有存在**指向该主题成分股自身收入/订单**的传导链才给 theme（产品涨价→生产商毛利 / "
+        "招标中标→施工单位在手订单 / 大厂扩产→设备与零部件订单）。下列情况 themes 必须给空数组：\n"
         "   - 海外商品或汇率利率的价格波动本身（原油、黄金、铜、美元指数、美债收益率），"
         "除非新闻明确指向国内某个细分品种的供需；\n"
         "   - 展会、论坛、揭牌、签约仪式等**没有量化结果**的仪式性新闻；\n"
@@ -404,7 +406,12 @@ def _build_prompt(items: list[dict], theme_names: list[str]) -> str:
         "是水利/水网/防洪，轨道交通、公路、机场、市政景观一律留空；选「电网（特高压）」要求"
         "出现特高压/直流输电/换流阀；选「风电（出海）」要求是海上风电或海外订单。限定词对不上，"
         "宁可换一个能对上的主题，或者留空\n"
-        "7) 一条新闻只能出现在一个事件里，请全部评估，不要遗漏\n\n"
+        "7) 主题定义的是**驱动因子**，不是**产品构成**。产品里用了同类零部件不等于属于该主题 ——"
+        "外骨骼康复机器人、工业机器人、扫地机都装减速器，但驱动它们的分别是医保支付、制造业"
+        "资本开支、消费需求，不是「人形机器人量产」。只有新闻主线**本身就是该主题的驱动因子**"
+        "（人形机器人的量产/定点/降本/出货量）才能挂；「下游整机放量→零部件间接受益」算间接传导："
+        "strength 最多 1、elasticity 最多 1.0，basis 里必须写明「间接」，链条超过 2 跳就别给了\n"
+        "8) 一条新闻只能出现在一个事件里，请全部评估，不要遗漏\n\n"
         "新闻列表：\n" + "\n".join(lines)
     )
 
@@ -436,8 +443,9 @@ def assess(items: list[dict], llm=None) -> dict[int, NewsAssessment]:
 # ---------------------------------------------------------------------------
 # 口径变了必须改版本号，否则旧口径的结论会被一直复用 —— 这是缓存最容易出事
 # 的地方（改了提示词却看不到效果，因为全命中旧 key）。
-# v4：加"限定词准入"与"basis 自否定即弃"两条（2026-10-18 二次评估上线后）。
-PROMPT_VERSION = "4"
+# v5：加"驱动因子 ≠ 产品构成"、elasticity 语义收紧、间接传导限强度
+#     （2026-10-18 外骨骼医保 → 机器人关节模组 +8% 之后）。
+PROMPT_VERSION = "5"
 CACHE_TTL_DAYS = 7
 
 
@@ -765,14 +773,25 @@ def _freshness(pub_time: str) -> float:
     return max(0.1, 1.0 - hours / 48.0)
 
 
+def _tradable(item: dict) -> bool:
+    """有没有**可交易**的主题：strength≥2 才算。
+
+    ``strength=1`` 的预期幅度约 ±1%，和"没有主题"在决策价值上等价，却因为
+    ``bool(industry_impacts)`` 的置顶规则压在榜首。线上原样：外骨骼医保
+    （3 跳、自述"弹性存疑"）连续三个快照第 1 位 —— 排序在奖励"找到主题"，
+    而不是"找对主题"，LLM 也就是在这个激励下学会凑主题的。
+    """
+    return any(int(i.get("strength") or 0) >= 2 for i in (item.get("industry_impacts") or []))
+
+
 def _rank_key(item: dict) -> tuple[bool, float]:
-    """榜单排序键：**能落到主题的排前面**，同组内再比重要性/新鲜度/源数。
+    """榜单排序键：**能落到可交易主题的排前面**，同组内再比重要性/新鲜度/源数。
 
     原油暗盘、外盘金价、欧央行表态这类信息价值在"背景"而不在"信号"：它们
     仍然进榜（海外/政策各有保底名额），但不该压住"光模块净利超预期"这种
     能直接对应 L3 主题 + 预期幅度的条目 —— 用户要的是可交易的判断链。
     """
-    return (bool(item.get("industry_impacts")), float(item.get("_order") or 0.0))
+    return (_tradable(item), float(item.get("_order") or 0.0))
 
 
 def rank_with_quota(items: list[dict], top_n: int = 20) -> list[dict]:
@@ -1037,6 +1056,49 @@ def _basis_negates_chain(basis: str) -> bool:
     return any(x in text_ for x in _CHAIN_NEGATION)
 
 
+# 「承认链条存在、但否定它的量级」——与 _CHAIN_NEGATION（否定链条存在）不同：
+# 这类不该直接丢（真有传导），但也不能按一级受益给强度。
+# 线上原样（快照 974 reasoning）：「与清单主题仅部分重叠，弹性存疑」。
+_CHAIN_WEAK = (
+    "弹性存疑", "仅部分重叠", "部分重叠", "间接", "有限", "弱相关",
+    "概念性", "传导偏长", "影响有限", "难以量化", "象征性", "帮助不大",
+)
+_ARROW_TOKENS = ("→", "->", "=>", "⇒")
+
+
+def _transmission_hops(basis: str) -> int:
+    """basis 里的箭头数 = 传导级数（``A→B`` 是 1 跳）。"""
+    t = basis or ""
+    return sum(t.count(x) for x in _ARROW_TOKENS)
+
+
+def _temper_impact(
+    strength: int, elasticity: float, basis: str, reasoning: str = "",
+) -> tuple[bool, int, float]:
+    """按传导级数与自述强弱修正强度；返回 ``(是否保留, strength, elasticity)``。
+
+    主题的本意是「一组股票被同一个驱动因子驱动」，链条越长这个前提越不成立。
+    线上原样（快照 975 第 1 位，+3.4~8.0%）：
+
+        医保规划→纳入多地医保→整机采购放量→关节模组需求↑（3 跳）
+
+    外骨骼整机年出货万台级，减速器采购额对双环/绿的的收入贡献不到 1%，却因为
+    σ20 用的是人形机器人主题的 4%，被算成接近单日上限的涨幅 —— 驱动因子根本
+    不是同一个。这里做三档：
+
+    - 又长又弱（自述"弹性存疑/仅部分重叠"且 ≥2 跳）→ 丢弃，不构成可交易映射；
+    - 弱 或 ≥3 跳 → 保留但压到 strength=1、elasticity≤1.0（约 ±1% 量级）；
+    - 其余不动（2 跳以内的正常写法，如「HBM 需求↑→存储涨价→毛利↑」）。
+    """
+    hops = _transmission_hops(basis)
+    weak = any(x in f"{basis} {reasoning}" for x in _CHAIN_WEAK)
+    if weak and hops >= 2:
+        return False, strength, elasticity
+    if weak or hops >= 3:
+        return True, min(int(strength or 1), 1), min(float(elasticity or 1.0), 1.0)
+    return True, strength, elasticity
+
+
 def _apply_assessment(item: dict, a: NewsAssessment) -> None:
     """把一次 LLM 评估写进条目（事件类型/重要性/主题归一/幅度校准）。"""
     text = f"{item.get('title', '')} {item.get('content', '')}"
@@ -1069,6 +1131,16 @@ def _apply_assessment(item: dict, a: NewsAssessment) -> None:
         # basis 自己否定了传导链 → 这个主题不成立（见 _CHAIN_NEGATION）
         if _basis_negates_chain(basis):
             logger.debug("drop theme %s: basis negates chain (%s)", name, basis[:40])
+            continue
+        # 链条太长、或自己承认"弹性存疑" → 压强度甚至丢弃（见 _temper_impact）
+        keep, strength, elasticity = _temper_impact(
+            strength, elasticity, basis, a.reasoning or "",
+        )
+        if not keep:
+            logger.debug(
+                "drop theme %s: weak chain over %d hops (%s)",
+                name, _transmission_hops(basis), basis[:40],
+            )
             continue
         low, high = calibrate(
             direction, strength, elasticity, _sigma_for(name), item["horizon"],
