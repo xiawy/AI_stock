@@ -290,3 +290,62 @@ def test_no_theme_means_neutral_direction():
     assert enriched[0]["industry_impacts"] == []
     assert enriched[0]["bull_bear_bias"] == "neutral"
     assert enriched[0]["bias_strength"] == 0
+
+
+# ---------------------------------------------------------------------------
+# LLM 空主题 vs 规则兜底的边界
+# ---------------------------------------------------------------------------
+
+
+def test_llm_empty_themes_blocks_rule_fallback(monkeypatch):
+    """LLM 判定"没有传导链"时，关键词匹配不得把它救回来。
+
+    线上实测过的两个错例：「AI 短剧出海」被关键词"出海"认成风电、
+    「纽约原油暗盘突破」被认成油服并顶到榜首 —— 规则命中的词恰恰是
+    LLM 刚刚否掉的那条新闻。
+    """
+    monkeypatch.setattr(
+        ni, "assess",
+        lambda items, llm=None: {
+            0: ni.NewsAssessment(
+                index=0, event_type="industry", importance=6,
+                direction="neutral", themes=[],      # 明确判定：无传导链
+            )
+        },
+    )
+    # 关键词匹配"本来能命中"，用来验证它被 allow_match=False 拦住
+    monkeypatch.setattr(
+        "ai_stock.quant.theme_registry.match_themes",
+        lambda text, limit=2: [{"name": "风电（出海）", "score": 9.0}],
+        raising=False,
+    )
+
+    news = [_n("AI 短剧出海仍处渗透率低位", "券商研报：远期市场空间有望扩张")]
+    out = ni.enrich(ni.prepare(news), llm=object(), use_cache=False)
+    assert out[0]["industry_impacts"] == []
+    assert out[0]["industries"] == []
+    assert out[0]["bull_bear_bias"] == "neutral"
+    assert out[0]["bias_strength"] == 0
+
+
+def test_llm_theme_name_is_normalized_by_keywords(monkeypatch):
+    """反过来的情况：LLM 给了主题名（哪怕是旧名/别名），仍要归一到闭集。"""
+    monkeypatch.setattr(
+        ni, "assess",
+        lambda items, llm=None: {
+            0: ni.NewsAssessment(
+                index=0, event_type="industry", importance=7, direction="bullish",
+                strength=3,
+                themes=[ni.ThemeImpact(theme="海上风电", direction="bullish", strength=3)],
+            )
+        },
+    )
+    monkeypatch.setattr(
+        "ai_stock.quant.theme_registry.match_themes",
+        lambda text, limit=2: [{"name": "风电（出海）", "score": 8.0}],
+        raising=False,
+    )
+
+    news = [_n("海上风电塔筒中标 12 亿元", "欧洲订单落地")]
+    out = ni.enrich(ni.prepare(news), llm=object(), use_cache=False)
+    assert out[0]["industries"] == ["风电（出海）"]

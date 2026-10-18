@@ -556,6 +556,7 @@ def align_themes(
     theme_names: list[str] | None = None,
     alias_map: dict[str, str] | None = None,
     limit: int = 2,
+    allow_match: bool = True,
 ) -> list[str]:
     """把 LLM 给的主题名收敛到 active 集合内，落不到就换关键词/成分股反查。
 
@@ -564,6 +565,11 @@ def align_themes(
     2. ``match_themes`` 别名/关键词匹配
     3. 成分股公司名反查（新闻正文提到"阳光电源"→ 命中其所属主题）
     **不回落到一级行业** —— 落不到主题就返回空。
+
+    ``allow_match=False`` 时只做第 1 步。调用方在 **LLM 判定"没有传导链"**
+    （``themes`` 给空数组）时必须关掉兜底：实测「AI 短剧出海」会被关键词
+    "出海"匹配到「风电（出海）」、「原油暗盘突破」会被匹配到「油服」并顶到
+    榜首 —— 规则能匹配上的词，恰恰是 LLM 刚刚否掉的那条新闻。
     """
     if not text and not llm_themes:
         return []
@@ -577,6 +583,8 @@ def align_themes(
         if name and name in allowed and name not in out:
             out.append(name)
     if len(out) >= limit:
+        return out[:limit]
+    if not allow_match:
         return out[:limit]
 
     try:
@@ -887,7 +895,7 @@ def prepare(news_items: list[dict], limit: int = PREFILTER_LIMIT) -> list[dict]:
     return clustered
 
 
-def _rule_impacts(item: dict, text: str) -> list[dict]:
+def _rule_impacts(item: dict, text: str, *, basis: str = "规则匹配（LLM 未参与）") -> list[dict]:
     """规则降级：用 match_themes / 成分股反查拿主题，幅度按规则强度校准。"""
     themes = align_themes(text, item.get("themes"), limit=2)
     impacts: list[dict] = []
@@ -903,7 +911,7 @@ def _rule_impacts(item: dict, text: str) -> list[dict]:
             "elasticity": 1.0,
             "exp_low": low,
             "exp_high": high,
-            "basis": "规则匹配（LLM 未参与）",
+            "basis": basis,
         })
     return impacts
 
@@ -957,7 +965,9 @@ def enrich(
             item["reasoning"] = a.reasoning
 
             chosen = [t.theme for t in a.themes if t.theme]
-            aligned = align_themes(text, chosen, limit=2)
+            # LLM 给了主题名才允许关键词归一；给了空数组说明它判定"没有传导链"，
+            # 这时再让规则匹配等于推翻它的判断（实测会把「AI 短剧出海」认成风电）。
+            aligned = align_themes(text, chosen, limit=2, allow_match=bool(chosen))
             impacts = []
             for name in aligned:
                 src = next((t for t in a.themes if
@@ -978,8 +988,9 @@ def enrich(
                     "exp_high": high,
                     "basis": (src.basis if src and src.basis else a.reasoning or "")[:120],
                 })
-            if not impacts:      # LLM 没选中任何主题 → 关键词/成分股反查兜底
-                impacts = _rule_impacts(item, text)
+            # chosen 非空但收敛失败时，align_themes 内部的 match_themes 已经
+            # 做过关键词/成分股归一了，这里不必再跑一次规则（同样的逻辑）。
+            # chosen 为空则**不做任何兜底** —— 那是 LLM 明确判定"没有传导链"。
         else:
             impacts = _rule_impacts(item, text)
 
