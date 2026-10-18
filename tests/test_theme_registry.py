@@ -78,12 +78,14 @@ def _seed_one(name: str, n: int, *, keywords=("a", "b", "c"), aliases=("测试�
 class TestSeedAndGates:
     def test_seed_is_idempotent(self, theme_env):
         from ai_stock.quant import theme_registry as tr
+        from ai_stock.quant.theme_seed import DEFAULT_THEMES
 
+        total = len(DEFAULT_THEMES)
         first = tr.seed_default_themes()
-        assert first["created"] == 24
+        assert first["created"] == total
         second = tr.seed_default_themes()
         assert second["created"] == 0
-        assert second["skipped"] == 24
+        assert second["skipped"] == total
 
     def test_rejects_too_few_members(self, theme_env, monkeypatch):
         from ai_stock.quant import theme_registry as tr

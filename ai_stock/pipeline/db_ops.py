@@ -150,6 +150,14 @@ def save_news_items(snapshot_id: int, news_items: list[dict]) -> int:
                 expected_gain_low=item.get("expected_gain_low", 0.0),
                 expected_gain_high=item.get("expected_gain_high", 0.0),
                 rank=item.get("rank", 0),
+                event_type=item.get("event_type", ""),
+                importance=item.get("importance", 0.0),
+                bias_strength=item.get("bias_strength", 0),
+                horizon=item.get("horizon", ""),
+                confidence=item.get("confidence", 0.0),
+                industry_impacts_json=item.get("industry_impacts_json", ""),
+                cluster_id=item.get("cluster_id", ""),
+                source_count=item.get("source_count", 1),
             )
             session.add(ni)
             count += 1
@@ -237,6 +245,44 @@ def get_news_by_industry_ranking(board_id: int) -> Optional[dict]:
         }
     except Exception as exc:
         logger.error("Failed to get news for board %s: %s", board_id, exc)
+        return None
+    finally:
+        session.close()
+
+
+def get_recent_snapshot_titles(hours: float = 2.0) -> Optional[dict]:
+    """最近 *hours* 小时内最后一份 completed 快照的 id 与标题集合（节流用）。
+
+    无快照或超出时间窗返回 None —— 调用方据此决定是否写新快照。
+    """
+    from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem
+
+    session = _get_session()
+    if session is None:
+        return None
+    try:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        snapshot = (
+            session.query(ImpactSnapshot)
+            .filter(ImpactSnapshot.status == "completed")
+            .order_by(ImpactSnapshot.snapshot_time.desc())
+            .first()
+        )
+        if snapshot is None:
+            return None
+        snap_time = snapshot.snapshot_time
+        if snap_time is not None:
+            if snap_time.tzinfo is None:
+                snap_time = snap_time.replace(tzinfo=timezone.utc)
+            if snap_time < cutoff:
+                return None
+        titles = [
+            r.title for r in session.query(NewsItem)
+            .filter(NewsItem.snapshot_id == snapshot.id).all()
+        ]
+        return {"snapshot_id": snapshot.id, "titles": titles}
+    except Exception as exc:
+        logger.warning("get_recent_snapshot_titles failed: %s", exc)
         return None
     finally:
         session.close()

@@ -81,12 +81,13 @@ class MacroEventAgent(BaseAgent):
             self.report(flow_type, flow_id, step, result)
             return result
 
-        # 新闻榜落库: 直接取本步抓到的新闻前 20 (政策优先+时间倒序),
-        # best-effort, 失败只告警不阻断选股流程.
+        # 新闻榜落库: 去重聚类 → 批量评估 → 主题对齐 → 幅度校准 → 配额排序。
+        # 传入 LLM 才能拿到多空/重要度/主题；LLM 不可用时 news_impact 自动降级为
+        # 规则模式，榜单仍有类型/行业/方向，不会退回全 0。best-effort，失败只告警。
         try:
             from ai_stock.pipeline.news_board import save_news_board
 
-            save_news_board(news)
+            save_news_board(news, llm=self.llm)
         except Exception as exc:
             logger.warning("News board save skipped: %s", exc)
 

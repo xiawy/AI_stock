@@ -95,6 +95,17 @@ class NewsItem(Base):
     pub_time: Mapped[str] = mapped_column(String(32), default="")
     category: Mapped[str] = mapped_column(String(16), default="news")  # policy | news
 
+    # ── 事件维度（2026-10 新闻榜重构新增，见 docs/NEWS_IMPACT_REDESIGN.md）──
+    # event_type 接替 category 的"二分"职责：policy/industry/company/capital/overseas
+    event_type: Mapped[str] = mapped_column(String(16), default="")
+    importance: Mapped[float] = mapped_column(Float, default=0.0)      # 0~10，8+ = 必看
+    bias_strength: Mapped[int] = mapped_column(Integer, default=0)     # 多空强度 1~3
+    horizon: Mapped[str] = mapped_column(String(8), default="")        # 1d / 3d / 1w
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)      # 0~1
+    industry_impacts_json: Mapped[str] = mapped_column(Text, default="")  # [{name,direction,...}]
+    cluster_id: Mapped[str] = mapped_column(String(16), default="")    # 同事件多源合并
+    source_count: Mapped[int] = mapped_column(Integer, default=1)      # 几家源报道
+
     # Agent scores (1-10)
     policy_score: Mapped[float] = mapped_column(Float, default=0.0)
     news_score: Mapped[float] = mapped_column(Float, default=0.0)
@@ -135,6 +146,18 @@ class NewsItem(Base):
             "source": self.source,
             "pub_time": self.pub_time,
             "category": self.category,
+            # 事件维度（新）。event_type 缺省时回落 category，保证旧快照前端不空。
+            "event_type": self.event_type or self.category or "news",
+            "importance": self.importance or 0.0,
+            "bias_strength": self.bias_strength or 0,
+            "horizon": self.horizon or "",
+            "confidence": self.confidence or 0.0,
+            "industry_impacts": (
+                json.loads(self.industry_impacts_json)
+                if self.industry_impacts_json else []
+            ),
+            "cluster_id": self.cluster_id or "",
+            "source_count": self.source_count or 1,
             "policy_score": self.policy_score,
             "news_score": self.news_score,
             "capital_score": self.capital_score,
@@ -149,3 +172,58 @@ class NewsItem(Base):
             "expected_gain_high": self.expected_gain_high,
             "rank": self.rank,
         }
+
+
+# ── 幂等补列 ────────────────────────────────────────────────────────────
+# create_all 不会给**已存在**的表补列，而 news_items 在现网库里已经跑了一年多。
+# 这里的列清单必须与 NewsItem 的映射保持一致，两个进程（backend / quant worker）
+# 都会调用：backend 在 init_db() 里，quant 在首次落新闻榜前。
+NEWS_IMPACT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("event_type", "VARCHAR(16) DEFAULT ''"),
+    ("importance", "FLOAT DEFAULT 0"),
+    ("bias_strength", "INTEGER DEFAULT 0"),
+    ("horizon", "VARCHAR(8) DEFAULT ''"),
+    ("confidence", "FLOAT DEFAULT 0"),
+    ("industry_impacts_json", "TEXT DEFAULT ''"),
+    ("cluster_id", "VARCHAR(16) DEFAULT ''"),
+    ("source_count", "INTEGER DEFAULT 1"),
+)
+
+_schema_ready = False
+
+
+def ensure_news_impact_schema(bind=None) -> None:
+    """给已存在的 ``news_items`` 表幂等补上事件维度列。
+
+    只跑一次（进程级缓存）。表不存在时直接返回 —— create_all 会按完整定义建表。
+    """
+    global _schema_ready
+    if _schema_ready:
+        return
+    from sqlalchemy import inspect, text
+
+    if bind is None:
+        try:
+            from app.core.database import engine as bind  # backend 进程
+        except ImportError:
+            try:
+                from backend.app.core.database import engine as bind
+            except ImportError:
+                from ai_stock.quant.db import get_engine  # quant 独立进程
+
+                bind = get_engine()
+
+    inspector = inspect(bind)
+    if "news_items" not in inspector.get_table_names():
+        _schema_ready = True
+        return
+    existing = {col["name"] for col in inspector.get_columns("news_items")}
+    missing = [
+        (name, ddl) for name, ddl in NEWS_IMPACT_COLUMNS if name not in existing
+    ]
+    if missing:
+        with bind.begin() as conn:
+            for name, ddl in missing:
+                conn.execute(text(f"ALTER TABLE news_items ADD COLUMN {name} {ddl}"))
+    _schema_ready = True
+

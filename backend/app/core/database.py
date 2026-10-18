@@ -70,6 +70,25 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _migrate_analysis_task_state(engine)
+    _migrate_news_impact_schema(engine)
+
+
+def _migrate_news_impact_schema(bind) -> None:
+    """新闻榜事件维度列（news_items 扩列）的幂等补列。
+
+    实现在 ``ai_stock.pipeline.db_models``，因为 quant worker 落新闻榜时也要用
+    同一份列清单；这里只做转发，保证 backend 启动即可完成升级。
+    """
+    try:
+        from ai_stock.pipeline.db_models import ensure_news_impact_schema
+
+        ensure_news_impact_schema(bind)
+    except Exception:  # 迁移失败不应阻断启动，落库侧还会再试一次
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "news_items schema migration failed", exc_info=True,
+        )
 
 
 # A5: analysis_tasks 的跨 worker 状态列。create_all 不会给**已存在**的表补列,

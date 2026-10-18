@@ -33,7 +33,7 @@ def quant_env(tmp_path, monkeypatch):
     # 新闻榜落库是 MacroEventAgent 的副作用, 单测不写真库.
     monkeypatch.setattr(
         "ai_stock.pipeline.news_board.save_news_board",
-        lambda news, top_n=None: {"snapshot_id": None, "saved": 0},
+        lambda news, top_n=None, **kwargs: {"snapshot_id": None, "saved": 0},
     )
     yield db_url
     mq.reset_mq_backend()
