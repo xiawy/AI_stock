@@ -165,6 +165,39 @@ def evidence(text: str, tokens: dict, retired: tuple[str, ...] = ()) -> tuple[fl
     return strong, strong_hits, generic_hits
 
 
+def load_stock_names(symbols: set[str]) -> dict[str, str]:
+    """成分股代码 → 名称（规则路径还有一路"新闻提到公司名"的召回，复核时要认它）。
+
+    拿不到就返回空 dict，调用方会自动退化成"不按公司名豁免"，并且只摘有泛词
+    证据的行 —— 宁可少摘，不可在数据源故障时把正确的行删掉。
+    """
+    if not symbols:
+        return {}
+    try:
+        from ai_stock.dataflows.a_stock import _tencent_quote
+
+        out: dict[str, str] = {}
+        codes = sorted(symbols)
+        for i in range(0, len(codes), 50):
+            for code, row in (_tencent_quote(codes[i:i + 50]) or {}).items():
+                nm = str((row or {}).get("name") or "")
+                if nm:
+                    out[code] = nm
+        return out
+    except Exception as exc:            # 网络/接口故障都不该让回扫失败
+        print(f"[warn] 取成分股名称失败（{exc}），本次不按公司名豁免")
+        return {}
+
+
+def member_hit(text: str, members: set[str], names: dict[str, str]) -> str | None:
+    """正文是否提到该主题的某只成分股（3 字以上，避免"大唐"这类误命中）。"""
+    for sym in members:
+        nm = names.get(sym) or ""
+        if len(nm) >= 3 and nm in text:
+            return nm
+    return None
+
+
 def explain(text: str) -> int:
     tokens = load_tokens()
     print(f"标题/正文：{text[:80]}\n")
@@ -213,7 +246,14 @@ def _fetch(limit: int | None) -> list[tuple]:
 def repair(rows: list[tuple], tokens: dict, dry_run: bool) -> dict:
     from sqlalchemy import text
 
-    stats = {"scanned": 0, "changed": 0, "dropped_themes": 0, "samples": []}
+    stats = {
+        "scanned": 0, "changed": 0, "dropped_themes": 0,
+        "kept_by_stock": 0, "samples": [],
+    }
+    all_syms: set[str] = set()
+    for tk in tokens.values():
+        all_syms |= tk.get("members", set())
+    names = load_stock_names(all_syms)
     s = _session() if not dry_run else None
     try:
         for rid, title, content, impacts_json, top_stocks in rows:
@@ -234,6 +274,12 @@ def repair(rows: list[tuple], tokens: dict, dry_run: bool) -> dict:
                     continue
                 strong, _, generic = evidence(text_, tk, RETIRED_TOKENS.get(name, ()))
                 basis = imp.get("basis") or ""
+                # 规则路径还有一路"正文提到成分股名"的召回，关键指标是 0 分层面上
+                # 看不出来，所以要单独认一次，否则「中科曙光发布新品」这类会被误删。
+                if strong < 2.0 and names and member_hit(text_, tk.get("members", set()), names):
+                    kept.append(imp)
+                    stats["kept_by_stock"] += 1
+                    continue
                 if basis.startswith(RULE_BASIS_PREFIXES):
                     # 规则/回填行要按**当前**口径复核：现在 2 分才够，1 分的
                     # 单关键词（"开采"→油服）、0 分的历史残留（"RBC"→BC 电池）
@@ -324,6 +370,7 @@ def main() -> int:
     print(
         f"{'[dry-run] ' if args.dry_run else ''}扫描 {stats['scanned']} 行，"
         f"需修复 {stats['changed']} 行，摘掉 {stats['dropped_themes']} 个主题"
+        f"（按成分股名豁免 {stats['kept_by_stock']} 个）"
     )
     for rid, title, dropped in stats["samples"]:
         print(f"  #{rid} {title} → 摘掉 {', '.join(dropped)}")
