@@ -689,3 +689,30 @@ def test_weak_theme_does_not_get_rank_boost():
     # 微弱主题和空主题同组，靠 _order 决胜；强主题永远在前
     assert ni._rank_key(strong) > ni._rank_key(weak)
     assert ni._rank_key(weak)[0] == ni._rank_key(none)[0] == False   # noqa: E712
+
+
+def test_theme_evidence_separates_keywords_from_stock_lookup(monkeypatch):
+    """关键词那一路是本地查询、必须可靠；成分股名要联网，失败只少一路证据。
+
+    首版把两路写在同一个 try 里，`match_themes` 又是函数内局部 import ——
+    NameError 被 except 吞掉，`_theme_evidence` 恒定返回 None，整条降权逻辑
+    静默失效（生产干跑"降权 0 个"就是这么来的）。
+    """
+    import ai_stock.quant.theme_registry as tr
+
+    monkeypatch.setattr(tr, "match_themes", lambda text, limit=8, min_score=1.0: [{"name": "风电（出海）"}])
+    monkeypatch.setattr(ni, "_themes_by_stock_name", lambda text, names: ["医药（创新药出海）"])
+    assert ni._theme_evidence("海上风电塔筒中标", ["风电（出海）"]) == {
+        "风电（出海）", "医药（创新药出海）",
+    }
+
+    # 成分股反查挂掉 → 仍返回关键词那一路的结果
+    def boom(*a, **k):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(ni, "_themes_by_stock_name", boom)
+    assert ni._theme_evidence("海上风电塔筒中标", ["风电（出海）"]) == {"风电（出海）"}
+
+    # 关键词那一路挂掉 → 判定不了，返回 None（调用方不降权）
+    monkeypatch.setattr(tr, "match_themes", boom)
+    assert ni._theme_evidence("海上风电塔筒中标", ["风电（出海）"]) is None

@@ -1079,16 +1079,24 @@ def _theme_evidence(text: str, theme_names: list[str]) -> set[str] | None:
     算进来），所以「外骨骼医保」这种正文里一个"关节模组/减速器/丝杠"都没有的
     新闻，拿不到机器人主题的证据。
 
-    返回 ``None`` 表示**判断不了**（取数异常）—— 调用方据此不降权，宁可放过
-    也不要因为一次 DB 抖动把正确主题全降成微弱。
+    返回 ``None`` 表示**判断不了**（关键词那一路取数异常）—— 调用方据此不降权，
+    宁可放过也不要因为一次 DB 抖动把正确主题全降成微弱。成分股名反查要联网，
+    失败只是少一路证据（关键词那一路已经够用），不会让整个判定失效。
     """
+    from ai_stock.quant.theme_registry import match_themes
+
+    if not text:
+        return set()
     try:
         names = {h["name"] for h in match_themes(text, limit=8, min_score=1.0)}
-        names.update(_themes_by_stock_name(text, theme_names))
-        return names
     except Exception as exc:
-        logger.debug("theme evidence unavailable: %s", exc)
+        logger.debug("theme evidence (keywords) unavailable: %s", exc)
         return None
+    try:
+        names.update(_themes_by_stock_name(text, theme_names))
+    except Exception as exc:
+        logger.debug("theme evidence (stock names) unavailable: %s", exc)
+    return names
 
 
 def _temper_impact(
