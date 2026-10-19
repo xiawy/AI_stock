@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from statistics import median
 from typing import Iterable, Optional
@@ -66,6 +67,11 @@ DEFAULT_SIGMA = 0.012          # 主题 σ 与市场 σ 都拿不到时的兜底
 # ── 初筛规模 ────────────────────────────────────────────────────────────
 PREFILTER_LIMIT = 120          # 规则初筛后的候选池（进聚类）
 LLM_LIMIT = 40                 # 进 LLM 的条数（一次批量调用）
+# 单次结构化调用的条数上限。40 条一次性送出时，模型输出（每条约 200~300 字
+# 的 reasoning + basis）会超过 max_tokens 被截断，JSON 不完整 → 整批降级成
+# 规则，日志只有一句"0 llm"（2026-10-19 快照 981 实测 40 条全丢）。分批后
+# 一批失败最多影响 12 条，且失败批还能再对半重试。
+ASSESS_BATCH = int(os.getenv("NEWS_ASSESS_BATCH", "12"))
 
 # ── 规则词表 ────────────────────────────────────────────────────────────
 _POLICY_KW = (
@@ -383,7 +389,8 @@ def _build_prompt(items: list[dict], theme_names: list[str]) -> str:
         "- horizon：影响窗口 1d / 3d / 1w\n"
         "- confidence：0~1，你对该判断的把握\n"
         "- themes：受影响的主题，最多 2 个，每项含 theme/direction/strength/elasticity/basis\n"
-        "- reasoning：一句话，必须引用新闻里的事实（金额/产能/时间/部门）\n\n"
+        "- reasoning：一句话 ≤50 字，必须引用新闻里的事实（金额/产能/时间/部门）\n"
+        "输出务必精简：basis ≤50 字只写链条箭头，不要解释、不要复述原文。\n\n"
         "**正例**（这类必须给主题，别留空）：\n"
         "  涨价：DRAM 现货价环比涨 12%、原厂暂停报价 → 半导体（存储涨价），bullish/4，"
         "basis「存储涨价→模组厂采购价上行→毛利率提升」\n"
@@ -431,7 +438,34 @@ def _build_prompt(items: list[dict], theme_names: list[str]) -> str:
 
 
 def assess(items: list[dict], llm=None) -> dict[int, NewsAssessment]:
-    """一次批量 LLM 调用；失败返回空字典（调用方走规则降级）。"""
+    """分批批量 LLM 调用；失败批次对半重试一次，仍失败则该批走规则。
+
+    返回 ``{传入列表下标: NewsAssessment}``。**必须分批**：40 条一次送出时
+    输出会超 max_tokens 被截断，整批静默降级（快照 981 的 40 条全规则票）。
+    """
+    if not items:
+        return {}
+    out: dict[int, NewsAssessment] = {}
+    for start in range(0, len(items), ASSESS_BATCH):
+        chunk = items[start:start + ASSESS_BATCH]
+        part = _assess_chunk(chunk, llm)
+        if not part and len(chunk) > 1:
+            # 整批解析失败 → 对半再试一次（更可能是输出截断，缩小规模即可）
+            mid = len(chunk) // 2
+            for off, sub in ((0, chunk[:mid]), (mid, chunk[mid:])):
+                for local, a in _assess_chunk(sub, llm).items():
+                    part[off + local] = a
+            logger.warning(
+                "news assess: batch of %d failed, retried as %d+%d → %d ok",
+                len(chunk), mid, len(chunk) - mid, len(part),
+            )
+        for local, a in part.items():
+            out[start + local] = a
+    return out
+
+
+def _assess_chunk(items: list[dict], llm=None) -> dict[int, NewsAssessment]:
+    """一次结构化调用（≤ ``ASSESS_BATCH`` 条）；失败返回空字典。"""
     if not items:
         return {}
     names, _ = _theme_catalog()
@@ -446,10 +480,16 @@ def assess(items: list[dict], llm=None) -> dict[int, NewsAssessment]:
     except Exception as exc:
         logger.warning("news assess failed, falling back to rules: %s", exc)
         return {}
-    return {
+    got = {
         a.index: a for a in report.items
         if 0 <= a.index < len(items) and (a.event_type or a.themes)
     }
+    if not got:
+        logger.warning(
+            "news assess returned 0 usable items for %d inputs "
+            "(structured output truncated or unparsable)", len(items),
+        )
+    return got
 
 
 # ---------------------------------------------------------------------------

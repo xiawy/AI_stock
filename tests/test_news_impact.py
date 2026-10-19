@@ -865,3 +865,54 @@ def test_rank_prefers_fresh_news_at_equal_importance():
     out = ni.rank_with_quota([dict(i) for i in items], 2)
     assert out[0]["title"].startswith("新消息")
 
+
+# ---------------------------------------------------------------------------
+# 分批评估：40 条一次性送出会被 max_tokens 截断
+# ---------------------------------------------------------------------------
+
+
+def test_assess_splits_into_batches(monkeypatch):
+    """下标必须映射回原列表，分批不能改变返回语义。
+
+    40 条一次调用时输出（每条 200~300 字 reasoning）超限被截断，JSON 不完整，
+    整批静默降级成规则 —— 2026-10-19 快照 981 的 20 条全是 confidence 0.35。
+    """
+    monkeypatch.setattr(ni, "ASSESS_BATCH", 12)
+    calls: list[int] = []
+
+    def fake_chunk(items, llm=None):
+        calls.append(len(items))
+        return {
+            i: ni.NewsAssessment(index=i, event_type="industry", importance=5.0,
+                                 direction="bullish", themes=[])
+            for i in range(len(items))
+        }
+
+    monkeypatch.setattr(ni, "_assess_chunk", fake_chunk)
+    items = [{"title": f"n{i}", "content": ""} for i in range(40)]
+    out = ni.assess(items, llm=object())
+    assert calls == [12, 12, 12, 4]
+    assert sorted(out) == list(range(40))
+    assert out[39].importance == 5.0
+
+
+def test_assess_retries_failed_batch_in_halves(monkeypatch):
+    """整批解析失败 → 对半重试，成功的半批仍然采纳。"""
+    monkeypatch.setattr(ni, "ASSESS_BATCH", 12)
+    calls: list[int] = []
+
+    def fake_chunk(items, llm=None):
+        calls.append(len(items))
+        if len(items) == 12:          # 首批当作被截断
+            return {}
+        return {i: ni.NewsAssessment(index=i, event_type="industry",
+                                     importance=6.0, direction="bullish")
+                for i in range(len(items))}
+
+    monkeypatch.setattr(ni, "_assess_chunk", fake_chunk)
+    items = [{"title": f"n{i}", "content": ""} for i in range(12)]
+    out = ni.assess(items, llm=object())
+    assert calls == [12, 6, 6]
+    assert len(out) == 12
+    assert out[11].importance == 6.0
+
