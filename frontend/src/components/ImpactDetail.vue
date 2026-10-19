@@ -127,7 +127,7 @@ const impacts = computed(() => props.news?.industry_impacts || [])
 const biasLabel = computed(() => {
   const n = props.news
   if (!n) return '中性'
-  return strengthLabel(n.bull_bear_bias, n.bias_strength)
+  return strengthLabel(n.bull_bear_bias, n.bias_strength, n.bias_scope)
 })
 
 function typeLabel(t) {
@@ -146,7 +146,13 @@ function dirArrow(direction) {
   return '→'
 }
 
-function strengthLabel(direction, strength) {
+function strengthLabel(direction, strength, scope) {
+  // 整体级方向（无 L3 主题）不给强弱措辞，避免读成"某个行业强多"
+  if (scope === 'market') {
+    if (direction === 'bullish') return '整体偏多'
+    if (direction === 'bearish') return '整体偏空'
+    return '中性'
+  }
   if (direction === 'bullish') return ['', '弱多', '中多', '强多'][strength] || '偏多'
   if (direction === 'bearish') return ['', '弱空', '中空', '强空'][strength] || '偏空'
   return '中性'

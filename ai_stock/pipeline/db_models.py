@@ -105,6 +105,12 @@ class NewsItem(Base):
     industry_impacts_json: Mapped[str] = mapped_column(Text, default="")  # [{name,direction,...}]
     cluster_id: Mapped[str] = mapped_column(String(16), default="")    # 同事件多源合并
     source_count: Mapped[int] = mapped_column(Integer, default=1)      # 几家源报道
+    # 多空方向的作用域：theme=针对具体 L3 主题；market=只针对市场整体（无主题时
+    # 仍可给方向，但强度封顶 1）；空=无方向。前端据此区分"强多"与"整体偏多"。
+    bias_scope: Mapped[str] = mapped_column(String(16), default="")
+    # llm / rule —— 落库才能事后区分"当时 LLM 的判断"与"降级规则"，运维排查
+    # 只能靠 confidence 反推的日子该结束了。
+    assess_source: Mapped[str] = mapped_column(String(8), default="")
 
     # Agent scores (1-10)
     policy_score: Mapped[float] = mapped_column(Float, default=0.0)
@@ -158,6 +164,8 @@ class NewsItem(Base):
             ),
             "cluster_id": self.cluster_id or "",
             "source_count": self.source_count or 1,
+            "bias_scope": self.bias_scope or "",
+            "assess_source": self.assess_source or "",
             "policy_score": self.policy_score,
             "news_score": self.news_score,
             "capital_score": self.capital_score,
@@ -247,6 +255,8 @@ NEWS_IMPACT_COLUMNS: tuple[tuple[str, str], ...] = (
     ("industry_impacts_json", "TEXT DEFAULT ''"),
     ("cluster_id", "VARCHAR(16) DEFAULT ''"),
     ("source_count", "INTEGER DEFAULT 1"),
+    ("bias_scope", "VARCHAR(16) DEFAULT ''"),
+    ("assess_source", "VARCHAR(8) DEFAULT ''"),
 )
 
 _schema_ready = False

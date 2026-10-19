@@ -22,6 +22,12 @@
         <span>快照时间：{{ formatTime(snapshot.snapshot_time) }}</span>
         <span>采集新闻：{{ snapshot.total_news_collected }} 条</span>
         <span v-if="typeSummary" class="type-summary">{{ typeSummary }}</span>
+        <span v-if="newsItems.length" class="coverage" :class="{ empty: themedCount === 0 }">
+          可交易信号 {{ themedCount }}/{{ newsItems.length }}
+          <el-tooltip placement="top" :content="coverageHint">
+            <span class="coverage-mark">?</span>
+          </el-tooltip>
+        </span>
       </div>
 
       <el-table
@@ -72,7 +78,7 @@
             <el-tooltip
               v-else
               placement="top"
-              content="宏观背景类新闻：商品价格、汇率利率或海外事件，对 A 股没有明确传导链。按口径不给方向与幅度，也不套用大行业。"
+              :content="noThemeHint(row)"
             >
               <span class="dim no-theme">无对应细分</span>
             </el-tooltip>
@@ -88,11 +94,14 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="多空" width="86" align="center">
+        <el-table-column label="多空" width="92" align="center">
           <template #default="{ row }">
-            <span class="bias" :class="dirClass(row.bull_bear_bias)">
-              {{ biasLabel(row.bull_bear_bias, row.bias_strength) }}
-            </span>
+            <el-tooltip placement="top" :content="biasHint(row)" :disabled="!row.bull_bear_bias">
+              <span class="bias" :class="dirClass(row.bull_bear_bias)">
+                {{ biasLabel(row.bull_bear_bias, row.bias_strength, row.bias_scope) }}
+                <em v-if="row.bias_scope === 'market'" class="scope-mark">整体</em>
+              </span>
+            </el-tooltip>
           </template>
         </el-table-column>
 
@@ -163,6 +172,36 @@ const typeSummary = computed(() => {
   return parts.length ? parts.join(' · ') : ''
 })
 
+// 真正能落到 L3 赛道 + 有方向 + 有幅度的条目（bias_scope=theme）
+const themedCount = computed(
+  () => newsItems.value.filter((n) => (n.industries || []).length && n.bias_scope !== 'market').length,
+)
+
+const coverageHint = computed(() =>
+  themedCount.value === 0
+    ? '本份快照的新闻均为政策/资金/公司公告类，没有落到 active 的 L3 赛道（说不出受益环节），按口径不套用大行业。行业与幅度列为空是判断结果，不是数据缺失。'
+    : '可交易信号 = 能落到 active 的 L3 赛道、给出方向与预期幅度的条目。其余为宏观背景/事件类，保留在榜但不给行业映射。',
+)
+
+function noThemeHint(row) {
+  const byType = {
+    policy: '政策面信息，但说不出受益的具体 L3 赛道（改动的是规则而非量价），按口径不套用大行业。',
+    capital: '资金面/交易面信息，对行业没有收入端的传导链。',
+    overseas: '海外事件，A 股无直接对标环节；或只是商品/汇率价格本身。',
+    company: '单一个股事件，未构成行业级传导。',
+    industry: '行业景气信息，但未落到 active 的 L3 赛道。',
+  }
+  return byType[row.event_type] || '未落到 active 的 L3 赛道。'
+}
+
+function biasHint(row) {
+  if (!row.bull_bear_bias || row.bull_bear_bias === 'neutral') return ''
+  if (row.bias_scope === 'market') {
+    return '整体方向：只对市场情绪/指数，未落到具体赛道，因此不给强度与幅度。'
+  }
+  return '主题级方向：针对左侧列出的 L3 赛道。'
+}
+
 async function loadData() {
   loading.value = true
   try {
@@ -215,7 +254,13 @@ function dirArrow(direction) {
   return '→'
 }
 
-function biasLabel(bias, strength) {
+function biasLabel(bias, strength, scope) {
+  // market 级方向不给强度（"整体偏多"），theme 级才按 1~3 显示强弱
+  if (scope === 'market') {
+    if (bias === 'bullish') return '偏多'
+    if (bias === 'bearish') return '偏空'
+    return '中性'
+  }
   if (bias === 'bullish') return ['', '弱多', '中多', '强多'][strength] || '偏多'
   if (bias === 'bearish') return ['', '弱空', '中空', '强空'][strength] || '偏空'
   return '中性'
@@ -278,6 +323,32 @@ onMounted(loadData)
   color: var(--text-dim);
   opacity: 0.85;
 }
+/* 主题覆盖率：整榜零覆盖时标红，直接回答"为什么这列全空" */
+.coverage {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.3));
+  font-variant-numeric: tabular-nums;
+}
+.coverage.empty {
+  color: #e6a23c;
+  border-color: #e6a23c66;
+}
+.coverage-mark {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  line-height: 13px;
+  text-align: center;
+  border-radius: 50%;
+  font-size: 0.66rem;
+  border: 1px solid currentColor;
+  opacity: 0.7;
+  cursor: help;
+}
 .rank-num {
   font-weight: 700;
   color: var(--text-dim);
@@ -339,6 +410,12 @@ onMounted(loadData)
 .gain {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+.scope-mark {
+  font-style: normal;
+  margin-left: 2px;
+  font-size: 0.66rem;
+  opacity: 0.65;
 }
 .conf {
   font-size: 0.8rem;

@@ -158,6 +158,8 @@ def save_news_items(snapshot_id: int, news_items: list[dict]) -> int:
                 industry_impacts_json=item.get("industry_impacts_json", ""),
                 cluster_id=item.get("cluster_id", ""),
                 source_count=item.get("source_count", 1),
+                bias_scope=item.get("bias_scope", ""),
+                assess_source=item.get("assess_source", ""),
             )
             session.add(ni)
             count += 1

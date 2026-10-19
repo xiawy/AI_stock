@@ -740,3 +740,128 @@ def test_adjacent_sector_counts_as_in_universe(monkeypatch):
         llm=object(), use_cache=False,
     )
     assert out[0]["bias_strength"] == 3
+
+
+# ---------------------------------------------------------------------------
+# 「间接」不是自我否定：提示词要求写明间接，规则不能因此判它出局
+# ---------------------------------------------------------------------------
+
+
+def test_indirect_chain_is_capped_not_dropped(monkeypatch):
+    """basis 写了"间接"、2 跳 → 保留主题并封顶 strength=2。
+
+    首版把"间接"放进 ``_CHAIN_WEAK`` 一起丢弃，等于"谁守指令谁被判死刑"：
+    提示词第 7 条明确要求间接传导在 basis 里写明「间接」。2026-10-19 快照 980
+    整榜空行业，台积电 3nm、资本市场助力人形机器人两条都是这么没的。
+    """
+    keep, strength, elasticity = ni._temper_impact(
+        5, 1.8,
+        "台积电二厂获批转向3nm→海外晶圆厂资本开支结构调整→间接影响国产设备零部件验证节奏（间接）",
+        "",
+        in_universe=True,
+    )
+    assert keep is True
+    assert strength == 2                  # 封到可交易线上限，不按一级驱动给满
+    assert elasticity == 1.0
+
+
+def test_self_denied_chain_is_still_dropped():
+    """自述"弹性存疑/仅部分重叠"仍然是自我否定，2 跳以上照旧丢弃 ——
+    放宽"间接"不能把这条一起放开。"""
+    keep, _, _ = ni._temper_impact(
+        3, 1.0, "医保规划→纳入多地医保→整机放量→关节模组需求↑（弹性存疑，仅部分重叠）",
+        "", in_universe=True,
+    )
+    assert keep is False
+
+
+# ---------------------------------------------------------------------------
+# 多空与行业解耦：没有 L3 主题 ≠ 没有方向
+# ---------------------------------------------------------------------------
+
+
+def test_no_theme_still_keeps_market_level_direction(monkeypatch):
+    """落不到 L3 但 LLM 给了方向 → 保留"整体偏多"，强度固定 1、scope=market。
+
+    原来无主题一律 neutral，政策密集日整榜多空列全是"中性"，等于什么都没判断。
+    但强度不能透传 LLM 的 5 —— 那会重演"指不出行业却显示强多"的老问题。
+    """
+    monkeypatch.setattr(
+        ni, "assess",
+        lambda items, llm=None: {
+            0: ni.NewsAssessment(
+                index=0, event_type="policy", importance=6,
+                direction="bullish", strength=5, confidence=0.6,
+                themes=[],                      # 明确判定：无传导链
+            )
+        },
+    )
+    monkeypatch.setattr(ni, "_theme_evidence", lambda text, names: set())
+    out = ni.enrich(
+        ni.prepare([_n("证监会：支持更多外资机构来华投资展业")]),
+        llm=object(), use_cache=False,
+    )
+    assert out[0]["industry_impacts"] == []
+    assert out[0]["industries"] == []
+    assert out[0]["bull_bear_bias"] == "bullish"
+    assert out[0]["bias_strength"] == 1        # 封顶，不透传 5
+    assert out[0]["bias_scope"] == "market"
+    assert out[0]["expected_gain_low"] == 0.0  # 涨幅仍不给：没有标的就没有百分比
+
+
+def test_theme_level_direction_is_scoped(monkeypatch):
+    """有主题 → bias_scope=theme，强度按主题给（前端才敢显示"强多"）。"""
+    monkeypatch.setattr(
+        ni, "assess",
+        lambda items, llm=None: _assess_one(
+            theme="半导体（存储涨价）", strength=4, elasticity=1.0,
+            basis="DRAM 现货涨价→模组厂采购价上行→毛利率提升",
+        ),
+    )
+    monkeypatch.setattr(
+        ni, "_theme_evidence", lambda text, names: {"半导体（存储涨价）"},
+    )
+    out = ni.enrich(
+        ni.prepare([_n("DRAM 现货价环比涨 12%，原厂暂停报价")]),
+        llm=object(), use_cache=False,
+    )
+    assert out[0]["bias_scope"] == "theme"
+    assert out[0]["bias_strength"] == 4
+    assert out[0]["expected_gain_high"] > 0
+
+
+# ---------------------------------------------------------------------------
+# 排序：新鲜度必须真的参与
+# ---------------------------------------------------------------------------
+
+
+def test_freshness_uses_time_field():
+    """源数据字段是 ``time``，排序却读 ``pub_time`` —— 新鲜度曾恒为 0.5。
+
+    后果是三天前的旧闻和刚出的消息同权，importance 相同就完全靠插入顺序。
+    """
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    fresh = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M")
+    stale = (now - timedelta(hours=40)).strftime("%Y-%m-%d %H:%M")
+    assert ni._pub_time({"time": fresh}) == fresh
+    assert ni._pub_time({"pub_time": fresh}) == fresh
+    assert ni._freshness(fresh) > ni._freshness(stale)
+
+
+def test_rank_prefers_fresh_news_at_equal_importance():
+    from datetime import datetime, timedelta
+
+    now = datetime.now()
+    fresh = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M")
+    stale = (now - timedelta(hours=40)).strftime("%Y-%m-%d %H:%M")
+    items = [
+        {"title": "旧闻：三天前的行业消息", "content": "x", "time": stale,
+         "source_count": 1, "importance": 4.0, "event_type": "industry"},
+        {"title": "新消息：刚出的行业消息", "content": "x", "time": fresh,
+         "source_count": 1, "importance": 4.0, "event_type": "industry"},
+    ]
+    out = ni.rank_with_quota([dict(i) for i in items], 2)
+    assert out[0]["title"].startswith("新消息")
+

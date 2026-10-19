@@ -384,24 +384,38 @@ def _build_prompt(items: list[dict], theme_names: list[str]) -> str:
         "- confidence：0~1，你对该判断的把握\n"
         "- themes：受影响的主题，最多 2 个，每项含 theme/direction/strength/elasticity/basis\n"
         "- reasoning：一句话，必须引用新闻里的事实（金额/产能/时间/部门）\n\n"
+        "**正例**（这类必须给主题，别留空）：\n"
+        "  涨价：DRAM 现货价环比涨 12%、原厂暂停报价 → 半导体（存储涨价），bullish/4，"
+        "basis「存储涨价→模组厂采购价上行→毛利率提升」\n"
+        "  招标：国网第三批特高压设备招标落地 87 亿元 → 电网（特高压），bullish/4，"
+        "basis「招标落地→换流阀/主设备订单→设备商在手订单增」\n"
+        "  扩产：某存储厂追加 200 亿资本开支建厂 → 半导体（设备零部件），bullish/3，"
+        "basis「扩产→刻蚀/薄膜设备采购→设备与零部件订单增」\n"
+        "  政策：多地出台 BC 电池组件补贴细则 → 光伏（BC电池），bullish/3，"
+        "basis「补贴→BC 组件需求与溢价→电池厂出货与毛利提升」\n"
+        "**反例**（这类必须留空）：展会/论坛/揭牌/签约仪式；外盘金价油价汇率本身；"
+        "主体是海外公司且 A 股无对标环节；只能说出「受益于某大行业景气」而说不出环节的。\n\n"
         "硬约束：\n"
         f"1) theme 必须从下列清单中原样选择，禁止自创、禁止写「半导体」这类大行业：\n   {catalog}\n"
         "2) 只给相对强度 1~5，**不要给涨跌百分比**（幅度由系统按波动率校准）\n"
         "3) elasticity 是**成分股收入对该驱动的暴露度**（营收占比 × 量价弹性），0.5~2.0；"
         "不要用它表达「我觉得这事重要」—— 重要程度归 strength。链条里有 2 个以上箭头的"
-        "间接传导，elasticity 不得高于 1.0\n"
-        "4) 只有存在**指向该主题成分股自身收入/订单**的传导链才给 theme（产品涨价→生产商毛利 / "
-        "招标中标→施工单位在手订单 / 大厂扩产→设备与零部件订单）。下列情况 themes 必须给空数组：\n"
+        "间接传导，strength 与 elasticity 都不得高于 2.0/1.0\n"
+        "4) 只有存在**指向该主题成分股自身收入/订单**的传导链才给 theme。合规的链条有四类："
+        "产品价格上涨→生产商毛利；招标中标→施工/设备单位在手订单；下游大厂扩产→设备与"
+        "零部件订单；政策改变支付端或供给端（医保/补贴/出口管制/配额）→量价变化→公司收入。"
+        "下列情况 themes 必须给空数组：\n"
         "   - 海外商品或汇率利率的价格波动本身（原油、黄金、铜、美元指数、美债收益率），"
         "除非新闻明确指向国内某个细分品种的供需；\n"
         "   - 展会、论坛、揭牌、签约仪式等**没有量化结果**的仪式性新闻；\n"
         "   - 主体是海外公司/海外政策，且 A 股没有直接对标环节；\n"
         "   - 你只能说出「受益于某个大行业景气」而说不出具体环节的。\n"
-        "   宁可不给主题，也不要为了有输出硬凑一个弱相关主题 —— 榜单上一条错误的"
-        "行业映射，比一条空映射的代价大得多。\n"
+        "   一条主题都不给是合法输出，但**不要因为懒得写 basis 就留空** —— 上面正例那四类"
+        "明确够格的，必须给。榜单上一条错误的行业映射，比一条空映射代价大；但一条本可以"
+        "映射上的涨价/招标/扩产新闻空着，同样是失败。\n"
         "5) 每个 theme 的 basis 必须写出传导链条（如「HBM 需求↑→存储涨价→模组厂毛利↑」）；"
-        "写不出链条就不要给这个 theme。**basis 里一旦出现「不构成/无直接对应/仅为股权投资/"
-        "链条偏弱/无 A 股订单」这类否定表述，就说明你自己也认为没有链条，必须删掉该 theme**\n"
+        "写不出链条就不要给这个 theme。basis 里一旦出现「不构成/无直接对应/仅为股权投资/"
+        "链条偏弱/无 A 股订单」这类否定表述，就说明你自己也认为没有链条，必须删掉该 theme\n"
         "6) 主题名括号里的限定词是**准入条件**，不是修饰语：选「建筑（水利投资）」要求新闻主线"
         "是水利/水网/防洪，轨道交通、公路、机场、市政景观一律留空；选「电网（特高压）」要求"
         "出现特高压/直流输电/换流阀；选「风电（出海）」要求是海上风电或海外订单。限定词对不上，"
@@ -409,8 +423,8 @@ def _build_prompt(items: list[dict], theme_names: list[str]) -> str:
         "7) 主题定义的是**驱动因子**，不是**产品构成**。产品里用了同类零部件不等于属于该主题 ——"
         "外骨骼康复机器人、工业机器人、扫地机都装减速器，但驱动它们的分别是医保支付、制造业"
         "资本开支、消费需求，不是「人形机器人量产」。只有新闻主线**本身就是该主题的驱动因子**"
-        "（人形机器人的量产/定点/降本/出货量）才能挂；「下游整机放量→零部件间接受益」算间接传导："
-        "strength 最多 1、elasticity 最多 1.0，basis 里必须写明「间接」，链条超过 2 跳就别给了\n"
+        "（人形机器人的量产/定点/降本/出货量）才能挂；「下游整机放量→零部件间接受益」算间接"
+        "传导：strength 最多 2、elasticity 最多 1.0；链条超过 3 跳就别给了\n"
         "8) 一条新闻只能出现在一个事件里，请全部评估，不要遗漏\n\n"
         "新闻列表：\n" + "\n".join(lines)
     )
@@ -445,7 +459,9 @@ def assess(items: list[dict], llm=None) -> dict[int, NewsAssessment]:
 # 的地方（改了提示词却看不到效果，因为全命中旧 key）。
 # v5：加"驱动因子 ≠ 产品构成"、elasticity 语义收紧、间接传导限强度
 #     （2026-10-18 外骨骼医保 → 机器人关节模组 +8% 之后）。
-PROMPT_VERSION = "5"
+# v6：v5 矫枉过正（主题率 26%→18%，政策密集日整榜空行业），补正例与政策类
+#     准入；"间接传导"改为强度封顶而非丢弃（2026-10-19 快照 980 全空之后）。
+PROMPT_VERSION = "6"
 CACHE_TTL_DAYS = 7
 
 
@@ -759,6 +775,16 @@ def calibrate(
 # ---------------------------------------------------------------------------
 
 
+def _pub_time(item: dict) -> str:
+    """取发布时间：源数据用 ``time``，落库后用 ``pub_time``。
+
+    这两个键在链路里并存（``prepare`` 保留原始 ``time``，``_to_news_row`` 才
+    映射成 ``pub_time``）。排序直接读 ``pub_time`` 会让新鲜度恒为 0.5 ——
+    三天前的旧闻和刚出的消息同权，实测确实如此。
+    """
+    return str(item.get("pub_time") or item.get("time") or "")
+
+
 def _freshness(pub_time: str) -> float:
     """0~1 新鲜度权重（48h 线性衰减）。"""
     from datetime import datetime
@@ -808,7 +834,7 @@ def rank_with_quota(items: list[dict], top_n: int = 20) -> list[dict]:
             item["event_type"] = etype
         item["_order"] = (
             float(item.get("importance") or 0.0)
-            * _freshness(item.get("pub_time", ""))
+            * _freshness(_pub_time(item))
             * min(int(item.get("source_count", 1)), 3)
         )
         scored[etype].append(item)
@@ -1023,14 +1049,40 @@ def enrich(
 
 
 def _finish_impacts(item: dict, impacts: list[dict]) -> None:
-    """主题列表 → 条目上的行业/多空/幅度/个股字段（LLM 与规则共用）。"""
+    """主题列表 → 条目上的行业/多空/幅度/个股字段（LLM 与规则共用）。
+
+    **多空与行业解耦**：没有落到 L3 主题 ≠ 没有方向。「证监会支持外资来华」
+    对市场是利好，只是说不出受益的是哪个细分赛道。原来的实现把两者绑死
+    （无主题 → neutral），导致政策密集日整张榜单多空列全是"中性"，用户看到
+    的是"什么都没判断"。
+
+    现在分两级，用 ``bias_scope`` 标明方向的作用域：
+
+    - ``theme``：方向针对具体 L3 主题，强度按主题给（"强多"）；
+    - ``market``：方向只针对市场整体/情绪，强度封顶 1（"弱多"），前端需
+      标注"整体"以示区别 —— 这一格不能让人误读成"某个行业强多"。
+    """
     item["industry_impacts"] = impacts
     item["industries"] = [i["name"] for i in impacts]
     primary = impacts[0] if impacts else None
-    # 落不到主题时一律中性："利空"没有承受对象就是噪音（如外盘金价下跌），
-    # 榜单上给个方向箭头却指不出行业，比不给更糟。
-    item["bull_bear_bias"] = primary["direction"] if primary else "neutral"
-    item["bias_strength"] = int(primary["strength"]) if primary else 0
+    if primary:
+        item["bull_bear_bias"] = primary["direction"]
+        item["bias_strength"] = int(primary["strength"])
+        item["bias_scope"] = "theme"
+    else:
+        news_dir = item.get("direction") or "neutral"
+        # 只有 LLM 评估过的条目才给"整体方向"：规则方向靠关键词计数
+        # （"支持/提升/增长"在政策稿里满地都是），拿它当市场方向会误导。
+        if news_dir in ("bullish", "bearish") and item.get("assess_source") == "llm":
+            item["bull_bear_bias"] = news_dir
+            item["bias_strength"] = 1     # 整体级方向不给强度，避免"空主题显示强多"
+            item["bias_scope"] = "market"
+        else:
+            item["bull_bear_bias"] = "neutral"
+            item["bias_strength"] = 0
+            item["bias_scope"] = ""
+    # 幅度只能基于具体标的，没有主题就没有百分比 —— 这一列留空是对的，
+    # 与"多空"不同：方向可以只对市场，涨幅必须对行业。
     item["expected_gain_low"] = primary["exp_low"] if primary else 0.0
     item["expected_gain_high"] = primary["exp_high"] if primary else 0.0
     item["top_stocks"] = _top_stocks(primary["name"]) if primary else []
@@ -1060,9 +1112,15 @@ def _basis_negates_chain(basis: str) -> bool:
 # 这类不该直接丢（真有传导），但也不能按一级受益给强度。
 # 线上原样（快照 974 reasoning）：「与清单主题仅部分重叠，弹性存疑」。
 _CHAIN_WEAK = (
-    "弹性存疑", "仅部分重叠", "部分重叠", "间接", "有限", "弱相关",
+    "弹性存疑", "仅部分重叠", "部分重叠", "有限", "弱相关",
     "概念性", "传导偏长", "影响有限", "难以量化", "象征性", "帮助不大",
 )
+# 「间接传导」不是自我否定，只是量级降档。
+# 提示词第 7 条**要求**间接传导在 basis 里写明「间接」；如果这里把"间接"
+# 也算作自述弱词并丢弃，就等于"谁守指令谁被判死刑"——2026-10-19 快照 980
+# 全榜空行业，2 条本可保留的主题（台积电 3nm 设备、资本市场助力人形机器人）
+# 都是这么没的。所以单独一档：保留主题、封顶 strength=2、elasticity≤1.0。
+_CHAIN_INDIRECT = ("间接", "情绪传导", "仅情绪", "间接受益", "映射")
 _ARROW_TOKENS = ("→", "->", "=>", "⇒")
 
 
@@ -1121,25 +1179,33 @@ def _temper_impact(
 
     所以"链条长"只有在**新闻整条落在主题体系之外**（任何主题的关键词/成分股都
     没命中）时才算问题 —— 那才是纯粹的跨行业联想，比如「外骨骼医保→关节模组」。
-    三档：
+    四档：
 
     - 自述弱（"弹性存疑/仅部分重叠"）且 ≥2 跳 → 丢弃，不构成可交易映射；
     - 落在主题体系外且 ≥3 跳 → 保留但压到 strength=1、elasticity≤1.0（约 ±1%）；
     - 自述弱（无论几跳）→ 同样压强度；
+    - 自述"间接"且 ≥2 跳 → **保留**，strength 封顶 2、elasticity≤1.0
+      （间接传导最多给"中多/中空"，不按一级驱动给满）；
     - 其余不动（含"光迅业绩超预期"这类成分股自身的一级驱动）。
     """
     hops = _transmission_hops(basis)
-    weak = any(x in f"{basis} {reasoning}" for x in _CHAIN_WEAK)
+    blob = f"{basis} {reasoning}"
+    weak = any(x in blob for x in _CHAIN_WEAK)
+    indirect = any(x in blob for x in _CHAIN_INDIRECT)
     if weak and hops >= 2:
         return False, strength, elasticity
     if weak or (not in_universe and hops >= 3):
         return True, min(int(strength or 1), 1), min(float(elasticity or 1.0), 1.0)
+    if indirect and hops >= 2:
+        return True, min(int(strength or 1), 2), min(float(elasticity or 1.0), 1.0)
     return True, strength, elasticity
 
 
 def _apply_assessment(item: dict, a: NewsAssessment) -> None:
     """把一次 LLM 评估写进条目（事件类型/重要性/主题归一/幅度校准）。"""
     text = f"{item.get('title', '')} {item.get('content', '')}"
+    # 先打来源：_finish_impacts 里"无主题是否给整体方向"要用它区分 LLM / 规则
+    item["assess_source"] = "llm"
     item["event_type"] = a.event_type if a.event_type in EVENT_TYPES else item["event_type"]
     item["category"] = "policy" if item["event_type"] == "policy" else "news"
     item["importance"] = round(float(a.importance), 2)
@@ -1208,6 +1274,7 @@ def _apply_assessment(item: dict, a: NewsAssessment) -> None:
 
 def _apply_rule(item: dict) -> None:
     """规则降级：只用关键词/成分股拿主题，幅度按规则强度校准。"""
+    item["assess_source"] = "rule"
     text = f"{item.get('title', '')} {item.get('content', '')}"
     _finish_impacts(item, _rule_impacts(item, text))
 
@@ -1253,7 +1320,7 @@ def rerank(items: list[dict]) -> list[dict]:
     for item in items:
         item["_order"] = (
             float(item.get("importance") or 0.0)
-            * _freshness(item.get("pub_time", ""))
+            * _freshness(_pub_time(item))
             * min(int(item.get("source_count", 1)), 3)
         )
     items.sort(key=_rank_key, reverse=True)

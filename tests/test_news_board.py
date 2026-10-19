@@ -323,6 +323,32 @@ def test_to_news_row_defaults_are_safe():
     assert row["industry_impacts_json"] == "[]"
     assert row["source_count"] == 1
     assert row["bull_bear_bias"] == "neutral"
+    assert row["bias_scope"] == ""
+    assert row["assess_source"] == ""
+
+
+def test_to_news_row_keeps_market_level_bias():
+    """无主题但有"整体方向"的行，bias_strength 不能被 impacts 为空抹成 0。
+
+    2026-10-18 的修法（``if impacts else 0``）把"空主题显示强多"和"整体偏多"
+    一起抹掉了。现在用 bias_scope 区分作用域：market 级固定强度 1，照常落库。
+    """
+    item = _item("证监会：支持更多外资机构来华投资展业", "2026-10-19 08:00") | {
+        "event_type": "policy",
+        "importance": 4.0,
+        "industry_impacts": [],
+        "industries": [],
+        "bull_bear_bias": "bullish",
+        "bias_strength": 1,
+        "bias_scope": "market",
+        "assess_source": "llm",
+    }
+    row = _to_news_row(item)
+    assert row["bias_strength"] == 1
+    assert row["bias_scope"] == "market"
+    assert row["assess_source"] == "llm"
+    assert row["industries"] == []
+    assert row["expected_gain_high"] == 0.0   # 没有标的仍然不给幅度
 
 
 # ---------------------------------------------------------------------------
