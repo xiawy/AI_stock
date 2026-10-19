@@ -204,7 +204,13 @@ def rule_importance(item: dict, event_type: str) -> float:
 
 
 def prefilter_score(item: dict) -> float:
-    """规则初筛分（决定谁进 LLM，不直接决定排名）。"""
+    """规则初筛分（决定谁进 LLM，不直接决定排名）。
+
+    ``_theme_score`` 由 :func:`prepare` 批量预计算写入：命中 L3 主题的新闻是
+    **唯一能给出行业 + 幅度**的那类，必须优先进入 LLM 窗口。生产实测（10-19）
+    候选池里 6 条命中主题、其中 5 条排在第 40 名之后 —— 它们连被 LLM 看一眼的
+    机会都没有，榜单自然只剩政策噪音。
+    """
     title = str(item.get("title", ""))
     text = f"{title} {item.get('content', '')}"
     score = 0.0
@@ -215,6 +221,12 @@ def prefilter_score(item: dict) -> float:
         score += 0.8                                          # 有具体数字
     if 10 <= len(title) <= 80:
         score += 0.5
+    # 主题命中：别名级（≥2.5）给足权重，让它压过泛泛的政策稿
+    hint = float(item.get("_theme_score") or 0.0)
+    if hint >= 2.5:
+        score += 3.0
+    elif hint > 0:
+        score += 1.5
     score -= 2.5 * min(_count_hits(text, _NOISE_KW), 2)       # 例行公告
     return score
 
@@ -979,6 +991,20 @@ def prepare(news_items: list[dict], limit: int = PREFILTER_LIMIT) -> list[dict]:
     ]
     if not valid:
         return []
+    # 主题命中要先算出来，初筛分才有得用：否则「能不能给出行业」这个最关键
+    # 的信号完全不参与"谁进 LLM"的竞争。一次会话批量打分，几百条也只有几毫秒。
+    try:
+        from ai_stock.quant.theme_registry import match_themes_many
+
+        hits = match_themes_many(
+            [f"{n.get('title', '')} {n.get('content', '') or ''}" for n in valid],
+            limit=1, min_score=2.0,
+        )
+        for node, hit in zip(valid, hits):
+            if hit:
+                node["_theme_score"] = float(hit[0]["score"])
+    except Exception as exc:      # 主题库不可用不该拦住新闻榜
+        logger.debug("theme prefilter hint skipped: %s", exc)
     valid.sort(key=lambda n: (prefilter_score(n), str(n.get("time", ""))), reverse=True)
     # 先按规范化标题去重（同一条新闻的标点/前缀差异），再做事件聚类（措辞不同
     # 但字符高度重叠的多源报道）。两步都做，因为前者精确、后者召回更宽。

@@ -638,6 +638,49 @@ def _token_hit(token: str, lowered: str) -> bool:
         start = i + 1
 
 
+def _theme_maps() -> tuple[dict[int, list[str]], dict]:
+    """一次会话读出 「主题 id → 别名列表」与 「id → 主题行」。
+
+    单独抽出来是为了批量匹配：初筛要同时对几百条新闻打分，逐条开 session 会把
+    一次新闻榜刷新拖慢一个量级。
+    """
+    with session_scope() as session:
+        alias_map: dict[int, list[str]] = {}
+        for a in session.execute(select(QuantThemeAlias)).scalars().all():
+            alias_map.setdefault(a.theme_id, []).append(a.alias)
+        themes = {
+            t.id: t for t in session.execute(
+                select(QuantTheme).where(QuantTheme.status == STATUS_ACTIVE)
+            ).scalars().all()
+        }
+    return alias_map, themes
+
+
+def _rank_text(
+    text: str,
+    alias_map: dict[int, list[str]],
+    themes: dict,
+    min_score: float,
+    limit: int,
+) -> list[dict]:
+    scores: dict[str, float] = {}
+    lowered = (text or "").lower()
+    if not lowered:
+        return []
+    for tid, theme in themes.items():
+        score = 0.0
+        for alias in alias_map.get(tid, []):
+            if alias and alias.lower() not in GENERIC_TOKENS and _token_hit(alias, lowered):
+                score += 3.0
+        for kw in json.loads(theme.driver_keywords_json or "[]"):
+            if kw and kw.lower() not in GENERIC_TOKENS and _token_hit(kw, lowered):
+                score += 1.0
+        if score >= min_score:
+            scores[theme.name] = score
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+    return [{"name": n, "score": s} for n, s in ranked]
+
+
 def match_themes(text: str, limit: int = 2, min_score: float = 2.0) -> list[dict]:
     """按别名与驱动关键词给 active 主题打分，返回 top-N。
 
@@ -655,34 +698,32 @@ def match_themes(text: str, limit: int = 2, min_score: float = 2.0) -> list[dict
     """
     if not text:
         return []
-    lowered = text.lower()
-    scores: dict[str, float] = {}
     try:
-        with session_scope() as session:
-            aliases = session.execute(select(QuantThemeAlias)).scalars().all()
-            alias_map: dict[int, list[str]] = {}
-            for a in aliases:
-                alias_map.setdefault(a.theme_id, []).append(a.alias)
-            themes = {
-                t.id: t for t in session.execute(
-                    select(QuantTheme).where(QuantTheme.status == STATUS_ACTIVE)
-                ).scalars().all()
-            }
-            for tid, theme in themes.items():
-                score = 0.0
-                for alias in alias_map.get(tid, []):
-                    if alias and alias.lower() not in GENERIC_TOKENS and _token_hit(alias, lowered):
-                        score += 3.0
-                for kw in json.loads(theme.driver_keywords_json or "[]"):
-                    if kw and kw.lower() not in GENERIC_TOKENS and _token_hit(kw, lowered):
-                        score += 1.0
-                if score >= min_score:
-                    scores[theme.name] = score
+        alias_map, themes = _theme_maps()
     except Exception as exc:
         logger.warning("match_themes failed: %s", exc)
         return []
-    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:limit]
-    return [{"name": n, "score": s} for n, s in ranked]
+    return _rank_text(text, alias_map, themes, min_score, limit)
+
+
+def match_themes_many(
+    texts: list[str], limit: int = 2, min_score: float = 2.0,
+) -> list[list[dict]]:
+    """批量版 ``match_themes``：一次加载词表，按传入顺序逐个打分。
+
+    用于新闻榜初筛（几百条一起打分）。失败时返回等长的空列表 —— 调用方拿不到
+    主题线索只会少加分，不会因为一次 DB 抖动把整批新闻判成无主题。
+    """
+    if not texts:
+        return []
+    try:
+        alias_map, themes = _theme_maps()
+    except Exception as exc:
+        logger.warning("match_themes_many failed: %s", exc)
+        return [[] for _ in texts]
+    return [
+        _rank_text(t, alias_map, themes, min_score, limit) for t in texts
+    ]
 
 
 def greeks(theme_name: str, window: int = 20) -> dict:

@@ -953,3 +953,15 @@ def test_prune_and_refill_refills_from_pool_only_above_floor(monkeypatch):
     ok = {"title": "够格候选", "importance": 5.0, "assess_source": "rule"}
     out = ni.prune_and_refill([noise], [noise, also_noise, ok], 1, llm=object())
     assert [x["title"] for x in out] == ["够格候选"]
+
+
+def test_prefilter_score_rewards_theme_hits():
+    """命中 L3 主题的新闻要挤进 LLM 窗口。
+
+    生产实测（2026-10-19）：候选池里 6 条命中主题、5 条排在第 40 名之后，
+    一条都没被 LLM 看过，榜单只剩政策噪音。
+    """
+    plain = {"title": "某公司调研纪要", "content": "会议室交流", "source_count": 1}
+    weak = dict(plain, _theme_score=1.0)     # 只命中一个关键词（不到 min_score 不会进来）
+    strong = dict(plain, _theme_score=3.0)   # 命中别名
+    assert ni.prefilter_score(strong) > ni.prefilter_score(weak) > ni.prefilter_score(plain)
