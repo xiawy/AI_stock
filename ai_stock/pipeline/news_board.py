@@ -157,6 +157,10 @@ def save_news_board(
         # importance 重排。失败保持原样（recheck 内部吞异常）。
         if client is not None and RECHECK_TOP and top:
             news_impact.recheck(top, client)
+            # recheck 会用 LLM 的 importance 覆盖规则估计，可能把"规则看着像 4 分、
+            # LLM 判成 1 分"的条目打回门槛以下 —— 那时必须让位给候选池里的下一条，
+            # 否则榜尾会挂着 importance=1 的海外个股噪音（快照 982 实测 5 条）。
+            top = news_impact.prune_and_refill(top, enriched, top_n, client)
             news_impact.rerank(top)
 
         period = "AM" if datetime.now().hour < 12 else "PM"

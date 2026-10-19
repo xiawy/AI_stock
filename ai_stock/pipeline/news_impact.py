@@ -71,7 +71,9 @@ LLM_LIMIT = 40                 # 进 LLM 的条数（一次批量调用）
 # 的 reasoning + basis）会超过 max_tokens 被截断，JSON 不完整 → 整批降级成
 # 规则，日志只有一句"0 llm"（2026-10-19 快照 981 实测 40 条全丢）。分批后
 # 一批失败最多影响 12 条，且失败批还能再对半重试。
-ASSESS_BATCH = int(os.getenv("NEWS_ASSESS_BATCH", "12"))
+# 单批条数：12 条时生产实测仍偶发输出截断（快照 982 有一批 12 条整批失败，
+# 降到 6+6 才对）。8 条是这个模型稳定通过的上限。
+ASSESS_BATCH = int(os.getenv("NEWS_ASSESS_BATCH", "8"))
 
 # ── 规则词表 ────────────────────────────────────────────────────────────
 _POLICY_KW = (
@@ -1367,6 +1369,88 @@ def rerank(items: list[dict]) -> list[dict]:
     for i, item in enumerate(items, 1):
         item["rank"] = i
     return items
+
+
+def _item_key(item: dict) -> str:
+    from .news_board import normalize_title
+
+    return item.get("title_hash") or normalize_title(str(item.get("title", "")))
+
+
+def prune_and_refill(
+    top: list[dict],
+    pool: list[dict],
+    top_n: int,
+    llm=None,
+    *,
+    use_cache: bool = True,
+) -> list[dict]:
+    """二次评估把条目降级成噪音后，让它让位给候选池里的下一条。
+
+    配额排序时的 ``QUOTA_MIN_IMPORTANCE`` 门槛用的是**规则**估计的重要性 ——
+    排序完成后 ``recheck`` 才用 LLM 改写 importance，而 ``rerank`` 只重排不淘汰。
+    结果是"规则看着像 4 分、LLM 判成 1 分"的条目照样上榜（快照 982 末尾 5 条
+    海外个股/脱口秀式新闻，importance=1.0 却排在榜上）。
+
+    这里做三件事：
+    1. 丢弃 ``assess_source == "llm"`` 且 importance 低于门槛的条目（规则票不动，
+       因为规则估计本来就可能偏保守）；
+    2. 从候选池按榜单键顺序补位，补位条目**先过 recheck 再判定**，避免用规则分
+       估出一个高分噪音 —— 宁可多打一次 LLM，也不要让用户看到空榜；
+    3. 同簇（同事件多源）仍然只占一个榜位。
+
+    补不满就补不满：短榜比"凑数的噪音"好。
+    """
+    if not top or not pool:
+        return top
+    floor = float(QUOTA_MIN_IMPORTANCE)
+
+    def _low(item: dict) -> bool:
+        # 只有 LLM 明确判过的低分才淘汰；规则票的低分不算"定论"
+        return (item.get("assess_source") == "llm"
+                and float(item.get("importance") or 0.0) < floor)
+
+    kept = [x for x in top if not _low(x)]
+    dropped = len(top) - len(kept)
+    if not dropped:
+        return top
+
+    seen = {_item_key(x) for x in top}
+    spare = sorted(
+        [
+            x for x in pool
+            if _item_key(x) not in seen
+            and float(x.get("importance") or 0.0) >= floor
+        ],
+        key=_rank_key, reverse=True,
+    )
+    clusters = {x.get("cluster_id") for x in kept if x.get("cluster_id")}
+    filled = 0
+    cursor = 0
+    while len(kept) < top_n and cursor < len(spare):
+        need = top_n - len(kept)
+        batch = spare[cursor:cursor + max(need * 2, 8)]
+        cursor += len(batch)
+        if llm is not None:
+            recheck(batch, llm, use_cache=use_cache)
+        for item in sorted(batch, key=_rank_key, reverse=True):
+            if len(kept) >= top_n:
+                break
+            if _low(item):
+                continue
+            cid = item.get("cluster_id") or ""
+            if cid and cid in clusters:
+                continue
+            if cid:
+                clusters.add(cid)
+            kept.append(item)
+            filled += 1
+
+    logger.info(
+        "news board: recheck demoted %d item(s) below importance floor, refilled %d",
+        dropped, filled,
+    )
+    return kept
 
 
 _stock_cache: dict[str, list[dict]] = {}

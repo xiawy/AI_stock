@@ -916,3 +916,40 @@ def test_assess_retries_failed_batch_in_halves(monkeypatch):
     assert len(out) == 12
     assert out[11].importance == 6.0
 
+
+
+def test_prune_and_refill_drops_llm_demoted_items(monkeypatch):
+    """LLM 二次评估把 importance 打到门槛以下 → 让位给候选池的下一条。
+
+    快照 982 的现场：抢到榜位的 20 条里有 5 条被 LLM 判成 importance=1.0
+    （Red Cat 股价、金佰利纸尿裤、KNDS CEO 表态），配额排序时的规则分却
+    够格 —— rerank 只重排不淘汰，噪音就留在了榜上。
+    """
+    monkeypatch.setattr(ni, "recheck", lambda items, llm=None, **kw: items)
+    noise = {"title": "Red Cat股价上涨4.03%", "importance": 1.0,
+             "assess_source": "llm", "event_type": "overseas"}
+    good = {"title": "华丰科技扩产", "importance": 6.0,
+            "assess_source": "llm", "event_type": "industry"}
+    backup = {"title": "工信部人形机器人10万台", "importance": 7.0,
+              "assess_source": "rule", "event_type": "policy"}
+    out = ni.prune_and_refill([good, noise], [good, noise, backup], 2, llm=object())
+    assert [x["title"] for x in out] == ["华丰科技扩产", "工信部人形机器人10万台"]
+
+
+def test_prune_and_refill_keeps_rule_items_and_does_not_pad(monkeypatch):
+    """规则票的低分不算定论（不淘汰）；候选池也不够时不硬凑。"""
+    monkeypatch.setattr(ni, "recheck", lambda items, llm=None, **kw: items)
+    rule_low = {"title": "某地座谈会", "importance": 1.5, "assess_source": "rule"}
+    noise = {"title": "海外个股噪音", "importance": 1.0, "assess_source": "llm"}
+    out = ni.prune_and_refill([rule_low, noise], [rule_low, noise], 2, llm=object())
+    assert [x["title"] for x in out] == ["某地座谈会"]
+
+
+def test_prune_and_refill_refills_from_pool_only_above_floor(monkeypatch):
+    """补位条目要重新评估：本身就不够格的候选不占榜位。"""
+    monkeypatch.setattr(ni, "recheck", lambda items, llm=None, **kw: items)
+    noise = {"title": "噪音A", "importance": 1.0, "assess_source": "llm"}
+    also_noise = {"title": "噪音B", "importance": 1.2, "assess_source": "rule"}
+    ok = {"title": "够格候选", "importance": 5.0, "assess_source": "rule"}
+    out = ni.prune_and_refill([noise], [noise, also_noise, ok], 1, llm=object())
+    assert [x["title"] for x in out] == ["够格候选"]
