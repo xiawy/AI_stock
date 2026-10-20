@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -30,6 +31,9 @@ from ..broker import (
 )
 from ..config import (
     BUY_POSITION_RATIO,
+    BUY_REJECT_COOLDOWN_MINUTES,
+    BUY_SCAN_FLOW_OVERFLOW,
+    BUY_SCAN_MAX_CANDIDATES,
     CONF_BREAKOUT_THRESHOLD,
     CONF_BREAKOUT_TOP_PCT,
     CONF_DEFAULT,
@@ -37,6 +41,7 @@ from ..config import (
     KICK_CONFIRM_ROUNDS,
     MACD_DIVERGENCE_WINDOW,
     MAX_HOLDING_COUNT,
+    MIN_RISK_REWARD_RATIO,
     OBSERVE_EXPIRE_DAYS_BY_STAGE,
     POS_COEF_HIGH,
     POS_COEF_LOW,
@@ -55,6 +60,7 @@ from ..config import (
     VOL_TARGET_SIZING_ENABLED,
 )
 from ..llm_helper import structured_invoke
+from ..data_service import get_data_service
 from ..market_utils import is_tail_phase
 from ..news_store import get_news_store
 from ..orchestrator import get_orchestrator
@@ -94,19 +100,48 @@ class VerificationReport(BaseModel):
 
     passed: bool = False
     reason: str = ""
-    major_bear_resolved: bool = False   # 重大利空是否已消除
+    major_bear_resolved: bool = False   # 重大利空是否已消除（参考项，不作硬门槛）
     # 未消除利空的风险等级 (low/medium/high) — P1-3: 原实现把
     # major_bear_resolved 当硬性 AND, 只要利空清单里还剩一条就拒绝,
     # 使「双保险」退化成「双闸门」(63 次拒绝)。改为评分项: 仅 high 级拒绝。
     bear_risk_level: str = "medium"
+    # 「利空是否恶化」—— 这才是买入前该问的问题。入选利空多是 ROE 低、
+    # PE 高、换手低这类结构性事实, 几天内不可能"消除", 用"是否消除"当门槛
+    # 等于结构性拒绝（2026-10-02 起 27 次进入二次验证 0 次通过）。
+    bear_worsened: bool = False
     bull_scenario: str = ""
     range_scenario: str = ""
     bear_scenario: str = ""
     risk_reward_ratio: str = ""
+    # 数值化的风险收益比。文本字段 LLM 会写成 "1:1.4"/"约 2.6:1", 无法校验,
+    # 于是"不达标拒绝"实际上从未生效。数值字段缺失时由 _parse_risk_reward
+    # 从文本回退解析。
+    risk_reward: float = 0.0
     stop_loss_pct: float = 5.0          # 止损百分比 (默认 5% 硬性)
     take_profit_pct: float = 15.0
     add_position_conditions: list[str] = Field(default_factory=list)
     predicted_path: str = ""            # 后期走势预测
+
+
+_RR_PATTERN = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _parse_risk_reward(report: VerificationReport) -> float:
+    """把风险收益比解析成数值（收益 / 风险，越大越好）。
+
+    支持 ``1:1.4``（风险:收益）、``2.6:1``（收益:风险）、``约 2.6`` 三种写法：
+    冒号两侧取「大数 / 小数」，两种记法都得到 ≥1 的收益风险比。
+    解析不出来返回 0.0 —— 调用方据此跳过校验，不用猜测值否决交易。
+    """
+    if report.risk_reward and report.risk_reward > 0:
+        return float(report.risk_reward)
+    nums = [float(x) for x in _RR_PATTERN.findall(str(report.risk_reward_ratio or ""))]
+    if not nums:
+        return 0.0
+    if len(nums) == 1:
+        return nums[0]
+    hi, lo = max(nums[:2]), min(nums[:2])
+    return round(hi / lo, 3) if lo else 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -114,27 +149,93 @@ class VerificationReport(BaseModel):
 # ---------------------------------------------------------------------------
 
 def handle_buy_scan(task: dict) -> dict:
-    """buy 队列 buy_scan handler: 遍历自选池, 逐股启动买入流程 (30min 幂等)."""
+    """buy 队列 buy_scan handler: 先全池技术预筛, 再为通过的标的启动买入流程。
+
+    这里是 P0 修复的核心。「最多持仓 3 支」原本被写成「每轮只评估 3 只」：
+    ``len(holdings) + len(started) >= MAX_HOLDING_COUNT`` 在创建 flow 之前就
+    break，池内 22 只时有 19 只全年不看一眼。2026-10-20 实测：当天真正触发
+    布林中轨缩量信号的是华明装备 / 中航西飞 / 威海广泰 / 中航机载，dyn 排名
+    6~22，全部漏掉；被反复扫描的 688002/600150/600893 反而四种形态全 False。
+
+    现在的口径：
+
+    1. **评估数量与开仓数量解耦**：按 dyn 降序评估整池（上限
+       ``BUY_SCAN_MAX_CANDIDATES``），不再受持仓数截断；
+    2. **预筛不花 LLM**：硬性崩塌规则（鱼尾/年线破位）+ 技术形态在扫描阶段
+       用本地指标算完，只有通过的标的才启动 flow —— 原来每只票启动 flow 后
+       都要跑一次 LLM 崩塌复核，22 只 × 6 轮/小时是纯浪费；
+    3. **持仓上限仍硬约束**：真正启动的 flow 数 = 空仓位 + 少量溢出（允许
+       多只并行验证，先通过先建仓），最终由 ``pre_trade_check`` 的
+       ``MAX_HOLDING_COUNT`` 兜底；
+    4. **同票冷却**：二次验证被拒后 ``BUY_REJECT_COOLDOWN_MINUTES`` 内不再重复
+       深度验证同一只票（原来每 10 分钟重复拒绝同一批票）。
+    """
     payload = task.get("payload", {})
     window = payload.get("window") or datetime.now().strftime("%Y%m%d%H%M")
     orchestrator = get_orchestrator()
+    data = get_data_service()
 
     holdings = {h["symbol"] for h in db_ops.get_holdings()}
+    free_slots = max(0, MAX_HOLDING_COUNT - len(holdings))
     pool = db_ops.get_optional_pool("active")
-    # 名额有限 (3 个持仓位) 时按动态置信度降序取前几只, 而不是按池子插入顺序:
-    # 原实现「先入池先买」会让最早入池但已衰减的标的占掉全部名额。
+    # 按动态置信度降序（而不是池子插入顺序）: 「先入池先买」会让最早入池但
+    # 已衰减的标的占掉全部名额。
     pool = sorted(
         pool,
         key=lambda s: float(s.get("dyn_confidence", CONF_DEFAULT) or CONF_DEFAULT),
         reverse=True,
     )
-    started: list[str] = []
-    for stock in pool:
+    candidates = [
+        s for s in pool
+        if s.get("symbol") and s["symbol"] not in holdings
+    ][:BUY_SCAN_MAX_CANDIDATES]
+
+    result: dict = {
+        "started_flows": [],
+        "pool_size": len(pool),
+        "evaluated": 0,
+        "no_signal": [],
+        "cooling": [],
+        "removed": [],
+        "deferred": [],
+        "free_slots": free_slots,
+    }
+    if not candidates:
+        return result
+    if free_slots <= 0:
+        result["skipped"] = f"持仓已满 {len(holdings)}/{MAX_HOLDING_COUNT}"
+        return result
+
+    running = _running_buy_symbols()
+    cooling = _cooling_symbols()
+    max_flows = free_slots + BUY_SCAN_FLOW_OVERFLOW
+
+    for stock in candidates:
         symbol = stock.get("symbol", "")
-        if not symbol or symbol in holdings:
-            continue  # 已持仓的走持仓维护流程, 不重复建仓
-        if len(holdings) + len(started) >= MAX_HOLDING_COUNT:
-            break  # 硬性规定: 持仓不能超过 3 支
+        if symbol in running:
+            continue                     # 已有在跑的买入流程, 不重复启动
+        if symbol in cooling:
+            result["cooling"].append(symbol)
+            continue
+
+        collapse_reason = hard_collapse_reason(data, symbol)
+        if collapse_reason:
+            db_ops.update_optional_status(
+                symbol, "removed", remove_reason=collapse_reason,
+            )
+            logger.info("buy_scan prescreen removed %s: %s", symbol, collapse_reason)
+            result["removed"].append(symbol)
+            continue
+
+        tech = evaluate_tech_signals(data, symbol)
+        result["evaluated"] += 1
+        if not tech.get("passed"):
+            result["no_signal"].append(symbol)
+            continue
+        if len(result["started_flows"]) >= max_flows:
+            result["deferred"].append(symbol)
+            continue
+
         flow_id = f"buy_{symbol}_{window}"
         orchestrator.start_flow(
             "buy",
@@ -146,6 +247,14 @@ def handle_buy_scan(task: dict) -> dict:
                 # 主题雷达旁路动态字段 (清理官/突破通道/动态仓位消费; 缺失退化为默认)
                 "pool_confidence": stock.get("dyn_confidence", CONF_DEFAULT),
                 "pool_stage": stock.get("stage_batch", "BODY"),
+                # 预筛结论: 排查时能直接看到"这轮为什么启动/为什么没启动"
+                "prescreen": {
+                    "channel": tech.get("channel"),
+                    "reason": tech.get("reason", ""),
+                    "close": tech.get("close"),
+                    "bar_date": tech.get("bar_date"),
+                    "provisional": tech.get("provisional"),
+                },
                 "pool": {  # 入选时的分析结论 (崩塌检测基准)
                     "reason": stock.get("reason", ""),
                     "bull_factors": stock.get("bull_factors", []),
@@ -155,8 +264,92 @@ def handle_buy_scan(task: dict) -> dict:
                 },
             },
         )
-        started.append(symbol)
-    return {"started_flows": started, "pool_size": len(pool)}
+        result["started_flows"].append(symbol)
+
+    if result["started_flows"] or result["removed"]:
+        logger.info(
+            "buy_scan: evaluated=%d started=%s no_signal=%d cooling=%d removed=%s",
+            result["evaluated"], result["started_flows"],
+            len(result["no_signal"]), len(result["cooling"]), result["removed"],
+        )
+    return result
+
+
+def _running_buy_symbols() -> set[str]:
+    """当前处于 running 的买入流程标的集合（避免同一只票堆叠多个 flow）。"""
+    try:
+        flows = db_ops.get_running_flows("buy")
+    except Exception as exc:
+        logger.warning("running buy flows query failed: %s", exc)
+        return set()
+    out = set()
+    for flow in flows:
+        data = flow.get("data") or {}
+        symbol = data.get("symbol") if isinstance(data, dict) else ""
+        if symbol:
+            out.add(str(symbol))
+    return out
+
+
+def _cooling_symbols() -> set[str]:
+    """冷却期内的标的: 二次验证被拒后一段时间内不再重复深度验证。"""
+    if BUY_REJECT_COOLDOWN_MINUTES <= 0:
+        return set()
+    try:
+        decisions = db_ops.get_decisions(
+            limit=300, agent="second_verification", decision="verification_rejected",
+        )
+    except Exception as exc:
+        logger.warning("cooldown query failed: %s", exc)
+        return set()
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=BUY_REJECT_COOLDOWN_MINUTES)
+    out: set[str] = set()
+    for row in decisions:
+        symbol = str(row.get("symbol") or "")
+        ts = row.get("ts")
+        if not symbol or not ts:
+            continue
+        try:
+            when = datetime.fromisoformat(ts)
+        except ValueError:
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        if when >= cutoff:
+            out.add(symbol)
+    return out
+
+
+# 技术面长期破位硬规则: 收盘价跌破年线 5% 以上 (数据驱动, 不依赖 LLM)
+YEAR_LINE_BREAK_RATIO = 0.95
+
+
+def hard_collapse_reason(data, symbol: str) -> str:
+    """硬性崩塌规则（不花 LLM）: 返回原因字符串, 通过返回空串。
+
+    原逻辑在 ``LogicCollapseAgent`` 里，扫描阶段需要同一套判据做预筛，
+    因此提到模块级 —— 两处必须用同一份规则，否则预筛放行的票会在 flow 里
+    立刻被移除，白白产生一轮噪音。
+    """
+    try:
+        if is_tail_phase(data, symbol):
+            return "鱼尾高位放量滞涨"
+    except Exception as exc:
+        logger.debug("tail phase check failed for %s: %s", symbol, exc)
+    try:
+        indicators = data.get_stock_indicators(symbol)
+    except Exception as exc:
+        logger.debug("indicator fetch failed for %s: %s", symbol, exc)
+        return ""
+    if indicators:
+        close = indicators.get("close_series") or []
+        year_line = indicators.get("close_200_sma")
+        if close and year_line and close[-1] < year_line * YEAR_LINE_BREAK_RATIO:
+            return (
+                f"技术面长期破位: 收盘 {close[-1]} 跌破年线 "
+                f"{round(year_line, 2)} 超过 5%"
+            )
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -280,7 +473,7 @@ class LogicCollapseAgent(BaseAgent):
     agent_name = "logic_guard"
 
     # 技术面长期破位硬规则: 收盘价跌破年线 5% 以上 (数据驱动, 不依赖 LLM)
-    YEAR_LINE_BREAK_RATIO = 0.95
+    YEAR_LINE_BREAK_RATIO = YEAR_LINE_BREAK_RATIO
 
     def handle(self, task: dict) -> dict:
         flow_id, flow_type, step, context = self.extract_flow(task.get("payload", {}))
@@ -290,23 +483,12 @@ class LogicCollapseAgent(BaseAgent):
         if not symbol:
             return {"decision": "ignored", "reason": "no symbol"}
 
-        # 0) 鱼尾硬拦截 (数据驱动, 不经 LLM): 高位放量滞涨直接移出自选池
-        if is_tail_phase(self.data, symbol):
+        # 0/1) 硬规则 (鱼尾放量滞涨 / 跌破年线) —— 与 buy_scan 预筛同一份判据
+        collapse_reason = hard_collapse_reason(self.data, symbol)
+        if collapse_reason:
             return self._collapse(
-                symbol, task_id, flow_id, flow_type, step,
-                "鱼尾高位放量滞涨",
+                symbol, task_id, flow_id, flow_type, step, collapse_reason,
             )
-
-        # 1) 硬规则: 技术面长期破位 (跌破年线且无反弹迹象)
-        indicators = self.data.get_stock_indicators(symbol)
-        if indicators:
-            close = indicators.get("close_series") or []
-            year_line = indicators.get("close_200_sma")
-            if close and year_line and close[-1] < year_line * self.YEAR_LINE_BREAK_RATIO:
-                return self._collapse(
-                    symbol, task_id, flow_id, flow_type, step,
-                    f"技术面长期破位: 收盘 {close[-1]} 跌破年线 {round(year_line, 2)} 超过 5%",
-                )
 
         # 2) LLM 判断: 利多消失 / 新重大利空 / 行业景气度逆转 / 政策转向
         news = self.data.get_stock_news(symbol, hours=72)
@@ -434,8 +616,10 @@ class TechSignalAgent(BaseAgent):
         task_id = task.get("task_id", "")
         symbol = context.get("symbol", "")
 
-        indicators = self.data.get_stock_indicators(symbol)
-        if not indicators:
+        # 与 buy_scan 预筛共用同一份实现：预筛看到什么，这里就必须看到什么，
+        # 否则「预筛放行 → 步骤内判无信号」会反复产生空跑流程。
+        evaluated = evaluate_tech_signals(self.data, symbol)
+        if not evaluated.get("available", True):
             # 指标不可用不视为失败 — 本周期无信号
             result = {
                 "decision": "no_signal", "passed": False,
@@ -445,42 +629,20 @@ class TechSignalAgent(BaseAgent):
             self.report(flow_type, flow_id, step, result)
             return result
 
-        signals = {
-            "boll_mid_shrink_stop": self._boll_mid_shrink_stop(indicators),
-            "macd_divergence": self._macd_divergence(indicators),
-            "gap_pullback_shrink": self._gap_pullback_shrink(indicators),
-            # 趋势动量: 追强通道, 与上面三个回调形态正交
-            "trend_momentum": self._trend_momentum(indicators),
-        }
+        signals = evaluated.get("signals") or {}
+        passed = bool(evaluated.get("passed"))
+        channel = evaluated.get("channel") or "none"
         triggered = {k: v for k, v in signals.items() if v.get("triggered")}
-        passed = bool(triggered)
-        channel = "standard" if passed else "none"
-
-        # 主线突破通道 (旁路): 标准信号均未触发时, 高置信度主线标的可凭放量
-        # 突破放行。门槛由「绝对 dyn 阈值」放宽并叠加「池内相对排名」(P1-2):
-        # dyn 的绝对分布随雷达评分口径漂移, 纯绝对阈值会把通道长期关闭
-        # (实测池内中位数 0.42, 原阈值 0.7 几乎无人可达)。
-        if not passed:
-            pool = db_ops.get_optional_stock(symbol) or {}
-            dyn = float(pool.get("dyn_confidence", CONF_DEFAULT) or CONF_DEFAULT)
-            stage = pool.get("stage_batch", "BODY") or "BODY"
-            if (
-                stage in ("HEAD", "BODY")
-                and (
-                    dyn >= CONF_BREAKOUT_THRESHOLD
-                    or self._dyn_rank_top(symbol, dyn)
-                )
-                and self._check_breakout(indicators)
-            ):
-                passed = True
-                channel = "breakout"
 
         result = {
             "decision": "signal" if passed else "no_signal",
             "passed": passed,
             "channel": channel,
             "signals": signals,
-            "close": (indicators.get("close_series") or [None])[-1],
+            "close": evaluated.get("close"),
+            # 观测字段: 这根 bar 是不是用实时价拼出来的（盘中=provisional）
+            "bar_date": evaluated.get("bar_date"),
+            "provisional": evaluated.get("provisional"),
         }
         if channel == "breakout":
             log_reason = "主线突破通道触发: 放量突破前高/跳空 (标准信号未过)"
@@ -680,6 +842,74 @@ class TechSignalAgent(BaseAgent):
 
 
 # ---------------------------------------------------------------------------
+# 技术信号统一入口 (buy_scan 预筛 与 TechSignalAgent 共用同一份实现)
+# ---------------------------------------------------------------------------
+
+def evaluate_tech_signals(data, symbol: str) -> dict:
+    """计算四种技术形态 + 主线突破通道, 纯本地、不调用 LLM。
+
+    返回 ``{available, passed, channel, signals, close, bar_date, provisional,
+    reason}``。``available=False`` 表示指标不可用（数据源故障，不是"无信号"）。
+
+    抽出模块级函数的直接原因：预筛与步骤内必须用同一份判据。原实现在步骤内，
+    扫描阶段只能用 dyn 排序猜"值得看哪几只"，池内 22 只时漏掉 19 只。
+    """
+    try:
+        indicators = data.get_stock_indicators(symbol)
+    except Exception as exc:
+        logger.warning("indicator fetch failed for %s: %s", symbol, exc)
+        indicators = None
+    if not indicators:
+        return {
+            "available": False, "passed": False, "channel": "none",
+            "signals": {}, "close": None, "reason": "技术指标数据不可用",
+        }
+
+    signals = {
+        "boll_mid_shrink_stop": TechSignalAgent._boll_mid_shrink_stop(indicators),
+        "macd_divergence": TechSignalAgent._macd_divergence(indicators),
+        "gap_pullback_shrink": TechSignalAgent._gap_pullback_shrink(indicators),
+        # 趋势动量: 追强通道, 与上面三个回调形态正交
+        "trend_momentum": TechSignalAgent._trend_momentum(indicators),
+    }
+    triggered = [k for k, v in signals.items() if v.get("triggered")]
+    passed = bool(triggered)
+    channel = "standard" if passed else "none"
+    reason = ("触发: " + ", ".join(triggered)) if passed else "四种技术形态均未触发"
+
+    # 主线突破通道 (旁路): 标准信号均未触发时, 高置信度主线标的可凭放量
+    # 突破放行。门槛 = 绝对 dyn 阈值 或 池内相对排名 —— dyn 的绝对分布随
+    # 雷达评分口径漂移, 纯绝对阈值会把通道长期关闭（实测池内中位数 0.42）。
+    if not passed:
+        try:
+            pool = db_ops.get_optional_stock(symbol) or {}
+        except Exception:
+            pool = {}
+        dyn = float(pool.get("dyn_confidence", CONF_DEFAULT) or CONF_DEFAULT)
+        stage = pool.get("stage_batch", "BODY") or "BODY"
+        if (
+            stage in ("HEAD", "BODY")
+            and (dyn >= CONF_BREAKOUT_THRESHOLD or TechSignalAgent._dyn_rank_top(symbol, dyn))
+            and TechSignalAgent._check_breakout(indicators)
+        ):
+            passed = True
+            channel = "breakout"
+            reason = "主线突破通道触发: 放量突破前高/跳空 (标准信号未过)"
+
+    return {
+        "available": True,
+        "passed": passed,
+        "channel": channel,
+        "signals": signals,
+        "close": (indicators.get("close_series") or [None])[-1],
+        # 这根 bar 是哪天的、是否由实时价拼成（盘中 provisional=True）
+        "bar_date": indicators.get("bar_date"),
+        "provisional": indicators.get("provisional"),
+        "reason": reason,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 7.2.2 催化事件 Agent
 # ---------------------------------------------------------------------------
 
@@ -810,14 +1040,21 @@ class SecondVerificationAgent(BaseAgent):
             f"## 最新新闻\n{news_digest or '(无)'}\n\n"
             f"## 基本面\n{(fundamentals or '(无)')[:1200]}\n\n"
             "要求:\n"
-            "1. 检查入选时利空清单中的重大利空是否消除; 未消除时给出风险等级 "
-            "bear_risk_level (low=旧闻/影响有限, medium=需跟踪但可接受, "
-            "high=足以否决建仓)\n"
+            "1. 判断利空**是否变得更糟**（不是「是否消除」）。入选利空多是 ROE 偏低、"
+            "估值偏高、换手率低这类结构性事实，短期内不可能消失，但它们**不构成**"
+            "买入否决理由。只有出现**新的恶化证据**（业绩下修/监管处罚/订单流失/"
+            "行业景气逆转）才算恶化：此时 bear_worsened=true。\n"
+            "   仅当利空恶化到足以否决建仓时 bear_risk_level=high；"
+            "旧闻/影响有限=low；需跟踪但可接受=medium。"
+            "「未消除但没有恶化」应当给通过。\n"
             "2. 三种市场情景 (上涨/震荡/下跌) 推演买入后的走势\n"
-            "3. 评估风险收益比, 不达标拒绝\n"
+            "3. 风险收益比：必须给数值 risk_reward = 预期收益 / 止损风险，"
+            "风险收益比 < "
+            f"{MIN_RISK_REWARD_RATIO} 时应拒绝\n"
             "4. 生成操作规划: 止损位百分比(默认5%, A股硬性止损)、止盈百分比、加仓条件列表\n"
             "输出 JSON: passed, reason, major_bear_resolved, bear_risk_level, "
-            "bull_scenario, range_scenario, bear_scenario, risk_reward_ratio, "
+            "bear_worsened, bull_scenario, range_scenario, bear_scenario, "
+            "risk_reward(数值), risk_reward_ratio(文本), "
             "stop_loss_pct, take_profit_pct, add_position_conditions, "
             "predicted_path(后期走势预测)."
         )
@@ -841,25 +1078,40 @@ class SecondVerificationAgent(BaseAgent):
             self.report(flow_type, flow_id, step, result)
             return result
 
-        # 通过判定 (P1-3): LLM 结论 AND 「利空风险等级不是 high」。
-        # 原实现是 passed AND major_bear_resolved → 只要利空清单里还剩一条就
-        # 拒绝, 与「宁缺毋滥」的初衷相反 (会漏掉最优标的)。
+        # 通过判定 (P1-3 修正版): LLM 结论 AND 「利空没有恶化到否决」AND
+        # 「风险收益比达标」。
+        #
+        # 原实现是 passed AND major_bear_resolved —— 只要利空清单里还剩一条就
+        # 拒绝。而清单里多是 ROE 偏低、PE 偏高、换手率低这类结构性事实，几天内
+        # 不可能"消除"：实测 2026-10-02 之后 27 次进入二次验证、0 次通过，
+        # 这一关成了结构性死锁。判据改为「是否恶化」——买入前该问的是这个。
         bear_level = str(report.bear_risk_level or "medium").strip().lower()
+        # 沿用「high 且未消除才否决」的既有口径, 叠加新判据「利空恶化且未消除」。
+        # 注意这里不再要求 major_bear_resolved=True 才通过 —— 只有 high 级才看它。
         bear_blocked = bear_level == "high" and not report.major_bear_resolved
-        passed = bool(report.passed) and not bear_blocked
+        if bool(report.bear_worsened) and not report.major_bear_resolved:
+            bear_blocked = True
+        rr = _parse_risk_reward(report)
+        weak_rr = bool(
+            MIN_RISK_REWARD_RATIO > 0 and 0 < rr < MIN_RISK_REWARD_RATIO
+        )
+        passed = bool(report.passed) and not bear_blocked and not weak_rr
         # 结构化拒绝原因: 便于事后统计「到底卡在哪个子条件」(此前只有自由文本)
         if passed:
             reject_stage = ""
         elif not report.passed:
             reject_stage = "llm_rejected"
+        elif bear_blocked:
+            reject_stage = "bear_deteriorated" if report.bear_worsened else "major_bear_high"
         else:
-            reject_stage = "major_bear_high"
+            reject_stage = "weak_risk_reward"
         result = {
             "decision": "passed" if passed else "rejected",
             "passed": passed,
             "reason": report.reason,
             "major_bear_resolved": report.major_bear_resolved,
             "bear_risk_level": bear_level,
+            "bear_worsened": report.bear_worsened,
             "reject_stage": reject_stage,
             "scenarios": {
                 "bull": report.bull_scenario,
@@ -867,6 +1119,7 @@ class SecondVerificationAgent(BaseAgent):
                 "bear": report.bear_scenario,
             },
             "risk_reward_ratio": report.risk_reward_ratio,
+            "risk_reward": rr,
             "plan": {
                 "stop_loss_pct": max(float(report.stop_loss_pct or 5.0), 1.0),
                 "take_profit_pct": max(float(report.take_profit_pct or 15.0), 5.0),

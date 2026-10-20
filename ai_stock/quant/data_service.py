@@ -42,6 +42,137 @@ def _market_today() -> str:
     return datetime.now(_MARKET_TZ).strftime("%Y-%m-%d")
 
 
+def _market_now() -> datetime:
+    """A 股市场当前时间 (带时区)."""
+    return datetime.now(_MARKET_TZ)
+
+
+def _session_progress(dt: Optional[datetime] = None) -> float:
+    """当日交易时段已走过的比例 (0~1), 用于把盘中成交量折算成全天量级。
+
+    A 股日线接口在盘中不返回当天的未完成 K 线（mootdx 日线只给已收盘的 bar），
+    于是「10 分钟扫一次」这个调度全天拿到的都是昨天收盘价 —— 技术信号天然滞后
+    一天（2026-10-20 实测：688002 全天 24 次扫描 close 恒为 157.79，实际收
+    160.95）。这里按实时价补一根 provisional bar，成交量则需要按已过时段折算，
+    否则上午 10 点的量永远小于全天均量，「放量突破」通道整个上午都打不开。
+    """
+    from .config import AFTERNOON_SESSION, MORNING_SESSION
+
+    dt = dt or _market_now()
+    minutes = dt.hour * 60 + dt.minute
+    m_start = MORNING_SESSION[0] * 60 + MORNING_SESSION[1]
+    m_end = MORNING_SESSION[2] * 60 + MORNING_SESSION[3]
+    a_start = AFTERNOON_SESSION[0] * 60 + AFTERNOON_SESSION[1]
+    a_end = AFTERNOON_SESSION[2] * 60 + AFTERNOON_SESSION[3]
+    total = (m_end - m_start) + (a_end - a_start)
+    if total <= 0:
+        return 1.0
+    if minutes <= m_start:
+        return 0.0
+    if minutes <= m_end:
+        elapsed = minutes - m_start
+    elif minutes < a_start:
+        elapsed = m_end - m_start            # 午休: 按上午收盘计
+    elif minutes <= a_end:
+        elapsed = (m_end - m_start) + (minutes - a_start)
+    else:
+        return 1.0
+    return max(0.0, min(elapsed / total, 1.0))
+
+
+def _quote_volume_estimate(quote: dict, price: float, progress: float) -> float:
+    """用实时换手率 × 流通股本反推成交量, 并按已过时段折算到全天量级。
+
+    换手率 = 成交量 / 流通股本, 因此 成交量 = 换手率 × 流通股本。数据源只给
+    「当日累计换手」, 盘中除以时段进度即得全天等效量 (收盘后 progress=1)。
+    任一字段缺失返回 0.0 —— 调用方退化, 不猜。
+    """
+    turnover = _to_float((quote or {}).get("turnover_pct"))
+    float_mcap = _to_float((quote or {}).get("float_mcap"))
+    if turnover <= 0 or float_mcap <= 0 or price <= 0:
+        return 0.0
+    float_shares = float_mcap / price
+    volume = turnover / 100.0 * float_shares
+    if progress < 0.1:          # 刚开盘一两分钟, 折算系数太小会放大成噪音
+        progress = 0.1
+    return volume / progress
+
+
+def _merge_provisional_bar(df, quote: dict, now: Optional[datetime] = None):
+    """把实时行情拼成当天的 provisional bar, 追加到日 K 末尾（或在末尾就地更新）。
+
+    设计取舍：
+
+    - **不改缓存里的日 K。** 拼接只在读取时发生, 原始数据保持"供应商口径",
+      避免盘中价被写进缓存后被当成收盘价参与回测或落库。
+    - **一致性校验。** 只有当 ``quote.prev_close`` 与日 K 末根收盘一致（或日 K
+      末根已经是今天）时才拼接; 否则说明两个数据源不同步, 宁可不拼 —— 拼错
+      一根 bar 比少一根更危险。
+    - **成交量按已过时段折算**（见 ``_session_progress``）, 换手率拿不到时退化
+      为近 20 日均量（等同于"量比 = 1"）, 既不会误报放量, 也不会把缩量形态
+      全判成 False 而导致信号全灭。
+    """
+    import pandas as pd
+
+    if df is None or len(df) == 0 or not quote:
+        return df
+    if quote.get("degraded_from_ohlcv"):
+        # 这段行情本身就是用日 K 兜底造出来的，再拼回日 K 只会造出一根假 bar
+        return df
+    price = _to_float(quote.get("price"))
+    if price <= 0:
+        return df
+    now = now or _market_now()
+    today = now.strftime("%Y-%m-%d")
+    try:
+        last_date = pd.to_datetime(df["Date"].iloc[-1]).strftime("%Y-%m-%d")
+    except Exception:
+        return df
+    if last_date > today:
+        return df                       # 未来数据: 不动
+    prev_close = _to_float(quote.get("prev_close"))
+    same_session = last_date == today
+    if not same_session and prev_close > 0:
+        last_close = _to_float(df["Close"].iloc[-1])
+        if abs(last_close - prev_close) / prev_close > 0.005:
+            # 日 K 末根与实时行情的"昨收"对不上: 两个源不同步, 不拼
+            logger.debug(
+                "provisional bar skipped: last close %.3f != prev_close %.3f",
+                last_close, prev_close,
+            )
+            return df
+
+    progress = _session_progress(now)
+    open_p = _to_float(quote.get("open")) or price
+    high_p = max(_to_float(quote.get("high")) or price, price)
+    low_p = _to_float(quote.get("low")) or price
+    low_p = min(low_p, price) if low_p > 0 else price
+    volume = _quote_volume_estimate(quote, price, progress)
+    if volume <= 0:
+        tail = [float(v) for v in df["Volume"].tail(20).tolist()]
+        volume = sum(tail) / len(tail) if tail else 0.0
+    row = {
+        "Date": pd.Timestamp(today),
+        "Open": round(open_p, 2),
+        "High": round(high_p, 2),
+        "Low": round(low_p, 2),
+        "Close": round(price, 2),
+        "Volume": float(volume),
+    }
+    if same_session:
+        # 末根就是今天: 就地覆盖成最新的盘中值（保留已有的更低 low / 更高 high）
+        for col, value in row.items():
+            if col == "Date":
+                continue
+            if col in ("High", "Low") and col in df.columns:
+                existing = _to_float(df[col].iloc[-1])
+                if existing > 0:
+                    value = max(existing, value) if col == "High" else min(existing, value)
+            df.loc[df.index[-1], col] = value
+        return df
+    return pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+
+
 # ---------------------------------------------------------------------------
 # 实时行情: 多源取数 (P0-1 延伸)
 # ---------------------------------------------------------------------------
@@ -75,7 +206,7 @@ def _quote_from_eastmoney(code: str) -> Optional[dict]:
         market = "0"
     params = {
         "secid": f"{market}.{code}",
-        "fields": "f43,f44,f45,f46,f57,f58,f60,f107,f116,f117",
+        "fields": "f43,f44,f45,f46,f57,f58,f60,f107,f116,f117,f168",
         "fltt": "2",
         "invt": "2",
     }
@@ -92,7 +223,11 @@ def _quote_from_eastmoney(code: str) -> Optional[dict]:
         "name": str(d.get("f58", "")),
         "price": price,
         "prev_close": prev_close,
+        "open": _to_float(d.get("f46")),
+        "high": _to_float(d.get("f44")),
+        "low": _to_float(d.get("f45")),
         "change_pct": round(change_pct, 2),
+        "turnover_pct": _to_float(d.get("f168")),
         "limit_up": round(prev_close * (1 + limit_ratio), 2),
         "limit_down": round(prev_close * (1 - limit_ratio), 2),
         "limit_ratio": limit_ratio,
@@ -122,12 +257,17 @@ def _quote_from_tencent(code: str) -> Optional[dict]:
         "name": str(row.get("name", "")),
         "price": price,
         "prev_close": prev_close,
+        "open": _to_float(row.get("open")),
+        "high": _to_float(row.get("high")),
+        "low": _to_float(row.get("low")),
         "change_pct": round(change_pct, 2),
+        "turnover_pct": _to_float(row.get("turnover_pct")),
         "limit_up": limit_up,
         "limit_down": limit_down,
         "limit_ratio": limit_ratio,
         "market_cap": 0.0,      # 腾讯给的是亿元口径, 与东财元口径不同, 不混用
-        "float_mcap": 0.0,
+        # 流通市值按元口径换算, 供「换手率反推成交量」使用 (provisional bar)
+        "float_mcap": _to_float(row.get("float_mcap_yi")) * 1e8,
         "source": "tencent",
     }
 
@@ -323,8 +463,15 @@ class DataService:
     # 个股 K 线 + 技术指标 (本地 stockstats 计算)
     # ------------------------------------------------------------------
 
-    def get_ohlcv(self, symbol: str, lookback_days: int = 120) -> "object":
-        """个股日 K DataFrame (Date/Open/High/Low/Close/Volume), 解析自 get_stock_data."""
+    def get_ohlcv(
+        self, symbol: str, lookback_days: int = 120, live: bool = False,
+    ) -> "object":
+        """个股日 K DataFrame (Date/Open/High/Low/Close/Volume), 解析自 get_stock_data.
+
+        ``live=True`` 时把实时行情拼成当天的 provisional bar（见
+        ``_merge_provisional_bar``）—— 盘中决策必须用它，否则拿到的永远是
+        昨天收盘价（日线接口盘中不返回未完成的 bar）。
+        """
         import pandas as pd
 
         end = _market_today()
@@ -373,6 +520,14 @@ class DataService:
             df["Date"] = pd.to_datetime(df["Date"])
             for col in ("Open", "High", "Low", "Close", "Volume"):
                 df[col] = df[col].astype(float)
+            if live:
+                try:
+                    quote = self.get_realtime_quote(symbol)
+                except Exception as exc:
+                    logger.debug("live quote unavailable for %s: %s", symbol, exc)
+                    quote = None
+                if quote:
+                    df = _merge_provisional_bar(df, quote)
             return df
         except Exception as exc:
             logger.warning("ohlcv cache decode failed for %s: %s", symbol, exc)
@@ -382,17 +537,27 @@ class DataService:
         self,
         symbol: str,
         lookback_days: int = 120,
+        live: bool = True,
     ) -> Optional[dict]:
         """基于日 K 本地计算技术指标 (stockstats), 返回最近一根 K 线的指标 dict.
 
         指标: boll(中轨)/boll_ub/boll_lb, macd/macds/macdh, rsi, kdjk/kdjd/kdj,
         atr, close_10_ema, close_50_sma, close_200_sma, volume 比率.
+
+        ``live=True``（默认）会把实时价拼成当天的 provisional bar 再算 —— 盘中
+        信号必须反映现价。收盘后拿到的最后一根就是今天，行为与原来一致。
         """
-        df = self.get_ohlcv(symbol, lookback_days)
+        df = self.get_ohlcv(symbol, lookback_days, live=live)
         if df is None or len(df) < 30:
             return None
         try:
-            return compute_indicators(df)
+            indicators = compute_indicators(df)
+            # 观测字段: 排查"信号用的是哪天的数据"时无需再翻缓存表
+            indicators["bar_date"] = str(df["Date"].iloc[-1])[:10]
+            indicators["provisional"] = bool(
+                indicators["bar_date"] == _market_today()
+            )
+            return indicators
         except Exception as exc:
             logger.warning("Indicator compute failed for %s: %s", symbol, exc)
             return None
