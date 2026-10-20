@@ -29,6 +29,15 @@ from .data_service import get_data_service
 
 logger = logging.getLogger(__name__)
 
+# 市场时区 (A 股 UTC+8)。下单时段判断必须用它, 不能用主机本地时区:
+# 主机在西半球时北京 10:00 被判成深夜, 盘中单全被"非交易时段"拒掉。
+_MARKET_TZ = timezone(timedelta(hours=8))
+
+
+def _now_market() -> datetime:
+    """当前市场时间 —— 单一时钟源, 便于测试钉住（生产走真实时钟）。"""
+    return datetime.now(_MARKET_TZ)
+
 
 @dataclass
 class CheckResult:
@@ -85,6 +94,20 @@ def pre_trade_check(
     # 1. 全局总开关 — 一键紧急熔断, 无需重启进程 (§14.5)
     if db_ops.get_config_value("global_trade_enable", "1") != "1":
         return CheckResult(False, "全局交易开关关闭 (global_trade_enable=0)", details)
+
+    # 1.5 交易时段闸门 (2026-10-20): 非交易时段一律不下单。
+    # 调度只在盘中入队扫描, 但 flow 是异步执行的 —— 11:25 启动的流程可能
+    # 11:35 才走到建仓, 15:00 之后同理。没有这道闸门时盘后照样下单: 模拟盘
+    # 按最近价成交、实盘接口直接拒单或转成次日委托, 账实立刻不一致。
+    # 买卖同闸: 盘后止损单挂着只会变成次日开盘市价单, 风险更大。
+    if db_ops.get_config_value("trading_session_guard_enable", "1") == "1":
+        from .calendar_utils import is_trading_time
+
+        now = _now_market()
+        if not is_trading_time(now):
+            return CheckResult(
+                False, f"非交易时段 ({now:%H:%M}), 拒绝下单", details,
+            )
 
     # 2. 账户级风控冻结 (总回撤 / 单日亏损, 只允许卖出)
     if order.side == OrderSide.BUY:

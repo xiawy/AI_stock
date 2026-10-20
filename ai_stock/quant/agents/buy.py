@@ -218,7 +218,7 @@ def handle_buy_scan(task: dict) -> dict:
             result["cooling"].append(symbol)
             continue
 
-        collapse_reason = hard_collapse_reason(data, symbol)
+        collapse_reason = hard_collapse_reason(data, symbol, check_tail=False)
         if collapse_reason:
             db_ops.update_optional_status(
                 symbol, "removed", remove_reason=collapse_reason,
@@ -324,18 +324,24 @@ def _cooling_symbols() -> set[str]:
 YEAR_LINE_BREAK_RATIO = 0.95
 
 
-def hard_collapse_reason(data, symbol: str) -> str:
+def hard_collapse_reason(data, symbol: str, check_tail: bool = True) -> str:
     """硬性崩塌规则（不花 LLM）: 返回原因字符串, 通过返回空串。
 
     原逻辑在 ``LogicCollapseAgent`` 里，扫描阶段需要同一套判据做预筛，
     因此提到模块级 —— 两处必须用同一份规则，否则预筛放行的票会在 flow 里
     立刻被移除，白白产生一轮噪音。
+
+    ``check_tail=False`` 跳过鱼尾检测: 它走 ``get_ohlcv(TAIL_LOOKBACK_BARS)``，
+    与主指标用的 120 根是两个缓存键，整池预筛会对数据源多打一轮请求
+    （池内 22 只 × 6 轮/小时）。鱼尾的高位放量滞涨在 flow 内仍会被查到，
+    预筛少看这一条只是偶尔多起一个 flow，代价远小于翻倍取数。
     """
-    try:
-        if is_tail_phase(data, symbol):
-            return "鱼尾高位放量滞涨"
-    except Exception as exc:
-        logger.debug("tail phase check failed for %s: %s", symbol, exc)
+    if check_tail:
+        try:
+            if is_tail_phase(data, symbol):
+                return "鱼尾高位放量滞涨"
+        except Exception as exc:
+            logger.debug("tail phase check failed for %s: %s", symbol, exc)
     try:
         indicators = data.get_stock_indicators(symbol)
     except Exception as exc:

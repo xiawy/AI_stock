@@ -81,7 +81,7 @@ class TestBuyScanCoverage:
         monkeypatch.setattr(buy_mod, "db_ops", _FakeDbOps(pool))
         monkeypatch.setattr(buy_mod, "get_orchestrator", lambda: orch)
         monkeypatch.setattr(buy_mod, "get_data_service", lambda: object())
-        monkeypatch.setattr(buy_mod, "hard_collapse_reason", lambda data, sym: "")
+        monkeypatch.setattr(buy_mod, "hard_collapse_reason", lambda data, sym, **kw: "")
         monkeypatch.setattr(
             buy_mod, "evaluate_tech_signals",
             lambda data, sym: {
@@ -163,7 +163,7 @@ class TestBuyScanCoverage:
         mod, orch = self._patch(monkeypatch, pool, set())
         removed: list[tuple] = []
         monkeypatch.setattr(
-            mod, "hard_collapse_reason", lambda data, sym: "跌破年线 5%",
+            mod, "hard_collapse_reason", lambda data, sym, **kw: "跌破年线 5%",
         )
         monkeypatch.setattr(
             mod.db_ops, "update_optional_status",
@@ -189,6 +189,28 @@ class _FakeDbOps:
 
     def update_optional_status(self, symbol, status, remove_reason=""):
         return None
+
+
+@pytest.mark.unit
+def test_prescreen_skips_tail_check_to_halve_fetches(monkeypatch):
+    """预筛不查鱼尾：鱼尾走另一个 K 线缓存键，整池预筛会翻倍取数。"""
+    from ai_stock.quant.agents import buy as buy_mod
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        buy_mod, "is_tail_phase",
+        lambda data, symbol: calls.append(symbol) or True,
+    )
+
+    class _Data:
+        def get_stock_indicators(self, symbol):
+            return {"close_series": [10.0], "close_200_sma": 5.0}
+
+    data = _Data()
+    assert buy_mod.hard_collapse_reason(data, "600000", check_tail=False) == ""
+    assert calls == []                       # 预筛没触发鱼尾取数
+    assert "鱼尾" in buy_mod.hard_collapse_reason(data, "600000")
+    assert calls == ["600000"]               # flow 内仍然查
 
 
 # ---------------------------------------------------------------------------
@@ -378,3 +400,68 @@ class _FakeMarket:
 
     def get_realtime_quote(self, symbol):
         return {"name": "测试", "price": 10.0}
+
+
+# ---------------------------------------------------------------------------
+# 交易时段闸门：flow 异步执行会跨到午休/收盘之后
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestTradingSessionGate:
+    SNAP = {
+        "available_cash": 1_000_000.0, "market_value": 0.0,
+        "total_assets": 1_000_000.0, "drawdown_pct": 0.0, "daily_pnl": 0.0,
+    }
+
+    def _order(self):
+        from ai_stock.quant.broker import OrderRequest, OrderSide, OrderType
+
+        return OrderRequest(
+            symbol="600000", side=OrderSide.BUY, quantity=100,
+            order_type=OrderType.MARKET,
+        )
+
+    def _check(self, monkeypatch, when):
+        from ai_stock.quant import db_ops, risk_control
+
+        class _Svc:
+            def get_realtime_quote(self, symbol):
+                return {"price": 10.0, "name": "测试", "limit_up": 11.0, "limit_down": 9.0}
+
+        # 闸门用例只看时段判定：关掉大盘择时门并伪造行情，避免走真实网络
+        db_ops.set_config_value("market_timing_enable", "0")
+        monkeypatch.setattr(risk_control, "get_data_service", lambda: _Svc())
+        monkeypatch.setattr(risk_control, "_now_market", lambda: when)
+        return risk_control.pre_trade_check(self._order(), dict(self.SNAP))
+
+    def test_rejects_after_close(self, quant_env, monkeypatch):
+        """21:00 走到建仓步骤 → 不得下单（原来没有这道闸门）。"""
+        from datetime import datetime, timedelta, timezone
+
+        when = datetime(2026, 10, 20, 21, 0, tzinfo=timezone(timedelta(hours=8)))
+        result = self._check(monkeypatch, when)
+        assert result.ok is False
+        assert "非交易时段" in result.reason
+
+    def test_rejects_during_lunch_break(self, quant_env, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        when = datetime(2026, 10, 20, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+        assert self._check(monkeypatch, when).ok is False
+
+    def test_passes_gate_inside_session(self, quant_env, monkeypatch):
+        """盘中不应被闸门拦下（后续可能因其它规则拒绝，但不是时段原因）。"""
+        from datetime import datetime, timedelta, timezone
+
+        when = datetime(2026, 10, 20, 10, 30, tzinfo=timezone(timedelta(hours=8)))
+        assert "非交易时段" not in self._check(monkeypatch, when).reason
+
+    def test_gate_can_be_disabled(self, quant_env, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        from ai_stock.quant import db_ops
+
+        db_ops.set_config_value("trading_session_guard_enable", "0")
+        when = datetime(2026, 10, 20, 21, 0, tzinfo=timezone(timedelta(hours=8)))
+        assert "非交易时段" not in self._check(monkeypatch, when).reason

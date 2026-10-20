@@ -49,6 +49,22 @@ def _hermetic_dataflow_state(monkeypatch):
     monkeypatch.setattr(a_stock, "_ths_block_warned", [False])
 
 
+@pytest.fixture(autouse=True)
+def _pin_trading_clock(monkeypatch):
+    """把风控的"当前市场时间"钉在交易日盘中 (2026-10-20 10:30 +8)。
+
+    2026-10-20 新增的「交易时段闸门」会让 ``pre_trade_check`` 在夜间/周末一律
+    拒单，风控用例因此在 CI 上会随时段全红。这里统一钉住时钟；生产路径不走
+    这个 fixture。需要验证「盘后拒单」的用例自行再 monkeypatch 覆盖即可。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from ai_stock.quant import risk_control
+
+    pinned = datetime(2026, 10, 20, 10, 30, tzinfo=timezone(timedelta(hours=8)))
+    monkeypatch.setattr(risk_control, "_now_market", lambda: pinned)
+
+
 @pytest.fixture()
 def mock_llm_client():
     client = MagicMock()

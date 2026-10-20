@@ -389,6 +389,9 @@ SYSTEM_CONFIG_SEED = {
     "trade_frozen": ("0", "账户级风控冻结: 1=只允许卖出, 0=正常"),
     # 大盘择时门: 1=开启 (沪深300 走强才允许新建仓)
     "market_timing_enable": ("1", "大盘择时门: 1=开启, 0=关闭 (只减不加)"),
+    # 交易时段闸门: 1=开启 (非交易时段拒绝任何下单)。调度只在盘中入队, 但 flow
+    # 异步执行会跨到午休/收盘之后, 没有这道闸门时盘后照样下单 (2026-10-20 发现)。
+    "trading_session_guard_enable": ("1", "交易时段闸门: 1=非交易时段拒单, 0=关闭"),
 }
 
 # ---------------------------------------------------------------------------
@@ -398,7 +401,7 @@ SYSTEM_CONFIG_SEED = {
 # 执行语义: 启动时若库版本 < CONFIG_SCHEMA_VERSION, 按 version 升序执行,
 # 且**只迁移「值仍是旧默认值」的键** —— 运维手工改过的值绝不动。
 CONFIG_SCHEMA_KEY = "config_schema_version"
-CONFIG_SCHEMA_VERSION = 3
+CONFIG_SCHEMA_VERSION = 4
 
 CONFIG_MIGRATIONS: tuple[dict, ...] = (
     {
@@ -415,6 +418,13 @@ CONFIG_MIGRATIONS: tuple[dict, ...] = (
         "description": "新增大盘择时门开关 (存量库补键)",
         "changes": (
             ("market_timing_enable", ("",), "1"),
+        ),
+    },
+    {
+        "version": 4,
+        "description": "新增交易时段闸门开关 (存量库补键)",
+        "changes": (
+            ("trading_session_guard_enable", ("",), "1"),
         ),
     },
 )
