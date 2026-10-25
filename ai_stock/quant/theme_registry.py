@@ -24,7 +24,7 @@ from typing import Iterable, Optional
 
 from sqlalchemy import delete, select
 
-from .db import QuantBase, get_engine, init_quant_db, session_scope
+from .db import QuantBase, create_all_race_safe, get_engine, init_quant_db, session_scope
 from .db_models import QuantTheme, QuantThemeAlias, QuantThemeDaily, QuantThemeStock
 from .theme_seed import GENERIC_TOKENS
 
@@ -70,7 +70,7 @@ def ensure_schema() -> None:
 
     init_quant_db()
     engine = get_engine()
-    QuantBase.metadata.create_all(bind=engine)
+    create_all_race_safe(QuantBase.metadata, engine)
 
     try:
         cols = {c["name"] for c in inspect(engine).get_columns("quant_theme")}

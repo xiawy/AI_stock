@@ -16,10 +16,12 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from collections.abc import Generator
 from pathlib import Path
 
 from sqlalchemy import create_engine, event, inspect, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import QUANT_DB_URL_ENV
@@ -126,6 +128,31 @@ def session_scope() -> Session:
     return _SessionFactory()
 
 
+def create_all_race_safe(metadata, bind=None, attempts: int = 3) -> None:
+    """多 worker 同时启动时的 ``create_all`` 竞态兜底。
+
+    uvicorn ``--workers N`` 下每个 worker 各跑一遍 startup。``create_all`` 的
+    ``checkfirst`` 是「先查再建」，两个 worker 同时查都会认为表不存在，于是都发
+    ``CREATE TABLE``；后到的那条抛 ``table xxx already exists``，worker 直接退出，
+    uvicorn 随即把整组进程停摆（父进程退出码 0，systemd 不会自动拉起）。
+    2026-10-25 上线新增表时真实踩到过一次。
+
+    这里只针对 ``already exists`` 重试：此时表已由另一个 worker 提交完成，重试时
+    ``checkfirst`` 会跳过。其它 ``OperationalError``（I/O 错误、权限、语法）**原样
+    抛出** —— 真正的 schema 问题不能被兜底逻辑吞掉。
+    """
+    engine = bind if bind is not None else get_engine()
+    for attempt in range(attempts):
+        try:
+            metadata.create_all(bind=engine)
+            return
+        except OperationalError as exc:
+            if "already exists" not in str(exc).lower() or attempt == attempts - 1:
+                raise
+            logger.info("create_all 撞到并发建表, 重试 %d/%d", attempt + 1, attempts - 1)
+            time.sleep(0.2 * (attempt + 1))
+
+
 def init_quant_db() -> None:
     """建表 (幂等). 生产 schema 变更走 Alembic; 这里保持首跑零门槛.
 
@@ -136,7 +163,7 @@ def init_quant_db() -> None:
 
     engine = get_engine()
     needs_merge = _needs_legacy_merge(engine)
-    QuantBase.metadata.create_all(bind=engine)
+    create_all_race_safe(QuantBase.metadata, engine)
     if needs_merge:
         _merge_legacy_quant_db(engine)
     _migrate_multi_user_schema(engine)

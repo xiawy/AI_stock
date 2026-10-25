@@ -68,7 +68,12 @@ def init_db() -> None:
     # Import models so their tables are registered on Base.metadata.
     import app.models  # noqa: F401
 
-    Base.metadata.create_all(bind=engine)
+    # 不能直接 Base.metadata.create_all: uvicorn --workers N 下多个 worker 并行
+    # startup, checkfirst 双方都看不到表 → 都发 CREATE TABLE → 后到的抛
+    # "already exists" 让 worker 退出、整组进程停摆。统一走竞态安全的入口。
+    from ai_stock.quant.db import create_all_race_safe
+
+    create_all_race_safe(Base.metadata, engine)
     _migrate_analysis_task_state(engine)
     _migrate_news_impact_schema(engine)
 
