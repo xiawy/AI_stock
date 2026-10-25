@@ -49,6 +49,9 @@ coverage.xml
 *.py.cover
 .hypothesis/
 .pytest_cache/
+# pytest 收尾会批量删 %TEMP%/pytest-of-*/garbage-*，撞沙箱 safe-delete 让整轮退出码非 0。
+# 把 TEMP/TMP 指到仓库内该目录再跑，跑完手动删。
+.pytest-tmp/
 cover/
 
 # Translations
