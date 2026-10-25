@@ -242,8 +242,17 @@ class PipelineService:
                     "previous_date": "", **no_previous_diff(items)}
 
         prev_ranks = get_ranking_map(prev["id"])
+        # key 兜底必须与 get_ranking_map 同口径（都走 normalize_title）：
+        # 历史侧用 normalize_title(title)，当前侧若用原始 title，cluster_id 为空
+        # 的老数据会在两边都命中"无此 key"，表现为整榜全新 + 整榜掉榜。
+        from ai_stock.pipeline.news_board import normalize_title
+
         stamped = [
-            {**item, "key": item.get("cluster_id") or item.get("title") or ""}
+            {
+                **item,
+                "key": item.get("cluster_id")
+                or normalize_title(item.get("title") or ""),
+            }
             for item in items
         ]
         previous = [
