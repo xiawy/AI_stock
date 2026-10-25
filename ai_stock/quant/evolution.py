@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import math
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable, Optional, Sequence
 
@@ -57,52 +58,101 @@ def time_series_split(n: int) -> tuple[range, range, range]:
 # 简化回测器: 止损/时间止损持有策略
 # ---------------------------------------------------------------------------
 
+@dataclass(frozen=True)
+class PriceSeries:
+    """一段行情: 收盘价 + 可选最低价 (同长度).
+
+    回测入口同时接受「裸收盘价序列」与 ``PriceSeries``: 前者是既有调用与历史
+    指标的输入形态 (不能变, 否则历史指标不可比), 后者让回测能按最低价判止损
+    (与实盘「实时价破位即卖」同口径)。实现 ``__len__`` 是为了让 ``len(series)``
+    这类长度判断对两种形态都成立。
+    """
+
+    close: Sequence[float]
+    low: Optional[Sequence[float]] = None
+
+    def __len__(self) -> int:
+        return len(self.close)
+
+    @classmethod
+    def coerce(cls, value) -> "PriceSeries":
+        """把裸序列或 PriceSeries 统一成 PriceSeries."""
+        return value if isinstance(value, cls) else cls(close=value)
+
+
 def backtest_stop_policy(
     closes: Sequence[float],
     stop_loss_pct: float = STOP_LOSS_PCT,
     time_stop_days: int = TIME_STOP_TRADING_DAYS,
     min_gain: float = TIME_STOP_MIN_GAIN,
+    lows: Optional[Sequence[float]] = None,
 ) -> dict:
     """在给定收盘价序列上模拟「首日建仓 + 止损/时间止损」单仓.
 
-    规则与实盘一致: 收盘价 (非盘中瞬时价) 跌破止损线清仓; 持有满
-    ``time_stop_days`` 根 K 线且最大涨幅 < ``min_gain`` 清仓; 否则持有
-    到期末. 返回 {total_return, max_drawdown, holding_bars, exit_reason}.
+    规则与实盘一致: 持有满 ``time_stop_days`` 根 K 线且最大涨幅 < ``min_gain``
+    清仓; 否则持有到期末. 返回 {total_return, max_drawdown, holding_bars,
+    exit_reason, exit_price_source}.
+
+    止损判据二选一:
+
+    - 不传 ``lows``: 用收盘价判破位 (旧口径), 成交价取当日收盘价;
+    - 传 ``lows``: 用当日**最低价**判破位 —— 与实盘「实时价破位即卖」同口径,
+      成交价取 ``min(止损价, 当日收盘价)`` (跳空低开时按更差的收盘价成交)。
+      只用收盘价判会系统性低估止损触发次数 (盘中破位、收盘收回)。
     """
-    closes = [float(c) for c in closes if c and c > 0]
-    if len(closes) < 2:
+    raw_close = [float(c or 0.0) for c in closes]
+    raw_low: Optional[list[float]] = None
+    if lows is not None:
+        raw_low = [float(v or 0.0) for v in lows]
+        if len(raw_low) != len(raw_close):
+            logger.warning(
+                "backtest_stop_policy: lows 长度 %d != closes 长度 %d, 忽略最低价",
+                len(raw_low), len(raw_close),
+            )
+            raw_low = None
+    # 无效收盘价整根剔除, 最低价同步剔除, 保持索引对齐
+    keep = [i for i, c in enumerate(raw_close) if c > 0]
+    prices = [raw_close[i] for i in keep]
+    low_seq = [raw_low[i] for i in keep] if raw_low is not None else None
+    if len(prices) < 2:
         return {"total_return": 0.0, "max_drawdown": 0.0,
                 "holding_bars": 0, "exit_reason": "no_data"}
 
-    entry = closes[0]
+    entry = prices[0]
+    stop_price = entry * (1 - stop_loss_pct)
+    source = "low" if low_seq is not None else "close"
     peak = entry
     max_dd = 0.0
-    for i, price in enumerate(closes[1:], start=1):
+    for i, price in enumerate(prices[1:], start=1):
         peak = max(peak, price)
         max_dd = max(max_dd, (peak - price) / peak if peak else 0.0)
-        loss_ratio = (entry - price) / entry
-        if loss_ratio >= stop_loss_pct:
+        breached = (low_seq[i] <= stop_price) if low_seq is not None else (price <= stop_price)
+        if breached:
+            exit_price = min(stop_price, price) if low_seq is not None else price
             return {
-                "total_return": (price - entry) / entry,
+                "total_return": (exit_price - entry) / entry,
                 "max_drawdown": max_dd,
                 "holding_bars": i,
                 "exit_reason": "stop_loss",
+                "exit_price_source": source,
             }
         if i >= time_stop_days:
-            window_gain = (max(closes[1:i + 1]) - entry) / entry
+            window_gain = (max(prices[1:i + 1]) - entry) / entry
             if window_gain < min_gain:
                 return {
                     "total_return": (price - entry) / entry,
                     "max_drawdown": max_dd,
                     "holding_bars": i,
                     "exit_reason": "time_stop",
+                    "exit_price_source": "close",
                 }
-    exit_price = closes[-1]
+    exit_price = prices[-1]
     return {
         "total_return": (exit_price - entry) / entry,
         "max_drawdown": max_dd,
-        "holding_bars": len(closes) - 1,
+        "holding_bars": len(prices) - 1,
         "exit_reason": "hold_to_end",
+        "exit_price_source": "close",
     }
 
 
@@ -133,30 +183,35 @@ def aggregate_metrics(results: list[dict]) -> dict:
 def _collect_series(
     symbols: Sequence[str],
     lookback_days: int,
-) -> dict[str, list[float]]:
-    """从数据服务拉取收盘价序列 (熔断/缓存已在 DataService 内处理)."""
+) -> dict[str, PriceSeries]:
+    """从数据服务拉取收盘价 (与最低价) 序列 (熔断/缓存已在 DataService 内处理)."""
     from .data_service import get_data_service
 
     data = get_data_service()
-    series_map: dict[str, list[float]] = {}
+    series_map: dict[str, PriceSeries] = {}
     for symbol in symbols:
         df = data.get_ohlcv(symbol, lookback_days=lookback_days)
         if df is None or len(df) < MIN_SERIES_LEN:
             logger.warning("Evolution skip %s: OHLCV 不足 (%s 根)",
                            symbol, 0 if df is None else len(df))
             continue
-        series_map[symbol] = [float(c) for c in df["Close"].tolist()]
+        lows = [float(v) for v in df["Low"].tolist()] if "Low" in df.columns else None
+        series_map[symbol] = PriceSeries(
+            close=[float(c) for c in df["Close"].tolist()], low=lows,
+        )
     return series_map
 
 
 def _segment_results(
-    series_map: dict[str, list[float]],
+    series_map: dict,
     seg: range,
     params: dict,
     base_len: int = 0,
 ) -> list[dict]:
     results = []
-    for closes in series_map.values():
+    for raw in series_map.values():
+        series = PriceSeries.coerce(raw)
+        closes = series.close
         # 右对齐切片: 各标的序列终点一致 (最新 K 线) 但长度不同,
         # 按最短序列基准右移, 保证三段窗口的日历时间轴对齐;
         # base_len=0 保持旧行为 (绝对索引) 兼容既有调用.
@@ -164,7 +219,11 @@ def _segment_results(
         segment = list(closes[offset + seg.start:offset + seg.stop])
         if len(segment) < 5:
             continue
-        results.append(backtest_stop_policy(segment, **params))
+        # 最低价必须与收盘价逐根对齐, 长度不符时宁可不用 (旧口径) 也不能错位
+        lows = None
+        if series.low is not None and len(series.low) == len(closes):
+            lows = list(series.low[offset + seg.start:offset + seg.stop])
+        results.append(backtest_stop_policy(segment, lows=lows, **params))
     return results
 
 
@@ -233,7 +292,7 @@ def evolve_stop_loss(
     """
     from .rules_engine import submit_rule_candidate, validate_sample_out_perf
 
-    series_map: dict[str, list[float]] = {}
+    series_map: dict = {}
     if closes_by_symbol:
         series_map = {k: [float(c) for c in v] for k, v in closes_by_symbol.items()}
     elif symbols:

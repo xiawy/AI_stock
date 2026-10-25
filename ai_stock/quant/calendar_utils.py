@@ -10,9 +10,18 @@ flow_state、5 交易日时间止损全部使用交易日计数，不用自然�
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
+
+# A 股市场时区 (UTC+8)。主机时区不可信: 服务器常跑 UTC, 北京 10:00 会被算成
+# 昨天 02:00 —— 交易日归属、新闻新鲜度、重试冷却都会错位 8 小时。
+MARKET_TZ = timezone(timedelta(hours=8))
+
+
+def market_now() -> datetime:
+    """当前 A 股市场时间. 所有「今天/现在」的业务判定共用这一个时钟源."""
+    return datetime.now(MARKET_TZ)
 
 try:  # 优雅降级: pip install 'chinese-calendar'
     from chinese_calendar import is_workday

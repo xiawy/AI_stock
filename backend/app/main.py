@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import (
     analysis,
     auth,
+    board,
     evolution,
     history,
     impact,
@@ -24,6 +25,7 @@ from app.api import (
     quant,
     recommendation,
     stocks,
+    strategy,
     watchlist,
 )
 from app.core.config import get_settings
@@ -288,3 +290,5 @@ app.include_router(industry.router, prefix="/api")
 app.include_router(recommendation.router, prefix="/api")
 app.include_router(evolution.router, prefix="/api")
 app.include_router(quant.router, prefix="/api")
+app.include_router(strategy.router, prefix="/api")
+app.include_router(board.router, prefix="/api")

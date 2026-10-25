@@ -24,6 +24,7 @@ from .db_models import (
     QuantCacheData,
     QuantFlowState,
     QuantIndustryBoard,
+    QuantPoolSnapshot,
     QuantTask,
     RuleTestCase,
     StockPoolHolding,
@@ -84,6 +85,18 @@ def get_all_config() -> dict[str, str]:
     with session_scope() as s:
         rows = s.query(SystemConfig).all()
         return {r.key: r.value for r in rows}
+
+
+def get_flag(key: str, default: bool = True) -> bool:
+    """读布尔型运行时开关 (``0/false/no/off`` 为假, 空值与缺失取 ``default``)。
+
+    量化里绝大多数开关都是「默认开、出问题时改库关掉」, 各处置值口径不统一
+    会出现「写了 OFF 以为是关」之类的歧义; 统一走这里。
+    """
+    raw = str(get_config_value(key, "")).strip().lower()
+    if not raw:
+        return default
+    return raw not in ("0", "false", "no", "off")
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +470,31 @@ def update_holding_plan(symbol: str, plan: dict, user_id: str | None = None) -> 
         return True
 
 
+def mutate_holding_plan(
+    symbol: str, mutator, user_id: str | None = None,
+) -> Optional[dict]:
+    """在单个 session 内原子读-改-写 ``plan_json``.
+
+    卖出退出意图与操作规划都要写 ``plan_json``, 而 ``session_scope`` 每次都是
+    新 session: 「先 get_holding 再 update_holding_plan」会让并发写入互相覆盖
+    (后写的整份 plan 把前者的改动冲掉)。``mutator`` 就地修改传入的 dict。
+
+    返回写入后的 plan; 持仓不存在 (已清仓) 返回 None。
+    """
+    from .config import SYSTEM_USER
+
+    with session_scope() as s:
+        row = s.get(StockPoolHolding, (user_id or SYSTEM_USER, symbol))
+        if row is None:
+            return None
+        plan = json.loads(row.plan_json or "{}")
+        mutator(plan)
+        row.plan_json = json.dumps(plan, ensure_ascii=False)
+        row.last_review_time = _now()
+        s.commit()
+        return plan
+
+
 # ---------------------------------------------------------------------------
 # trade_log
 # ---------------------------------------------------------------------------
@@ -725,7 +763,14 @@ def get_decisions(
     flow_id: Optional[str] = None,
     decision: Optional[str] = None,
     date: Optional[str] = None,
+    since: Optional[datetime] = None,
 ) -> list[dict]:
+    """查决策日志.
+
+    ``since`` 是**时间窗口**过滤, 与 ``date`` (自然日) 互不影响。冷却类逻辑必须
+    用 ``since`` 而不是只看 ``limit``: 高吞吐下"最近 N 条"可能只覆盖几分钟,
+    时间窗会被条数悄悄截断 (原冷却扫最近 300 条, 忙时窗口远短于 240 分钟)。
+    """
     with session_scope() as s:
         q = s.query(AgentDecisionLog).order_by(AgentDecisionLog.ts.desc())
         if agent:
@@ -736,6 +781,11 @@ def get_decisions(
             q = q.filter(AgentDecisionLog.flow_id == flow_id)
         if decision:
             q = q.filter(AgentDecisionLog.decision == decision)
+        if since is not None:
+            # SQLite 的 DateTime 比较是字符串字典序, 存储侧统一 +00:00 后缀,
+            # 边界必须先换算成 UTC, 混合偏移会让过滤失效
+            bound = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+            q = q.filter(AgentDecisionLog.ts >= bound.astimezone(timezone.utc))
         if date:
             try:
                 start = datetime.strptime(date, "%Y-%m-%d").replace(
@@ -1178,3 +1228,139 @@ def count_tasks(status: str, queue_name: Optional[str] = None) -> int:
         if queue_name:
             q = q.filter(QuantTask.queue_name == queue_name)
         return q.count()
+
+
+# ---------------------------------------------------------------------------
+# 自选池日快照 (热股榜变化视图 / 入池后表现)
+# ---------------------------------------------------------------------------
+
+
+def save_pool_snapshot(trade_date: str, rows: list[dict]) -> int:
+    """按 (trade_date, symbol) 覆盖写当日自选池快照。
+
+    *rows* 为 ``get_optional_pool()`` 返回的字典列表; 缺 symbol 的行跳过。
+    同一天多次调用(07:00/12:00/18:00 三个选股槽位)以最后一次为准 ——
+    18:00 那轮在收盘后, 才是当日定稿。
+    """
+    if not trade_date or not rows:
+        return 0
+    payload = [
+        {
+            "symbol": str(r.get("symbol") or ""),
+            "name": str(r.get("name") or ""),
+            "industry": str(r.get("industry") or ""),
+            "confidence": float(r.get("confidence") or 0.0),
+            "dyn_confidence": float(r.get("dyn_confidence") or 0.5),
+            "stage_batch": str(r.get("stage_batch") or "BODY"),
+            "status": str(r.get("status") or "active"),
+            "radar_theme": str(r.get("radar_theme") or ""),
+        }
+        for r in rows
+        if r.get("symbol")
+    ]
+    if not payload:
+        return 0
+    try:
+        with session_scope() as s:
+            s.execute(
+                delete(QuantPoolSnapshot).where(
+                    QuantPoolSnapshot.trade_date == trade_date
+                )
+            )
+            for row in payload:
+                s.add(QuantPoolSnapshot(trade_date=trade_date, **row))
+            s.commit()
+        return len(payload)
+    except Exception as exc:
+        logger.error("Failed to save pool snapshot for %s: %s", trade_date, exc)
+        return 0
+
+
+def get_pool_snapshot(trade_date: str) -> list[dict]:
+    """指定交易日的自选池快照 (按动态置信度降序)。无快照返回空列表。"""
+    if not trade_date:
+        return []
+    try:
+        with session_scope() as s:
+            rows = (
+                s.query(QuantPoolSnapshot)
+                .filter(QuantPoolSnapshot.trade_date == trade_date)
+                .all()
+            )
+            out = [r.to_dict() for r in rows]
+        out.sort(key=lambda r: r.get("dyn_confidence") or 0.0, reverse=True)
+        return out
+    except Exception as exc:
+        logger.warning("get_pool_snapshot failed for %s: %s", trade_date, exc)
+        return []
+
+
+def get_previous_pool_snapshot_date(before: str) -> str:
+    """早于 *before* 的最近一个有快照的交易日 (字符串序即日期序)。"""
+    if not before:
+        return ""
+    try:
+        with session_scope() as s:
+            row = (
+                s.query(QuantPoolSnapshot.trade_date)
+                .filter(QuantPoolSnapshot.trade_date < before)
+                .order_by(QuantPoolSnapshot.trade_date.desc())
+                .first()
+            )
+            return row[0] if row else ""
+    except Exception as exc:
+        logger.warning("get_previous_pool_snapshot_date failed: %s", exc)
+        return ""
+
+
+def get_industry_boards_since(start_date: str, limit_dates: int = 15) -> list[dict]:
+    """行业榜跨日序列: 返回 ``[{rank_date, rows[]}]``（新→旧）。
+
+    行业榜本来就按日期覆盖写, 所以跨期对比**不需要新表**; 这里一次取回
+    最近 N 个交易日的榜单, 由调用方在内存里算 Δrank / 连榜天数。
+    """
+    if not start_date:
+        return []
+    try:
+        with session_scope() as s:
+            dates = [
+                r[0] for r in s.query(QuantIndustryBoard.rank_date)
+                .filter(QuantIndustryBoard.rank_date >= start_date)
+                .distinct()
+                .order_by(QuantIndustryBoard.rank_date.desc())
+                .limit(limit_dates)
+                .all()
+            ]
+            if not dates:
+                return []
+            rows = (
+                s.query(QuantIndustryBoard)
+                .filter(QuantIndustryBoard.rank_date.in_(dates))
+                .order_by(QuantIndustryBoard.rank_date.desc(),
+                          QuantIndustryBoard.rank.asc())
+                .all()
+            )
+        grouped: dict[str, list[dict]] = {d: [] for d in dates}
+        for r in rows:
+            grouped.setdefault(r.rank_date, []).append(r.to_dict())
+        return [{"rank_date": d, "rows": grouped.get(d, [])} for d in dates]
+    except Exception as exc:
+        logger.warning("get_industry_boards_since failed: %s", exc)
+        return []
+
+
+def list_pool_snapshot_dates(limit: int = 60) -> list[str]:
+    """有池快照的交易日列表(新→旧)。"""
+    try:
+        with session_scope() as s:
+            rows = (
+                s.query(QuantPoolSnapshot.trade_date)
+                .distinct()
+                .order_by(QuantPoolSnapshot.trade_date.desc())
+                .limit(limit)
+                .all()
+            )
+            return [r[0] for r in rows if r[0]]
+    except Exception as exc:
+        logger.warning("list_pool_snapshot_dates failed: %s", exc)
+        return []

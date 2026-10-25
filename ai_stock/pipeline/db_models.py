@@ -242,6 +242,37 @@ class NewsImpactTracking(Base):
     )
 
 
+class NewsClusterMember(Base):
+    """同事件多源成员（新闻榜"一行一件事"的展开明细）。
+
+    ``cluster_news`` 会把同一事件的多家转载打上同一个 ``cluster_id``，但榜单
+    每个簇只占一个榜位，其余成员在落库时被丢掉 —— 于是前端只能显示一个
+    ``×N``，说不出"是哪几家在转"。这张表把这些成员留下来，供前端展开与
+    "独立源/同源"判断使用。
+
+    不写进 ``news_items`` 的原因：那需要给一张已存在的表加列，而该表在现网
+    已跑了一年多，加列必须手工 DDL；新表 ``CREATE TABLE IF NOT EXISTS`` 即可。
+    """
+
+    __tablename__ = "news_cluster_member"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    cluster_id: Mapped[str] = mapped_column(String(16), default="", index=True)
+    title: Mapped[str] = mapped_column(String(512), default="")
+    source: Mapped[str] = mapped_column(String(64), default="")
+    pub_time: Mapped[str] = mapped_column(String(32), default="")
+    is_representative: Mapped[int] = mapped_column(Integer, default=0)
+
+    def to_dict(self) -> dict:
+        return {
+            "title": self.title,
+            "source": self.source,
+            "pub_time": self.pub_time,
+            "is_representative": bool(self.is_representative),
+        }
+
+
 # ── 幂等补列 ────────────────────────────────────────────────────────────
 # create_all 不会给**已存在**的表补列，而 news_items 在现网库里已经跑了一年多。
 # 这里的列清单必须与 NewsItem 的映射保持一致，两个进程（backend / quant worker）
@@ -351,6 +382,17 @@ def ensure_support_tables(bind=None) -> None:
         "CREATE INDEX IF NOT EXISTS ix_news_track_theme ON news_impact_tracking (theme)",
         "CREATE INDEX IF NOT EXISTS ix_news_track_base ON news_impact_tracking (base_date)",
         "CREATE INDEX IF NOT EXISTS ix_news_track_snap ON news_impact_tracking (snapshot_id)",
+        """CREATE TABLE IF NOT EXISTS news_cluster_member (
+            id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            snapshot_id INTEGER DEFAULT 0,
+            cluster_id VARCHAR(16) DEFAULT '',
+            title VARCHAR(512) DEFAULT '',
+            source VARCHAR(64) DEFAULT '',
+            pub_time VARCHAR(32) DEFAULT '',
+            is_representative INTEGER DEFAULT 0
+        )""",
+        "CREATE INDEX IF NOT EXISTS ix_news_cluster_snap "
+        "ON news_cluster_member (snapshot_id, cluster_id)",
     )
     with bind.begin() as conn:
         for stmt in ddl:

@@ -5,6 +5,7 @@
       <div class="page-header">
         <h2>今日新闻榜</h2>
         <div class="header-actions">
+          <el-button type="primary" plain @click="scorecardVisible = true">成绩单</el-button>
           <el-button :icon="ArrowLeft" @click="router.push('/')">返回首页</el-button>
           <el-date-picker
             v-model="selectedDate"
@@ -28,11 +29,16 @@
             <span class="coverage-mark">?</span>
           </el-tooltip>
         </span>
+        <el-checkbox v-if="diffReady" v-model="sortByChange" size="small" class="sort-toggle">
+          按变化排序
+        </el-checkbox>
       </div>
 
+      <BoardDiffBar title="新闻榜" :summary="diffSummary" :previous-date="diffPrev" />
+
       <el-table
-        v-if="newsItems.length"
-        :data="newsItems"
+        v-if="displayItems.length"
+        :data="displayItems"
         stripe
         highlight-current-row
         @row-click="showDetail"
@@ -44,6 +50,15 @@
           </template>
         </el-table-column>
 
+        <el-table-column label="变化" width="80" align="center">
+          <template #default="{ row }">
+            <span v-if="changeOf(row)" class="chg" :class="changeOf(row).change">
+              {{ changeText(changeOf(row)) }}
+            </span>
+            <span v-else class="dim">—</span>
+          </template>
+        </el-table-column>
+
         <el-table-column label="标题" min-width="300">
           <template #default="{ row }">
             <div class="title-cell">
@@ -51,12 +66,10 @@
                 {{ typeLabel(row.event_type) }}
               </span>
               <span class="title-text">{{ row.title }}</span>
-              <el-tooltip
-                v-if="isBackfilled(row)"
-                content="历史数据：2026-10 重构前落库的旧新闻用规则补齐字段，置信度固定 0.30，非当时 LLM 判断"
-                placement="top"
-              >
-                <span class="backfill-tag">回填</span>
+              <el-tooltip placement="top" :content="assessHint(row)">
+                <span class="assess-tag" :class="assessClass(row.assess_source)">
+                  {{ assessLabel(row.assess_source) }}
+                </span>
               </el-tooltip>
             </div>
           </template>
@@ -123,10 +136,16 @@
           </template>
         </el-table-column>
 
-        <el-table-column label="来源" width="120">
+        <el-table-column label="来源" width="130">
           <template #default="{ row }">
             <span class="src">{{ row.source }}</span>
-            <span v-if="row.source_count > 1" class="src-count">×{{ row.source_count }}</span>
+            <el-tooltip
+              v-if="row.source_count > 1"
+              content="同一事件被多家媒体报道，榜单只占一个榜位；点击查看是哪几家"
+              placement="top"
+            >
+              <span class="src-count clickable" @click.stop="showCluster(row)">×{{ row.source_count }}</span>
+            </el-tooltip>
           </template>
         </el-table-column>
       </el-table>
@@ -134,6 +153,25 @@
       <el-empty v-else-if="!loading" description="暂无新闻数据" />
 
       <ImpactDetail v-model="detailVisible" :news="selectedNews" />
+
+      <BoardScorecard v-model="scorecardVisible" />
+
+      <el-dialog v-model="clusterVisible" :title="`同事件多源 · ${clusterTitle}`" width="560px">
+        <div v-loading="clusterLoading">
+          <div v-if="clusterMembers.length" class="cluster-list">
+            <div v-for="(m, i) in clusterMembers" :key="i" class="cluster-row">
+              <span class="src-name">{{ m.source || '未标来源' }}</span>
+              <span class="cluster-title">{{ m.title }}</span>
+              <span v-if="m.is_representative" class="rep-tag">榜位</span>
+            </div>
+          </div>
+          <p v-else-if="!clusterLoading" class="cluster-empty">
+            该快照没有保存多源明细（此表在本次上线后才开始写入，历史快照无数据）。
+            <br />
+            榜单只显示 ×{{ clusterCount }} 是聚类计数，明细需要重新生成快照后才有。
+          </p>
+        </div>
+      </el-dialog>
     </div>
   </div>
 </template>
@@ -141,10 +179,14 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { impactApi } from '../api/impact'
+import { boardApi } from '../api/board'
 import AppHeader from '../components/AppHeader.vue'
 import ImpactDetail from '../components/ImpactDetail.vue'
+import BoardDiffBar from '../components/BoardDiffBar.vue'
+import BoardScorecard from '../components/BoardScorecard.vue'
 
 const router = useRouter()
 const loading = ref(false)
@@ -153,6 +195,20 @@ const newsItems = ref([])
 const selectedDate = ref('')
 const detailVisible = ref(false)
 const selectedNews = ref(null)
+
+// 变化视图
+const diffSummary = ref({})
+const diffPrev = ref('')
+const changeMap = ref({})
+const sortByChange = ref(false)
+const scorecardVisible = ref(false)
+
+// 同事件多源
+const clusterVisible = ref(false)
+const clusterLoading = ref(false)
+const clusterMembers = ref([])
+const clusterTitle = ref('')
+const clusterCount = ref(0)
 
 const TYPE_LABELS = {
   policy: '政策',
@@ -182,6 +238,90 @@ const coverageHint = computed(() =>
     ? '本份快照的新闻均为政策/资金/公司公告类，没有落到 active 的 L3 赛道（说不出受益环节），按口径不套用大行业。行业与幅度列为空是判断结果，不是数据缺失。'
     : '可交易信号 = 能落到 active 的 L3 赛道、给出方向与预期幅度的条目。其余为宏观背景/事件类，保留在榜但不给行业映射。',
 )
+
+/** 有上一期对比时，"变化"列与排序开关才有意义 */
+const diffReady = computed(() => diffSummary.value?.has_previous === true)
+
+/** 按变化幅度排序：新进优先，其次名次上升最多，最后按原排名 */
+const displayItems = computed(() => {
+  if (!sortByChange.value) return newsItems.value
+  const weight = (row) => {
+    const c = changeOf(row)
+    if (!c) return 999
+    if (c.change === 'new') return -1000
+    if (c.change === 'up') return c.delta_rank  // 负数，越小越靠前
+    if (c.change === 'down') return 1000 + c.delta_rank
+    return 500
+  }
+  return [...newsItems.value].sort((a, b) => weight(a) - weight(b))
+})
+
+function changeOf(row) {
+  return changeMap.value[row.cluster_id || row.title] || null
+}
+
+function changeText(c) {
+  if (c.change === 'new') return '新进'
+  if (c.change === 'up') return `▲${-c.delta_rank}`
+  if (c.change === 'down') return `▼${c.delta_rank}`
+  return '—'
+}
+
+function assessLabel(src) {
+  if (src === 'llm') return '模型'
+  if (src === 'rule') return '规则'
+  return '未标'
+}
+
+function assessClass(src) {
+  if (src === 'llm') return 'llm'
+  if (src === 'rule') return 'rule'
+  return 'unknown'
+}
+
+function assessHint(row) {
+  if (row.assess_source === 'llm') {
+    return '本条由模型评估：事件类型、重要度、主题方向与预期幅度都来自 LLM。'
+  }
+  if (row.assess_source === 'rule') {
+    return '本条由规则兜底：LLM 不可用或超出本批配额，置信度通常只有 0.35，读结论时要打折。'
+  }
+  return '这条快照的评估来源未记录（重构前落库的旧数据）。'
+}
+
+async function showCluster(row) {
+  const sid = snapshot.value?.id
+  if (!sid || !row.cluster_id) return
+  clusterTitle.value = row.title
+  clusterCount.value = row.source_count || 0
+  clusterMembers.value = []
+  clusterVisible.value = true
+  clusterLoading.value = true
+  try {
+    const { data } = await boardApi.cluster(sid, row.cluster_id)
+    clusterMembers.value = data.members || []
+  } catch {
+    clusterMembers.value = []
+  } finally {
+    clusterLoading.value = false
+  }
+}
+
+async function loadDiff() {
+  try {
+    const { data } = await boardApi.impactDiff(selectedDate.value)
+    diffSummary.value = data.summary || {}
+    diffPrev.value = data.previous_date || ''
+    const map = {}
+    for (const row of data.rows || []) {
+      if (row.key) map[row.key] = row
+    }
+    changeMap.value = map
+  } catch {
+    diffSummary.value = {}
+    changeMap.value = {}
+  }
+}
 
 function noThemeHint(row) {
   const byType = {
@@ -220,6 +360,8 @@ async function loadData() {
   } finally {
     loading.value = false
   }
+  // 变化视图独立加载: 失败不影响榜单主体（它只是增强信息）
+  await loadDiff()
 }
 
 function showDetail(row) {
@@ -286,12 +428,6 @@ function confClass(c) {
   if (c > 0.7) return 'high'
   if (c >= 0.4) return 'mid'
   return 'low'
-}
-
-// 历史回填标记：2026-10 重构前落库的旧新闻用规则补字段，置信度固定 0.30
-// （实时规则降级是 0.35），用来和"当时的 LLM 判断"区分，不冒充新结论。
-function isBackfilled(row) {
-  return row.confidence > 0 && row.confidence <= 0.31
 }
 
 onMounted(loadData)
@@ -438,15 +574,100 @@ onMounted(loadData)
   border-bottom: 1px dashed var(--text-dim);
   cursor: help;
 }
-/* 历史回填标记：极淡，只用来区分数据来源，不抢标题注意力 */
-.backfill-tag {
+/* 评估来源徽章：降级必须可见（规则兜底的置信度只有 0.35，读结论要打折） */
+.assess-tag {
   flex: none;
   margin-left: 6px;
   padding: 0 4px;
   border-radius: 2px;
   font-size: 0.68rem;
+  cursor: help;
+}
+.assess-tag.llm {
+  color: #67c23a;
+  border: 1px solid #67c23a55;
+  background: #67c23a12;
+}
+.assess-tag.rule {
+  color: #e6a23c;
+  border: 1px solid #e6a23c66;
+  background: #e6a23c14;
+}
+.assess-tag.unknown {
   color: var(--text-dim);
   border: 1px solid var(--border-color, rgba(128, 128, 128, 0.35));
-  cursor: help;
+}
+
+/* 变化列 */
+.chg {
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+}
+.chg.new {
+  color: #f56c6c;
+  font-weight: 700;
+}
+.chg.up {
+  color: #f56c6c;
+  border: none;
+  background: none;
+}
+.chg.down {
+  color: #67c23a;
+  border: none;
+  background: none;
+}
+.chg.same {
+  color: var(--text-dim);
+}
+.sort-toggle {
+  margin-left: auto;
+}
+.src-count.clickable {
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+
+/* 同事件多源弹窗 */
+.cluster-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 52vh;
+  overflow-y: auto;
+}
+.cluster-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.84rem;
+}
+.src-name {
+  flex: none;
+  min-width: 84px;
+  color: var(--brand, #409eff);
+  font-weight: 600;
+  font-size: 0.78rem;
+}
+.cluster-title {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5;
+}
+.rep-tag {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 0.68rem;
+  color: var(--brand, #409eff);
+  border: 1px solid currentColor;
+}
+.cluster-empty {
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  line-height: 1.7;
 }
 </style>

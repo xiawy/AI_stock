@@ -61,6 +61,7 @@ from ..config import (
 )
 from ..llm_helper import structured_invoke
 from ..data_service import get_data_service
+from ..market_regime import unknown_penalty_coef
 from ..market_utils import is_tail_phase
 from ..news_store import get_news_store
 from ..orchestrator import get_orchestrator
@@ -125,13 +126,21 @@ class VerificationReport(BaseModel):
 
 _RR_PATTERN = re.compile(r"\d+(?:\.\d+)?")
 
+# 重试时追加的硬性要求: 缺失多来自 structured_invoke 降级到自由文本后丢字段
+RR_RETRY_SUFFIX = (
+    "\n\n上一次输出缺少数值型 risk_reward。请重新输出完整 JSON, 其中 "
+    "risk_reward 必须是纯数字 (预期收益 ÷ 止损风险), 不得留空, "
+    "不得写区间、比例或文字描述。"
+)
+
 
 def _parse_risk_reward(report: VerificationReport) -> float:
     """把风险收益比解析成数值（收益 / 风险，越大越好）。
 
     支持 ``1:1.4``（风险:收益）、``2.6:1``（收益:风险）、``约 2.6`` 三种写法：
     冒号两侧取「大数 / 小数」，两种记法都得到 ≥1 的收益风险比。
-    解析不出来返回 0.0 —— 调用方据此跳过校验，不用猜测值否决交易。
+    解析不出来返回 0.0 —— 该函数只负责「取数」, 「取不到怎么处置」由
+    ``_rr_state`` 与调用方决定 (此处改动会牵动历史统计口径)。
     """
     if report.risk_reward and report.risk_reward > 0:
         return float(report.risk_reward)
@@ -142,6 +151,24 @@ def _parse_risk_reward(report: VerificationReport) -> float:
         return nums[0]
     hi, lo = max(nums[:2]), min(nums[:2])
     return round(hi / lo, 3) if lo else 0.0
+
+
+def _rr_state(report: VerificationReport) -> tuple[float, str]:
+    """返回 ``(收益风险比, 状态)``, 状态取 ``ok`` / ``missing`` / ``invalid``.
+
+    把 ``_parse_risk_reward`` 的「返回 0」拆成两种语义, 避免「解析失败」与
+    「明确给了 0」被一视同仁放行:
+
+    - ``missing``: 数值字段与文本字段都没给 (典型是自由文本降级丢了字段);
+    - ``invalid``: 给了文本但解析不出数值 (例如「较高」「待定」)。
+    """
+    if report.risk_reward and float(report.risk_reward) > 0:
+        return float(report.risk_reward), "ok"
+    rr = _parse_risk_reward(report)
+    if rr > 0:
+        return rr, "ok"
+    text = str(report.risk_reward_ratio or "").strip()
+    return 0.0, ("missing" if not text else "invalid")
 
 
 # ---------------------------------------------------------------------------
@@ -292,17 +319,22 @@ def _running_buy_symbols() -> set[str]:
 
 
 def _cooling_symbols() -> set[str]:
-    """冷却期内的标的: 二次验证被拒后一段时间内不再重复深度验证。"""
+    """冷却期内的标的: 二次验证被拒后一段时间内不再重复深度验证。
+
+    必须按**时间窗**查库: 原实现只取最近 300 条再按时间过滤, 高吞吐时 300 条
+    可能只覆盖几分钟, 240 分钟的冷却被条数悄悄截断, 同一只票又被反复验证。
+    """
     if BUY_REJECT_COOLDOWN_MINUTES <= 0:
         return set()
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=BUY_REJECT_COOLDOWN_MINUTES)
     try:
         decisions = db_ops.get_decisions(
-            limit=300, agent="second_verification", decision="verification_rejected",
+            limit=2000, agent="second_verification",
+            decision="verification_rejected", since=cutoff,
         )
     except Exception as exc:
         logger.warning("cooldown query failed: %s", exc)
         return set()
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=BUY_REJECT_COOLDOWN_MINUTES)
     out: set[str] = set()
     for row in decisions:
         symbol = str(row.get("symbol") or "")
@@ -1097,11 +1129,32 @@ class SecondVerificationAgent(BaseAgent):
         bear_blocked = bear_level == "high" and not report.major_bear_resolved
         if bool(report.bear_worsened) and not report.major_bear_resolved:
             bear_blocked = True
-        rr = _parse_risk_reward(report)
+
+        rr, rr_state = _rr_state(report)
+        if rr_state != "ok":
+            # 只重试一次: 缺失多来自降级路径, 明确要求「纯数字」后成功率高;
+            # 两次都缺才判死, 由 rr_missing_policy 决定放行还是拒绝。
+            try:
+                report = structured_invoke(
+                    self.llm.pick(deep=True), VerificationReport,
+                    prompt + RR_RETRY_SUFFIX, deep=True,
+                )
+                rr, rr_state = _rr_state(report)
+                self.log(
+                    "rr_retry", symbol=symbol, task_id=task_id, flow_id=flow_id,
+                    reason=f"收益风险比缺失/无效, 已重试一次 → 状态 {rr_state}",
+                    detail={"risk_reward": rr, "rr_state": rr_state},
+                )
+            except Exception as exc:
+                logger.warning("rr retry failed for %s: %s", symbol, exc)
+
         weak_rr = bool(
             MIN_RISK_REWARD_RATIO > 0 and 0 < rr < MIN_RISK_REWARD_RATIO
         )
-        passed = bool(report.passed) and not bear_blocked and not weak_rr
+        # 收益比缺失的处置: reject (默认, 与其余关卡同为 fail-closed) / warn (仅放行并留痕)
+        rr_policy = str(db_ops.get_config_value("rr_missing_policy", "reject")).strip().lower()
+        rr_blocked = bool(rr_state != "ok" and rr_policy != "warn")
+        passed = bool(report.passed) and not bear_blocked and not weak_rr and not rr_blocked
         # 结构化拒绝原因: 便于事后统计「到底卡在哪个子条件」(此前只有自由文本)
         if passed:
             reject_stage = ""
@@ -1109,8 +1162,10 @@ class SecondVerificationAgent(BaseAgent):
             reject_stage = "llm_rejected"
         elif bear_blocked:
             reject_stage = "bear_deteriorated" if report.bear_worsened else "major_bear_high"
-        else:
+        elif weak_rr:
             reject_stage = "weak_risk_reward"
+        else:
+            reject_stage = "rr_missing"
         result = {
             "decision": "passed" if passed else "rejected",
             "passed": passed,
@@ -1126,6 +1181,7 @@ class SecondVerificationAgent(BaseAgent):
             },
             "risk_reward_ratio": report.risk_reward_ratio,
             "risk_reward": rr,
+            "rr_state": rr_state,
             "plan": {
                 "stop_loss_pct": max(float(report.stop_loss_pct or 5.0), 1.0),
                 "take_profit_pct": max(float(report.take_profit_pct or 15.0), 5.0),
@@ -1201,6 +1257,16 @@ class PositionOpenAgent(BaseAgent):
             coef *= PORTFOLIO_DD_COEF_FACTOR
             budget *= PORTFOLIO_DD_COEF_FACTOR
             used_ratio *= PORTFOLIO_DD_COEF_FACTOR
+        # 大盘数据长期不可用 (连续多个交易日 unknown): 系数再打对折。
+        # 不阻断 —— 数据故障不是交易开关; 但也不能当作「一切正常」满仓开新仓。
+        unknown_coef = unknown_penalty_coef()
+        if unknown_coef < 1.0:
+            logger.info(
+                "market regime unknown for days, coef ×%.2f for %s", unknown_coef, symbol,
+            )
+            coef *= unknown_coef
+            budget *= unknown_coef
+            used_ratio *= unknown_coef
         try:
             quote = self.data.get_realtime_quote(symbol)
         except Exception as exc:
@@ -1258,6 +1324,9 @@ class PositionOpenAgent(BaseAgent):
             order_type=OrderType.MARKET,
             reason=f"建仓: {verification.get('reason', '')[:200]}",
             flow_id=flow_id,
+            # 实际使用的资金比例必须透传给 broker 层复核: 实盘适配器只能用
+            # 默认 20% 兜底, 会把 24% 的高置信建仓单二次拒掉 (P1-1 的镜像问题)
+            extra={"used_ratio": used_ratio},
         )
         check = pre_trade_check(order, snapshot, position_ratio=used_ratio)
         if not check.ok:

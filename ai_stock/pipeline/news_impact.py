@@ -840,14 +840,24 @@ def _pub_time(item: dict) -> str:
 
 
 def _freshness(pub_time: str) -> float:
-    """0~1 新鲜度权重（48h 线性衰减）。"""
+    """0~1 新鲜度权重（48h 线性衰减）。
+
+    ``pub_time`` 是数据源给的**北京时间** naive 字符串, 必须与北京时间比较。
+    用主机本地时间会让所有新闻凭空"新鲜/陈旧" 8 小时 (服务器跑 UTC 时,
+    一条 3 小时前的消息会被算成 11 小时前), 排序与重要性加权跟着一起漂。
+    """
     from datetime import datetime
+
+    from ..quant.calendar_utils import market_now
 
     try:
         dt = datetime.strptime(str(pub_time)[:16], "%Y-%m-%d %H:%M")
     except (ValueError, TypeError):
         return 0.5
-    hours = (datetime.now() - dt).total_seconds() / 3600.0
+    now = market_now()
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=now.tzinfo)
+    hours = (now - dt).total_seconds() / 3600.0
     if hours < 0:
         return 1.0
     return max(0.1, 1.0 - hours / 48.0)

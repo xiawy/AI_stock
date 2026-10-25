@@ -460,6 +460,9 @@ class TestVerificationSoftening:
     def _handle(self, monkeypatch, **report_fields):
         from ai_stock.quant.agents import buy as buy_mod
 
+        # 收益比缺失是独立闸门 (FR-04: 缺失即拒), 与本类要验证的"利空软化"无关。
+        # 不显式给值会让用例被 RR 闸门提前拦下, 断言失去意义。
+        report_fields.setdefault("risk_reward", 2.5)
         report = buy_mod.VerificationReport(**report_fields)
         monkeypatch.setattr(
             buy_mod, "structured_invoke", lambda llm, schema, prompt, **kw: report,

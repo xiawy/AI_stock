@@ -98,6 +98,51 @@ def _parse_pct(value) -> float:
         return 0.0
 
 
+def _opt_float(value) -> Optional[float]:
+    """None/空值/非数字 → None (与 0.0 区分: 0.0 是"板块平盘", None 是"没有数据")。"""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def leader_board_labels(leaders: list[dict],
+                        board_pct: Optional[float],
+                        picked_codes: set[str]) -> list[dict]:
+    """给行业榜龙头股打标签, 返回新列表(不改入参)。
+
+    两个标签的语义必须自解释, 因为前端只显示它们的字面值:
+
+    - ``领涨`` = 该行业**当日涨幅第一**, 且**跑赢板块**。只判"第一"不够:
+      整块都在跌时"第一"仍是负收益, 标"领涨"就是撒谎, 所以必须有跑赢条件。
+    - ``精选`` = 该股已进入自选池(经完整深析评估)。
+
+    两个标签可以同时成立; ``leader_label`` 取优先级高的 ``领涨``, 完整集合放
+    ``labels`` 供前端并列展示。
+    """
+    rows = [dict(x) for x in (leaders or [])]
+    if not rows:
+        return rows
+
+    best_code = ""
+    if board_pct is not None:
+        top = max(rows, key=lambda r: float(r.get("change_pct") or 0.0))
+        if float(top.get("change_pct") or 0.0) > float(board_pct):
+            best_code = str(top.get("code") or "")
+
+    for row in rows:
+        labels: list[str] = []
+        if best_code and str(row.get("code") or "") == best_code:
+            labels.append("领涨")
+        if str(row.get("code") or "") in picked_codes:
+            labels.append("精选")
+        row["labels"] = labels
+        row["leader_label"] = labels[0] if labels else ""
+    return rows
+
+
 # 行业名核心词匹配的后缀剥离表: 长后缀优先, 逐词剥离且保证剩余 ≥2 字.
 # 替代旧字符集 rstrip("车机器材业链备件务网体化"): 旧实现会把"机器人"/"减速器"
 # 这类词整体剥空/剥残, 核心词塌缩后退化为纯全名包含匹配 (漏配风险).
@@ -353,6 +398,11 @@ class IndustryScanAgent(BaseAgent):
                 "wave_bonus": wave_bonus,
                 "priority": round(max(0.0, min(10.0, raw_score * 10)), 2),
             })
+
+        # 策略台记分回灌 (§P2): driver 胜率系数作为**乘子**叠加在优先级上。
+        # 三不原则: 不加新项、不改门槛、不开时不生效 —— 分析结论一旦变成闸门,
+        # 就会重演"硬门槛掐死全天交易"那次事故。
+        coef_n, coef_table = self._apply_strategy_coef(industries, trade_date)
         industries.sort(key=lambda i: i["priority"], reverse=True)
         top = industries[:MAX_INDUSTRIES_OUTPUT]
         # 行业榜数据源: 同一排序的前 INDUSTRY_BOARD_SIZE 个行业 (前端行业榜),
@@ -387,6 +437,8 @@ class IndustryScanAgent(BaseAgent):
             "stage_distribution": stage_distribution,
             "scanned": len(boards),
             "filtered_in": len(candidates),
+            "strategy_coef_applied": coef_n,
+            "strategy_coef_table": coef_table,
         }
         self.log(
             "scan_done",
@@ -395,11 +447,31 @@ class IndustryScanAgent(BaseAgent):
                 f"生命周期分布 {stage_distribution}, "
                 f"综合排名 Top {len(top)}: "
                 f"{[(i['name'], i['priority'], i['stage'], i['imbalance_score']) for i in top]}"
+                + (
+                    f"; 策略台系数调整 {coef_n} 个行业 {coef_table}"
+                    if coef_n else "; 策略台系数未生效(开关关闭或匹配不到篮子)"
+                )
             ),
             task_id=task_id, flow_id=flow_id, detail=result,
         )
         self.report(flow_type, flow_id, step, result)
         return result
+
+    @staticmethod
+    def _apply_strategy_coef(industries: list[dict], trade_date: str) -> tuple[int, dict]:
+        """策略台记分回灌: driver 胜率系数作为优先级乘子.
+
+        三道兜底, 任一不满足即"不调权"(而不是报错退出):
+        开关未开 / 无系数 / 篮子名匹配不上. 选股主链不因策略台失败而中断 ——
+        研判层出问题时, 交易仍应能按原有逻辑跑.
+        """
+        try:
+            from ..strategy import feedback as strategy_feedback
+
+            return strategy_feedback.apply(industries, trade_date)
+        except Exception as exc:
+            logger.warning("strategy coef apply skipped: %s", exc)
+            return 0, {}
 
     @staticmethod
     def _slim_industry(ind: dict) -> dict:
@@ -429,6 +501,8 @@ class IndustryScanAgent(BaseAgent):
             # 主题雷达旁路标记透传 (映射为下游公开键 radar_theme/radar_conf)
             "radar_theme": ind.get("_radar_theme", ""),
             "radar_conf": ind.get("_radar_conf", 0),
+            # 策略台回灌系数 (None = 本期未调权, 前端显示"—")
+            "strategy_coef": ind.get("strategy_coef"),
         }
 
     # -- 上游传导二次验证 (行业榜附加展示, 不入 Top) -------------------------
@@ -1236,7 +1310,8 @@ class StockSelectionAgent(BaseAgent):
                 "change_pct": float(cand.get("change_pct", 0) or 0),
             })
 
-        # 行业榜龙头股: 全部受评股排序取前 N, 精选入池的打 "精选" 标 (§7.1)
+        # 行业榜龙头股: 全部受评股排序取前 N; 打「领涨」(涨幅第一且跑赢板块)
+        # 与「精选」(已入池) 两个自解释标签 —— 用户第一眼要的是"哪个最强"。
         merged_all.sort(
             key=lambda c: (
                 float(c.get("score", 0) or 0),
@@ -1245,17 +1320,21 @@ class StockSelectionAgent(BaseAgent):
             reverse=True,
         )
         picked_codes = {p["symbol"] for p in picks}
-        board_leaders = [
+        raw_leaders = [
             {
                 "code": cand["code"],
                 "name": cand.get("name", ""),
                 "change_pct": float(cand.get("change_pct", 0) or 0),
                 "turnover_rate": float(cand.get("turnover_rate", 0) or 0),
                 "score": round(float(cand.get("score", 0) or 0), 2),
-                "leader_label": "精选" if cand["code"] in picked_codes else "",
             }
             for cand in merged_all[:LEADER_STOCKS_PER_BOARD]
         ]
+        board_leaders = leader_board_labels(
+            raw_leaders,
+            board_pct=_opt_float(industry.get("change_pct")),
+            picked_codes=picked_codes,
+        )
         return picks, dropped, len(profiles), board_leaders
 
     def _industry_candidates(self, industry_code: str) -> list[dict]:
@@ -1286,7 +1365,9 @@ class StockSelectionAgent(BaseAgent):
             name = ind.get("name", "")
             leaders = board_leaders.get(name)
             if leaders is None:
-                leaders = self._constituent_leaders(ind.get("code", ""))
+                leaders = self._constituent_leaders(
+                    ind.get("code", ""), board_pct=_opt_float(ind.get("change_pct")),
+                )
             rows.append({
                 "rank": idx,
                 "industry": name,
@@ -1309,8 +1390,14 @@ class StockSelectionAgent(BaseAgent):
             return
         logger.info("Industry board saved: %s, %d industries", trade_date, saved)
 
-    def _constituent_leaders(self, industry_code: str) -> list[dict]:
-        """未经精选覆盖行业的龙头股: 流动性前 N 成分股 (硬过滤 ST/退市/北交所)."""
+    def _constituent_leaders(
+        self, industry_code: str, board_pct: Optional[float] = None,
+    ) -> list[dict]:
+        """未经精选覆盖行业的龙头股: 流动性前 N 成分股 (硬过滤 ST/退市/北交所)。
+
+        「领涨」按**当日涨幅**判定, 不按流动性顺序 —— 此前把流动性第一标成
+        领涨, 等于用"最大"冒充"最强"。
+        """
         if not industry_code:
             return []
         try:
@@ -1326,17 +1413,20 @@ class StockSelectionAgent(BaseAgent):
             s for s in stocks
             if not _is_excluded(s.get("code", ""), s.get("name", ""))
         ][:LEADER_STOCKS_PER_BOARD]
-        return [
-            {
-                "code": s.get("code", ""),
-                "name": s.get("name", ""),
-                "change_pct": float(s.get("change_pct", 0) or 0),
-                "turnover_rate": float(s.get("turnover_rate", 0) or 0),
-                "score": None,
-                "leader_label": "领涨" if idx == 0 else "",
-            }
-            for idx, s in enumerate(valid)
-        ]
+        return leader_board_labels(
+            [
+                {
+                    "code": s.get("code", ""),
+                    "name": s.get("name", ""),
+                    "change_pct": float(s.get("change_pct", 0) or 0),
+                    "turnover_rate": float(s.get("turnover_rate", 0) or 0),
+                    "score": None,
+                }
+                for s in valid
+            ],
+            board_pct=board_pct,
+            picked_codes=set(),
+        )
 
     def _stock_profiles(self, candidates: list[dict]) -> list[dict]:
         """候选股行情 + 预提取核心财务指标 (优化点 4: 表格化喂 LLM).

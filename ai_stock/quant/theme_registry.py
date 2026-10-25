@@ -47,6 +47,13 @@ GATE_MAX_ST_RATIO = 0.10
 GATE_MIN_KEYWORDS = 3
 GATE_MIN_HISTORY_DAYS = 40     # 少于这个天数只能进 shadow
 
+# 可用日线**覆盖比例**门槛。原口径是 "len(hist) < min(5, len(symbols))":
+# 8 只成分股只要 5 只有历史就放行 —— 相关性只用 5 条序列 (10 个 pair) 估计,
+# 离散度更是靠 5 个样本的标准差, 结论基本是噪音。改为按比例要求, 并保留
+# 6 只的绝对下限 (再少连 15 个 pair 都凑不满, 相关系数没有意义)。
+GATE_MIN_HISTORY_COVERAGE = 0.70
+GATE_MIN_HISTORY_SYMBOLS = 6
+
 STATUS_ACTIVE = "active"
 STATUS_SHADOW = "shadow"
 STATUS_REJECTED = "rejected"
@@ -317,10 +324,25 @@ def validate_theme(name: str, *, apply_status: bool = True) -> dict:
         if h:
             hist[sym] = h
     metrics["history_symbols"] = len(hist)
+    required_hist = max(
+        GATE_MIN_HISTORY_SYMBOLS,
+        math.ceil(GATE_MIN_HISTORY_COVERAGE * len(symbols)),
+    ) if symbols else 0
+    metrics["coverage"] = round(len(hist) / len(symbols), 4) if symbols else 0.0
+    metrics["coverage_required"] = required_hist
 
-    if not hist or len(hist) < min(5, len(symbols)):
-        reasons.append(f"可用日线不足：仅 {len(hist)}/{len(symbols)} 只有 ≥25 根历史")
-        return _finish(theme, metrics, reasons, apply_status, history_days=0)
+    if len(hist) < required_hist:
+        # 数据不足不是「主题不合格」, 所以打回 shadow 而不是 rejected ——
+        # 等日线补齐后 promote_ready 会自动再校验一次。但**只有覆盖不足是唯一
+        # 问题时**才这样处理: 成分股数量/关键词这类结构性不合格仍然直接 rejected。
+        reasons.append(
+            f"可用日线覆盖不足：{len(hist)}/{len(symbols)} 只 "
+            f"(要求 ≥{required_hist} 只 / {GATE_MIN_HISTORY_COVERAGE:.0%})"
+        )
+        forced = STATUS_SHADOW if len(reasons) == 1 else ""
+        return _finish(
+            theme, metrics, reasons, apply_status, history_days=0, force_status=forced,
+        )
 
     # 权重（自由流通市值；缺失则等权）
     use_caps = all(s in caps for s in hist)
@@ -422,10 +444,15 @@ def validate_theme(name: str, *, apply_status: bool = True) -> dict:
 
 
 def _finish(
-    theme: dict, metrics: dict, reasons: list[str], apply_status: bool, *, history_days: int,
+    theme: dict, metrics: dict, reasons: list[str], apply_status: bool, *,
+    history_days: int, force_status: str = "",
 ) -> dict:
     passed = not reasons
-    if not passed:
+    if force_status:
+        # 显式指定状态: 用于「数据不足」这类不该判死的场景 (passed 仍为 False,
+        # 只是状态落到 shadow 等待数据补齐)
+        status = force_status
+    elif not passed:
         status = STATUS_REJECTED
     elif history_days < GATE_MIN_HISTORY_DAYS:
         status = STATUS_SHADOW

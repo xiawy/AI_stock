@@ -30,6 +30,10 @@ from .config import (
     RISK_SCAN_INTERVAL_MINUTES,
     SELECTION_QUEUE,
     SELECTION_SCHEDULE,
+    STRATEGY_COEF_AT,
+    STRATEGY_COEF_WEEKDAY,
+    STRATEGY_QUEUE,
+    STRATEGY_RUN_AT,
 )
 from .mq import enqueue_task
 
@@ -173,6 +177,49 @@ def trigger_daily_report(now: Optional[datetime] = None) -> Optional[str]:
         payload={"trade_date": date_str},
         idempotent_key=f"daily_report_{date_str}",
         priority=0,
+    )
+    return task_id if created else None
+
+
+def trigger_strategy_desk(
+    now: Optional[datetime] = None,
+    snapshot_type: str = "close",
+) -> Optional[str]:
+    """策略台研判 (收盘后 15:05 入队).
+
+    排在 DAILY_REPORT_AT(15:35) 之前是有意的: 两者都要写库, 错峰可避免
+    在同一个事务窗口里争 SQLite 写锁.
+    """
+    now = now or datetime.now()
+    if not is_trading_day(now):
+        return None
+    date_str = now.strftime("%Y-%m-%d")
+    task_id, created = enqueue_task(
+        STRATEGY_QUEUE,
+        "strategy_run",
+        payload={"trade_date": date_str, "snapshot_type": snapshot_type},
+        idempotent_key=f"strategy_{date_str}_{snapshot_type}",
+        priority=3,          # 最低优先级: 永远让位于交易链路
+    )
+    return task_id if created else None
+
+
+def trigger_strategy_coef(now: Optional[datetime] = None) -> Optional[str]:
+    """周频回灌 (每周一 06:30): 按 driver 胜率重算权重系数.
+
+    只写 config, 不改任何交易表; 是否被消费看 strategy_reproduce_coef_enable.
+    放在 07:00 选股槽位之前, 让"本周系数"从周一的选股就开始生效.
+    """
+    now = now or datetime.now()
+    if now.weekday() != STRATEGY_COEF_WEEKDAY:
+        return None
+    date_str = now.strftime("%Y-%m-%d")
+    task_id, created = enqueue_task(
+        STRATEGY_QUEUE,
+        "strategy_coef_update",
+        payload={"as_of": date_str},
+        idempotent_key=f"strategy_coef_{date_str}",
+        priority=4,
     )
     return task_id if created else None
 
@@ -423,6 +470,10 @@ class QuantScheduler:
              "minutes": RISK_SCAN_INTERVAL_MINUTES, "fn": trigger_flow_timeout_check},
             {"name": "daily_report", "kind": "daily",
              "at": dtime(*DAILY_REPORT_AT), "fn": trigger_daily_report},
+            {"name": "strategy_desk", "kind": "daily",
+             "at": dtime(*STRATEGY_RUN_AT), "fn": trigger_strategy_desk},
+            {"name": "strategy_coef", "kind": "daily",
+             "at": dtime(*STRATEGY_COEF_AT), "fn": trigger_strategy_coef},
             {"name": "pool_expire", "kind": "daily",
              "at": _shifted_time(*DAILY_REPORT_AT, delta_minutes=5), "fn": trigger_pool_expire},
             {"name": "cleanup", "kind": "daily", "at": dtime(3, 0), "fn": trigger_cleanup},
@@ -468,6 +519,16 @@ class QuantScheduler:
         aps.add_job(
             trigger_daily_report, "cron", hour=DAILY_REPORT_AT[0],
             minute=DAILY_REPORT_AT[1], id="daily_report", replace_existing=True, **grace,
+        )
+        aps.add_job(
+            trigger_strategy_desk, "cron", hour=STRATEGY_RUN_AT[0],
+            minute=STRATEGY_RUN_AT[1], id="strategy_desk", replace_existing=True, **grace,
+        )
+        # 周频回灌: 周一 06:30, 早于 07:00 的选股槽位
+        aps.add_job(
+            trigger_strategy_coef, "cron", day_of_week="mon",
+            hour=STRATEGY_COEF_AT[0], minute=STRATEGY_COEF_AT[1],
+            id="strategy_coef", replace_existing=True, **grace,
         )
         aps.add_job(
             trigger_pool_expire, "cron", hour=_pool_expire_at.hour,

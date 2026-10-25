@@ -7,8 +7,25 @@
         <span class="stock-code">{{ stock.symbol }}</span>
         <el-tag v-if="stock.industry" size="small" type="info">{{ stock.industry }}</el-tag>
         <el-tag size="small" :type="statusType">{{ statusLabel }}</el-tag>
+        <el-tag v-if="stock.is_tail" size="small" type="warning" effect="plain" :title="TAIL_HINT">
+          鱼尾
+        </el-tag>
+        <el-tag
+          v-else-if="stock.dyn_state && stock.dyn_state !== '正常'"
+          size="small"
+          effect="plain"
+          :type="stock.dyn_state === '增强' ? 'danger' : 'info'"
+        >
+          动态{{ stock.dyn_state }}
+        </el-tag>
+        <el-tag v-if="changeTag" size="small" effect="plain" :type="changeTag.type">
+          {{ changeTag.text }}
+        </el-tag>
       </div>
-      <span class="confidence">置信 {{ confidenceText(stock.confidence) }}</span>
+      <div class="scores" :title="SCORE_HINT">
+        <span class="dyn">动态 {{ confidenceText(stock.dyn_confidence) }}</span>
+        <span class="pool">入池 {{ stock.confidence != null ? stock.confidence.toFixed(1) : '—' }}</span>
+      </div>
     </div>
 
     <div class="card-body">
@@ -66,6 +83,21 @@ import { computed } from 'vue'
 const props = defineProps({
   stock: { type: Object, required: true },
   rank: { type: Number, default: 0 },
+  change: { type: Object, default: null },
+})
+
+const SCORE_HINT =
+  '动态置信度（0-1）每轮由置信度维护官增强/衰减，决定榜内排序，也是买入候选队列的排队依据；'
+  + '入池分（0-10）是入池时的静态评估，之后不再变化。两个分差异大＝入池看好但现在在衰减。'
+const TAIL_HINT = '鱼尾阶段：买入链路会拦截该标的，榜上不再一视同仁'
+
+const changeTag = computed(() => {
+  const c = props.change
+  if (!c) return null
+  if (c.change === 'new') return { text: '新进', type: 'danger' }
+  if (c.change === 'up') return { text: `▲${-c.delta_rank}`, type: 'danger' }
+  if (c.change === 'down') return { text: `▼${c.delta_rank}`, type: 'info' }
+  return null
 })
 
 const bullFactors = computed(() => props.stock.bull_factors || [])
@@ -129,11 +161,22 @@ function confidenceText(v) {
   color: var(--text-dim);
   font-size: 0.85rem;
 }
-.confidence {
+.scores {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+  cursor: help;
+}
+.scores .dyn {
   color: var(--brand, #409eff);
   font-weight: 700;
   font-size: 0.95rem;
-  flex-shrink: 0;
+}
+.scores .pool {
+  color: var(--text-dim);
+  font-size: 0.72rem;
 }
 .field-line {
   font-size: 0.85rem;

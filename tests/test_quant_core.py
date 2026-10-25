@@ -46,8 +46,8 @@ class TestQuantService:
             # §10.1: 种子规则已写入
             rule_ids = {r["rule_id"] for r in db_ops.get_rules()}
             assert {"stop_loss_5pct", "time_stop_5days", "trailing_stop"} <= rule_ids
-            # 消费者全部启动 (5 队列)
-            assert len(service.consumers) == 5
+            # 消费者全部启动 (6 队列: 交易 5 + 策略台 1)
+            assert len(service.consumers) == 6
             assert service.started
 
             status = service.status()

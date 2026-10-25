@@ -6,7 +6,7 @@
 - **仓库**: https://github.com/xiawy/AI_stock
 - **协议**: Apache 2.0
 - **Python**: >=3.10
-- **当前版本**: 0.5.15（2026-08-30 发布，quant 子系统全量审计修复）
+- **当前版本**: 0.6.0（2026-10-21 发布，quant 交易链路 14 项 FR 整改）
   ⚠️ 改版本号时**三处要一起改**：`pyproject.toml` / `CHANGELOG.md` / 这一行。漏了这行会让后续 agent 和发版流程读到旧版本（`tests/test_version_consistency.py` 会拦）。
 
 ## 架构

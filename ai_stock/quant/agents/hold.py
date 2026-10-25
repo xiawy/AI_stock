@@ -4,12 +4,12 @@
     hold_scan(入口) → 走势跟踪 → 加仓决策 → 减仓/清仓决策 → 执行与规划更新
 
 原则:
-- 止损/止盈全部多 K 线或收盘确认, 瞬时价格不触发指令 (§7.3.1)
+- 止损按实时价判定, 破位即卖 (§7.3.1) —— 等收盘确认等于只能次日开盘卖, 跳空风险更大
+- 移动止盈的上移需收盘确认 (§7.3.2)
 - 时间止损严格按 A 股交易日计数 (calendar_utils)
 - 硬性规则: 亏损超 5% 清仓; 5 个交易日无大行情清仓 (规则引擎硬规则)
-- 移动止盈上移需收盘价确认 (§7.3.2)
 - 新增重大利空可跳过技术指标直接清仓建议 (§7.3.3, news_store 检索)
-- 全部调仓指令强制 pre_trade_check (§7.3.4)
+- 全部调仓指令强制 pre_trade_check (§7.3.4); 被拒/未成交写退出意图, 按冷却重试
 """
 
 from __future__ import annotations
@@ -20,10 +20,11 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from .. import db_ops
+from .. import db_ops, exit_state
 from ..broker import (
     OrderRequest,
     OrderSide,
+    OrderStatus,
     OrderType,
     get_broker,
     round_lot,
@@ -31,14 +32,17 @@ from ..broker import (
 from ..calendar_utils import count_trading_days
 from ..config import (
     BUY_POSITION_RATIO,
+    MAJOR_BEAR_BYPASS_DROP,
     SINGLE_POSITION_MAX_PCT,
     STOP_LOSS_ATR_MULT,
     STOP_LOSS_CONFIRM_BARS,
     STOP_LOSS_PCT,
+    TAKE_PROFIT_PARTIAL_PORTION,
     TIME_STOP_DAYS_BY_STAGE,
     TIME_STOP_MIN_GAIN,
     TIME_STOP_TRADING_DAYS,
     TRAILING_STOP_FLOOR,
+    TRAILING_STOP_TIERS,
     TRAILING_STOP_TRIGGER,
 )
 from ..llm_helper import structured_invoke
@@ -61,20 +65,43 @@ def _parse_dt(ts: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _daily_change_ratio(quote: dict) -> Optional[float]:
+    """当日涨跌幅 (小数). 行情缺 ``change_pct`` 时返回 None, 由调用方决定降级行为."""
+    change_pct = quote.get("change_pct")
+    if change_pct is None:
+        return None
+    try:
+        return round(float(change_pct) / 100.0, 4)
+    except (TypeError, ValueError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # 持仓扫描入口
 # ---------------------------------------------------------------------------
 
 def handle_hold_scan(task: dict) -> dict:
-    """hold 队列 hold_scan handler: 遍历持仓, 逐只启动维护流程 (10min 幂等)."""
+    """hold 队列 hold_scan handler: 遍历持仓, 逐只启动维护流程 (10min 幂等).
+
+    退出意图 (``pending_exit``) 优先: 已有「决定卖但没卖掉」的持仓不再等 10 分钟
+    重新决策, 而是按冷却 (30 分钟) 直接重试, 直到成交或当日次数用尽。
+    """
     payload = task.get("payload", {})
     window = payload.get("window") or datetime.now().strftime("%Y%m%d%H%M")
     orchestrator = get_orchestrator()
 
     started: list[str] = []
+    cooling: list[str] = []
     for holding in db_ops.get_holdings():
         symbol = holding.get("symbol", "")
         if not symbol:
+            continue
+        pending = exit_state.get_pending_exit(holding) if exit_state.enabled() else None
+        force_exit = pending if exit_state.is_actionable(pending) else None
+        if force_exit and not exit_state.should_retry(force_exit):
+            # 冷却中/当日次数用尽: 不起 flow —— 否则每隔 10 分钟就重复打一次
+            # pre_trade_check 与告警, 日志噪音会把真正的问题埋掉。
+            cooling.append(symbol)
             continue
         orchestrator.start_flow(
             "hold",
@@ -89,10 +116,11 @@ def handle_hold_scan(task: dict) -> dict:
                 "predicted_path": holding.get("predicted_path") or {},
                 "stop_loss": holding.get("stop_loss", 0.0),
                 "take_profit": holding.get("take_profit", 0.0),
+                "force_exit": force_exit,
             },
         )
         started.append(symbol)
-    return {"started_flows": started}
+    return {"started_flows": started, "retry_cooling": cooling}
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +150,7 @@ class TrendTrackingAgent(BaseAgent):
 
         close_series = indicators.get("close_series") or []
         high_series = indicators.get("high_series") or []
+        low_series = indicators.get("low_series") or []
         current_close = close_series[-1] if close_series else quote.get("price", cost)
         loss_ratio = max(0.0, (cost - current_close) / cost)
         gain_ratio = max(0.0, (current_close - cost) / cost)
@@ -156,9 +185,10 @@ class TrendTrackingAgent(BaseAgent):
         triggered_rules = get_rule_engine().evaluate(rule_ctx)
         rule_actions = [r["action"] for r in triggered_rules]
 
-        # 止损信号 (T4): 止损位 = min(成本 × (1-5%), 成本 - 2×ATR), 收盘确认
-        # STOP_LOSS_CONFIRM_BARS 根 (默认 1 根 + 盘中破位预警)。
-        # 原实现要求连续 2 根收盘破位, 急跌中实际亏损可达 8~12%。
+        # 止损信号 (T4): 止损位 = min(成本 × (1-5%), 成本 - 2×ATR)。
+        # **按实时价判定, 破位即卖** —— 不是等收盘确认: 非交易时段一律拒单,
+        # "收盘确认"实际意味着只能次日开盘卖, 隔夜跳空的风险大于盘中假破位
+        # (原实现要求 2 根确认, 急跌中实际亏损达 8~12%)。
         if atr_ratio > 0 and atr > 0:
             dynamic_stop = min(
                 cost * (1 - STOP_LOSS_PCT), cost - STOP_LOSS_ATR_MULT * atr,
@@ -172,12 +202,18 @@ class TrendTrackingAgent(BaseAgent):
             and len(close_series) >= confirm_bars
             and all(c <= dynamic_stop for c in recent_close)
         )
-        stop_loss_signal = "sell_all" in rule_actions or stop_confirmed
-        # 盘中破位预警 (未收盘确认): 只留痕, 不触发卖出
+        # 实时价破位: 不能只依赖 close 序列。日线与实时两源不同步时 provisional
+        # bar 拼不上, close_series[-1] 会是昨天的收盘 → 止损整整滞后一天。
+        live_price = float(quote.get("price") or 0.0)
+        intraday_stop = bool(live_price > 0 and live_price <= dynamic_stop)
+        stop_loss_signal = "sell_all" in rule_actions or stop_confirmed or intraday_stop
+        # 观测字段 (不是卖出判据): 今日最低已破位、现价又收回止损位之上 ——
+        # 用来复盘「假摔」比例, 判断止损位是否过紧。
         intraday_breach = bool(
             not stop_loss_signal
-            and current_close > 0
-            and quote.get("price", current_close) <= dynamic_stop
+            and low_series
+            and len(low_series) == len(close_series)
+            and low_series[-1] <= dynamic_stop < current_close
         )
         # 时间止损信号 (分层窗口)
         time_stop_signal = "sell_all" in rule_actions and holding_trading_days >= time_stop_days
@@ -203,6 +239,9 @@ class TrendTrackingAgent(BaseAgent):
             "symbol": symbol,
             "current_price": quote.get("price"),
             "current_close": current_close,
+            # 当日涨跌幅 (相对昨收): 利空旁路判据用, 不能用 loss_ratio 代替 ——
+            # loss_ratio 是相对成本, 与「今天跌了多少」是两件事
+            "daily_change_ratio": _daily_change_ratio(quote),
             "loss_ratio": round(loss_ratio, 4),
             "gain_ratio": round(gain_ratio, 4),
             "max_gain_ratio": round(max_gain_ratio, 4),
@@ -265,15 +304,26 @@ class AddPositionAgent(BaseAgent):
             not trend_result.get("stop_loss_signal") and \
             not trend_result.get("time_stop_signal")
 
-        # 移动止盈: 收盘价确认盈利超阈值 → 止损位上移 (§7.3.2)
+        # 移动止盈 (§7.3.2): 收盘确认的浮盈达到档位 → 止损位阶梯上移。
+        # 只上移不下移: 现价回落后档位不再满足, new_stop_loss 保持 None,
+        # 已有止损位由 _update_plan 的 "new_stop > 当前值" 判断兜底。
         new_stop_loss = None
-        if current_close and cost and gain_ratio >= TRAILING_STOP_TRIGGER:
-            new_stop_loss = round(cost * (1 + TRAILING_STOP_FLOOR), 3)
+        current_stop = float(context.get("stop_loss") or 0.0)
+        tiers = TRAILING_STOP_TIERS if db_ops.get_flag(
+            "trailing_tiers_enabled", True,
+        ) else ((TRAILING_STOP_TRIGGER, TRAILING_STOP_FLOOR),)
+        if current_close and cost:
+            for trigger, floor in tiers:
+                if gain_ratio >= trigger:
+                    new_stop_loss = round(cost * (1 + floor), 3)
+        if new_stop_loss is not None and new_stop_loss <= current_stop:
+            new_stop_loss = None
+        if new_stop_loss is not None:
             self.log(
                 "trailing_stop_raised", symbol=symbol, task_id=task_id,
                 flow_id=flow_id,
-                reason=f"收盘确认盈利 {gain_ratio:.1%} ≥ {TRAILING_STOP_TRIGGER:.0%}, "
-                       f"止损上移至 {new_stop_loss}",
+                reason=f"收盘确认浮盈 {gain_ratio:.1%}, 止损上移至 {new_stop_loss} "
+                       f"(原 {current_stop or '未设置'})",
             )
 
         # 加仓金额: 可用资金 × 20%, 且总仓位不超过单只上限
@@ -344,40 +394,43 @@ class ReducePositionAgent(BaseAgent):
         symbol = context.get("symbol", "")
         trend_result = context.get("trend_tracking") or {}
 
-        action = "hold"
-        reason = ""
+        action, portion, reason = "hold", 0.0, ""
 
+        # 0) 退出意图重试: 上一轮已决定卖出但没成交 (风控拒单 / 跌停挂单)。
+        #    价格已破位, 不能因为当日反弹就撤销退出, 所以跳过 LLM 与趋势判断。
+        force = context.get("force_exit")
+        if force:
+            portion = float(force.get("portion") or 1.0)
+            action = "sell_all" if portion >= 1.0 else "sell_partial"
+            reason = (
+                f"退出意图重试: {force.get('reason') or '上一轮未成交'}"
+                f" (累计失败 {int(force.get('fail_count') or 0)} 次)"
+            )
         # 1) 硬性规则 (§2.3): 亏损超 5% / 5 交易日无大行情 → 直接清仓
-        if trend_result.get("stop_loss_signal"):
-            action = "sell_all"
+        elif trend_result.get("stop_loss_signal"):
+            action, portion = "sell_all", 1.0
             reason = (
                 f"硬性止损: 浮亏 {trend_result.get('loss_ratio', 0):.1%} "
-                f"(收盘跌破动态止损位 {trend_result.get('dynamic_stop_price')}, "
+                f"(实时价跌破动态止损位 {trend_result.get('dynamic_stop_price')}, "
                 f"ATR 挂钩)"
             )
         elif trend_result.get("time_stop_signal"):
-            action = "sell_all"
+            action, portion = "sell_all", 1.0
             reason = (
                 f"时间止损: 持有 {trend_result.get('holding_trading_days', 0)} 个交易日, "
                 f"最大涨幅 {trend_result.get('max_gain_ratio', 0):.1%} 无大行情"
             )
         else:
-            # 2) 软性条件: 走势不及预期 / 新增重大利空
-            major_bear = self._check_major_bear(symbol, context)
-            if major_bear is not None and major_bear.has_major_bear:
-                action = "sell_all"
-                reason = f"新增重大利空, 跳过技术指标直接清仓: {major_bear.reason}"
-            elif trend_result.get("trend") == "below":
-                action = "sell_partial"
-                reason = "走势不及预期, 减仓 1/2 降低风险"
+            # 2) 止盈 (在软性条件之前: 止盈不该被利空判断拦下来)
+            action, portion, reason = self._take_profit_or_soft_sell(
+                symbol, context, trend_result,
+            )
 
         result = {
             "decision": action,
             "action": action,
             "reason": reason,
-            "portion": 1.0 if action == "sell_all" else (
-                0.5 if action == "sell_partial" else 0.0
-            ),
+            "portion": portion,
         }
         self.log(
             f"reduce_{action}", symbol=symbol, task_id=task_id, flow_id=flow_id,
@@ -385,6 +438,66 @@ class ReducePositionAgent(BaseAgent):
         )
         self.report(flow_type, flow_id, step, result)
         return result
+
+    def _take_profit_or_soft_sell(
+        self, symbol: str, context: dict, trend_result: dict,
+    ) -> tuple[str, float, str]:
+        """止盈减半 / 新增重大利空 / 走势不及预期 —— 三者按优先级返回决策."""
+        take_profit = float(context.get("take_profit") or 0.0)
+        price = float(trend_result.get("current_close") or 0.0)
+        if (
+            db_ops.get_flag("take_profit_partial_enabled", True)
+            and take_profit > 0 and price >= take_profit
+        ):
+            return (
+                "sell_partial", TAKE_PROFIT_PARTIAL_PORTION,
+                f"触及止盈价 {take_profit} (现价 {price}), "
+                f"减仓 {TAKE_PROFIT_PARTIAL_PORTION:.0%} 交由移动止损管理余仓",
+            )
+        return self._major_bear_decision(symbol, context, trend_result)
+
+    def _major_bear_decision(
+        self, symbol: str, context: dict, trend_result: dict,
+    ) -> tuple[str, float, str]:
+        """重大利空两段式确认 (D5).
+
+        为什么不是「利空就清仓」: LLM 单次判定有采样波动, 一条被标题党放大的
+        旧闻就能清掉一个刚建仓的仓位。为什么不是「一律等一轮」: 真利空的第一天
+        往往就是大跌, 白亏一天。所以 —— 首次判定只登记待确认, 下一轮再判定为真
+        或当日跌幅超过 ``MAJOR_BEAR_BYPASS_DROP`` 才清仓。
+        """
+        major_bear = self._check_major_bear(symbol, context)
+        if major_bear is None or not major_bear.has_major_bear:
+            if trend_result.get("trend") == "below":
+                return "sell_partial", 0.5, "走势不及预期, 减仓 1/2 降低风险"
+            return "hold", 0.0, ""
+
+        headline = f"重大利空: {major_bear.reason}"
+        if not db_ops.get_flag("major_bear_confirm_rounds", True):
+            # 回滚分支: 单次判定即清仓 (改动前的行为)
+            return "sell_all", 1.0, f"{headline}, 跳过技术指标直接清仓"
+
+        pending = exit_state.get_pending_exit(db_ops.get_holding(symbol) or {})
+        if pending and pending.get("confirm_needed"):
+            return "sell_all", 1.0, f"{headline}, 二次确认成立 → 清仓"
+
+        change = trend_result.get("daily_change_ratio")
+        daily_drop = max(0.0, -float(change)) if change is not None else 0.0
+        if daily_drop >= MAJOR_BEAR_BYPASS_DROP:
+            return (
+                "sell_all", 1.0,
+                f"{headline}, 当日跌幅 {daily_drop:.1%} ≥ {MAJOR_BEAR_BYPASS_DROP:.0%} "
+                f"→ 直接清仓",
+            )
+
+        exit_state.mark_pending_exit(
+            symbol, reason=f"重大利空待确认: {major_bear.reason}",
+            portion=1.0, confirm_needed=1,
+        )
+        return (
+            "hold", 0.0,
+            f"{headline}, 首次判定 → 登记待确认, 下一轮再判定为真才清仓",
+        )
 
     def _check_major_bear(self, symbol: str, context: dict) -> Optional[MajorBearCheck]:
         """检索新增重大利空 (§7.3.3: 可跳过技术指标直接清仓)."""
@@ -499,13 +612,33 @@ class ExecutionUpdateAgent(BaseAgent):
         )
         check = pre_trade_check(order)
         if not check.ok:
+            pending = self._record_blocked_exit(symbol, reduce_result, portion, check.reason)
             self.log(
                 "sell_risk_rejected", symbol=symbol, task_id=task_id,
                 flow_id=flow_id, reason=f"卖出被风控拒绝: {check.reason}",
+                detail={"pending_exit": pending},
             )
-            return {"op": "sell", "status": "risk_rejected", "reason": check.reason}
+            return {
+                "op": "sell", "status": "risk_rejected",
+                "reason": check.reason, "pending_exit": pending,
+            }
 
         result_order = broker.place_order(order)
+        if result_order.status == OrderStatus.PENDING:
+            # 跌停挂单排队: 既不是成交也不是终局失败, 记退出意图等下一轮重试
+            pending = self._record_blocked_exit(
+                symbol, reduce_result, portion, result_order.message, queued=True,
+            )
+            self.log(
+                "sell_pending", symbol=symbol, task_id=task_id, flow_id=flow_id,
+                reason=f"卖出未成交: {result_order.message}",
+                detail={"pending_exit": pending},
+            )
+            return {
+                "op": "sell", "status": OrderStatus.PENDING.value,
+                "reason": result_order.message, "pending_exit": pending,
+            }
+
         outcome = {
             "op": "sell",
             "status": result_order.status.value,
@@ -515,6 +648,8 @@ class ExecutionUpdateAgent(BaseAgent):
             "fee": result_order.fee,
         }
         if result_order.status.value == "filled":
+            # 成交即清除退出意图 (无论之前有没有)
+            exit_state.clear_pending_exit(symbol)
             # 更新/删除持仓池记录
             remaining = total_qty - result_order.filled_quantity
             if remaining <= 0:
@@ -543,8 +678,22 @@ class ExecutionUpdateAgent(BaseAgent):
             )
         return outcome
 
-    # -- 加仓执行 ------------------------------------------------------------
+    def _record_blocked_exit(
+        self, symbol: str, reduce_result: dict, portion: float, error: str,
+        *, queued: bool = False,
+    ) -> Optional[dict]:
+        """记录「已决定卖出但没成交」并告警; 开关关闭时返回 None (旧行为)."""
+        if not exit_state.enabled():
+            return None
+        return exit_state.mark_and_notify(
+            symbol,
+            reason=reduce_result.get("reason", ""),
+            portion=portion,
+            error=error,
+            queued=queued,
+        )
 
+    # -- 加仓执行 ------------------------------------------------------------
     def _execute_add(
         self, symbol: str, context: dict, add_result: dict,
         task_id: str, flow_id: str,
@@ -563,6 +712,8 @@ class ExecutionUpdateAgent(BaseAgent):
             order_type=OrderType.MARKET,
             reason=f"加仓: {add_result.get('reason', '突破/超预期')}"[:200],
             flow_id=flow_id,
+            # 与建仓同一口径: 实盘 broker 层复核要拿到实际比例, 否则会被 20% 兜底误拒
+            extra={"used_ratio": BUY_POSITION_RATIO},
         )
         check = pre_trade_check(order, position_ratio=BUY_POSITION_RATIO)
         if not check.ok:

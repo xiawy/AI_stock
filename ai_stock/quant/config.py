@@ -20,12 +20,17 @@ HOLD_QUEUE = "hold"
 RISK_QUEUE = "risk"
 ORCHESTRATOR_QUEUE = "orchestrator"
 
+# 策略台: 独立队列、单消费者、只读行情不写订单 (§7.5 时序契约).
+# 与交易队列分开的唯一目的: 让"分析"永远挤不掉"交易"。
+STRATEGY_QUEUE = "strategy"
+
 ALL_QUEUES = (
     SELECTION_QUEUE,
     BUY_QUEUE,
     HOLD_QUEUE,
     RISK_QUEUE,
     ORCHESTRATOR_QUEUE,
+    STRATEGY_QUEUE,
 )
 
 # ---------------------------------------------------------------------------
@@ -49,6 +54,49 @@ RISK_SCAN_INTERVAL_MINUTES = 5
 
 # 每日运行报告: 15:35 (收盘后)
 DAILY_REPORT_AT = (15, 35)
+
+# ---------------------------------------------------------------------------
+# 策略台 (StrategyDesk) — 收盘后研判, 只读行情不写订单
+# ---------------------------------------------------------------------------
+
+# 收盘后 15:05 入队: 早于 DAILY_REPORT_AT(15:35), 两者不抢 config 写
+STRATEGY_RUN_AT = (15, 5)
+
+# 周频回灌: 每周一 06:30 重算 driver 权重系数 (早于 07:00 的选股槽位)。
+# 一定不能在盘中或每日跑 —— 按日调权等于把追涨杀跌自动化, 还会污染自己的样本。
+STRATEGY_COEF_AT = (6, 30)
+STRATEGY_COEF_WEEKDAY = 0        # 0=周一
+
+# 盘中快照开关 (默认关). 开启后只出展示, 断言不入账 (PRD §7.6.3)
+STRATEGY_INTRADAY_ENABLED = 0
+
+# 结构拆解: 取涨幅榜前 N 个板块做子概念拆分
+STRATEGY_TOP_BOARDS = 5
+# 单个板块最多产出几个子篮子
+STRATEGY_MAX_BASKETS = 3
+# 子篮子最小成员数 (少于它不构成子概念, 只是几只票)
+STRATEGY_MIN_CLUSTER = 3
+# 板块成分股取样上限 (流动性口径)
+STRATEGY_CONSTITUENTS = 20
+
+# 新闻方向回看窗口 (天). 3 天覆盖"周末发布、周一才反应"的常见错位,
+# 再长会把已经失效的利好当成今天的催化.
+STRATEGY_NEWS_WINDOW_DAYS = 3
+
+# 断言生成上限: 防止一天写出几十条断言把胜率统计稀释成噪音
+STRATEGY_MAX_CLAIMS = 12
+
+# 记分: 样本低于此数不出权重系数 (PRD 红线 3), 只出观察
+STRATEGY_COEF_MIN_SAMPLES = 30
+# 权重系数限幅
+STRATEGY_COEF_MIN = 0.8
+STRATEGY_COEF_MAX = 1.2
+# 单个 driver 的"无法判定"占比上限: 超过说明数据源有问题, 不是判断错了.
+# 一次东财封禁就能把所有断言打成 unjudged, 那天绝不该调权.
+STRATEGY_MAX_UNJUDGED_RATE = 0.30
+
+# LLM 提示词版本: 改提示词必须 +1 (沿用项目既有约定)
+STRATEGY_PROMPT_VERSION = 1
 
 # LLM 调用保护 (quant 子系统专用, 见 llm_helper.create_quant_llm):
 # 单次请求超时与重试上限 — 无超时的 invoke 可无限阻塞, 会把整个选股步骤
@@ -229,6 +277,15 @@ MARKET_INDEX_CODE = "000300"
 MARKET_INDEX_PREFIX = "sh"
 MARKET_MA_WINDOW = 20
 MARKET_REGIME_TTL = 1800         # 30 分钟缓存 (与买扫周期同量级)
+# 收紧要快、放松要慢 (D8):
+# - risk_on 需连续确认 + 站上均线的缓冲, 否则贴着 MA20 震荡会让闸门反复开关;
+# - risk_off 立即生效 (走弱当下就该停手, 等确认等于多亏两天);
+# - 数据长期不可用不阻断交易 (数据故障不是交易开关), 但连续多日后仓位减半。
+MARKET_CONFIRM_DAYS = 2          # risk_on 需要的连续交易日数
+MARKET_CANDIDATE_BUFFER = 0.01   # 收盘需高于 MA20 至少 1% 才算「站上」
+MARKET_UNKNOWN_WARN_HOURS = 24   # 数据持续不可用多久后告警
+MARKET_UNKNOWN_HALF_DAYS = 3     # 连续多少个交易日 unknown 后仓位减半
+MARKET_UNKNOWN_HALF_FACTOR = 0.5
 
 # ---------------------------------------------------------------------------
 # 交易标的硬过滤 (T9)
@@ -261,8 +318,32 @@ TIME_STOP_MIN_GAIN = 0.03
 TIME_STOP_ATR_RATIO = 0.04  # ATR/price 低于 4% 视为无行情
 
 # 移动止盈: 盈利超过 15% 后, 止损位上移到成本 +10%
+# (单档旧口径, 仅作为 trailing_tiers_enabled=0 时的回滚分支)
 TRAILING_STOP_TRIGGER = 0.15
 TRAILING_STOP_FLOOR = 0.10
+
+# 多档移动止损: (浮盈阈值, 止损位上移到成本 × (1+该值))
+# 单档口径的问题: 3%~15% 的浮盈区间没有任何保护, 赚 10% 回吐到成本以下才动。
+# 三档让止损随浮盈阶梯式上移; 只上移不下移由调用方与 _update_plan 双重保证。
+TRAILING_STOP_TIERS = ((0.06, 0.00), (0.12, 0.06), (0.20, 0.12))
+
+# 止盈: 触及 take_profit 时减掉该比例, 余仓交给移动止损
+# (清仓会把「让利润奔跑」直接掐断; 该比例复用既有 sell_partial 通道)
+TAKE_PROFIT_PARTIAL_PORTION = 0.5
+
+# 重大利空清仓的两段式旁路: 当日跌幅达到该比例时首轮即清仓。
+# 真利空的第一天往往就是大跌, 纯两段式会白亏一天; 0.03 与
+# max_daily_loss_pct 同量级, 不是新拍的数字。
+MAJOR_BEAR_BYPASS_DROP = 0.03
+
+# ---------------------------------------------------------------------------
+# 卖出可靠性: 退出意图重试 (见 agents/hold.py 与 exit_state.py)
+# ---------------------------------------------------------------------------
+# 卖单被风控拒绝或跌停未成交后, 原实现只记一条日志, 等下一轮 10 分钟扫描重新
+# 决策 —— 极端行情下连续拒单等于止损完全失效。改为把「已决定要卖」持久化到
+# 持仓 plan_json, 由扫描入口按冷却重试, 直到成交。
+SELL_RETRY_COOLDOWN_MINUTES = 30   # 同一标的两次退出尝试的最小间隔
+SELL_RETRY_MAX_PER_DAY = 6         # 单标的每日最多尝试次数 (超限当日放弃并告警)
 
 # ---------------------------------------------------------------------------
 # Message queue behaviour
@@ -392,6 +473,13 @@ SYSTEM_CONFIG_SEED = {
     # 交易时段闸门: 1=开启 (非交易时段拒绝任何下单)。调度只在盘中入队, 但 flow
     # 异步执行会跨到午休/收盘之后, 没有这道闸门时盘后照样下单 (2026-10-20 发现)。
     "trading_session_guard_enable": ("1", "交易时段闸门: 1=非交易时段拒单, 0=关闭"),
+    # --- 策略台: 全部走运行时开关, 改库即时生效, 不需要重启 ---
+    "strategy_desk_enable": ("1", "策略台收盘研判: 1=开启, 0=停止入队"),
+    "strategy_intraday_enable": ("0", "策略台盘中快照: 1=开启 (只展示, 断言不入账)"),
+    "strategy_reproduce_coef_enable": (
+        "0", "策略胜负率回灌选股权重: 1=开启 (需 ≥30 条已判定断言, 默认观察期关闭)",
+    ),
+    "strategy_driver_coef": ("", "策略台 driver 权重系数(JSON, 由周一 06:30 任务写入)"),
 }
 
 # ---------------------------------------------------------------------------

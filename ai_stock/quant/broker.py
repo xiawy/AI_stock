@@ -136,6 +136,9 @@ class BrokerAdapter(ABC):
     """交易适配层抽象接口."""
 
     broker_name = "abstract"
+    # 是否真实券商适配器。置 True 的适配器会在装配时要求显式打开全局开关,
+    # 并在下单前再走一遍 pre_trade_check (纵深防御, 见 HuaxingBrokerAdapter)。
+    is_live = False
 
     @abstractmethod
     def connect(self) -> bool: ...
@@ -342,8 +345,6 @@ class SimulatedBroker(BrokerAdapter):
             if price >= limit_up > 0:
                 return self._reject(order_id, request, f"涨停价 {limit_up} 不可买入")
         else:
-            if price <= limit_down > 0:
-                return self._reject(order_id, request, f"跌停价 {limit_down} 不可卖出")
             self._refresh_available(symbol)
             pos = self._positions.get(symbol)
             if not pos or pos["available"] < qty:
@@ -351,6 +352,20 @@ class SimulatedBroker(BrokerAdapter):
                 if pos and pos["qty"] >= qty and pos["buy_date"] == self._market_today():
                     return self._reject(order_id, request, "T+1: 当日买入不可卖出")
                 return self._reject(order_id, request, f"可卖数量不足 (可用 {avail} < {qty})")
+            if price <= limit_down > 0:
+                # 跌停: 卖单挂单排队, 不成交也不写 trade_log ——
+                # count_orders_today 无差别统计全部状态行 (含 rejected), 挂单若落库,
+                # 同一笔委托会被重试反复占用 max_daily_orders 的笔数限额。
+                # 成交时才写 trade_log; 退出意图由调用方 (exit_state) 负责记录与重试。
+                logger.warning(
+                    "SIM PENDING SELL %s @%.3f: 跌停价 %.3f, 挂单排队",
+                    symbol, price, limit_down,
+                )
+                return OrderResult(
+                    order_id=order_id, status=OrderStatus.PENDING,
+                    message=f"跌停价 {limit_down}, 卖单挂单排队 (未成交)",
+                )
+
 
         # ---- 成交价模拟 ----
         if request.order_type == OrderType.LIMIT and request.limit_price:
@@ -478,6 +493,7 @@ class HuaxingBrokerAdapter(BrokerAdapter):
     """
 
     broker_name = "huaxing"
+    is_live = True
 
     def __init__(self, api_client=None):
         self._client = api_client  # 官方 SDK client (待接入)
@@ -506,13 +522,21 @@ class HuaxingBrokerAdapter(BrokerAdapter):
         self._connected = False
 
     def _ensure_live_permission(self, request: OrderRequest) -> None:
-        """实盘权限检查 (§12.3.2): 开关/单日笔数/单笔金额/白名单."""
+        """实盘权限检查 (§12.3.2): 开关/单日笔数/单笔金额/白名单.
+
+        末尾再做一次 ``pre_trade_check``: 业务层已经调过一次, 这里不是重复 ——
+        业务层可能被绕过 (脚本直连、调试下单、新增调用点漏改), 而实盘不该靠
+        「调用方记得校验」来保证不越界。风控冻结、持仓上限、行业集中度、
+        单次建仓比例都在这道复核里生效。
+        """
         if db_ops.get_config_value("global_trade_enable", "0") != "1":
             raise OrderRejectException("实盘全局开关关闭 (global_trade_enable=0)")
         max_orders = int(db_ops.get_config_value("max_daily_orders", "50"))
         if db_ops.count_orders_today() >= max_orders:
             raise OrderRejectException(f"超过单日最大委托笔数 {max_orders}")
-        max_value = float(db_ops.get_config_value("max_order_value", "200000"))
+        # 默认值与 SYSTEM_CONFIG_SEED / pre_trade_check 保持一致 (250000):
+        # 未种子的新库上实盘与模拟盘不该有两条不同的单笔金额上限。
+        max_value = float(db_ops.get_config_value("max_order_value", "250000"))
         quote = self._quote(request.symbol)
         est_amount = quote.get("price", 0) * request.quantity
         if est_amount > max_value:
@@ -523,6 +547,16 @@ class HuaxingBrokerAdapter(BrokerAdapter):
         ]
         if whitelist and request.symbol not in whitelist:
             raise OrderRejectException(f"{request.symbol} 不在实盘白名单")
+
+        if not db_ops.get_flag("live_pre_trade_guard", True):
+            return
+        # 延迟导入: risk_control 在模块顶层 import 了本模块, 顶层反向导入会 ImportError
+        from .risk_control import pre_trade_check
+
+        ratio = (request.extra or {}).get("used_ratio")
+        check = pre_trade_check(request, position_ratio=ratio)
+        if not check.ok:
+            raise OrderRejectException(f"实盘风控复核拒绝: {check.reason}")
 
     @staticmethod
     def _quote(symbol: str) -> dict:
@@ -628,5 +662,22 @@ def get_broker() -> BrokerAdapter:
 
 
 def set_broker(broker: BrokerAdapter) -> None:
+    """装配 broker 适配器.
+
+    实盘适配器必须显式打开 ``global_trade_enable`` 才允许装配 —— 装配成功就等于
+    「这个进程随时可能下真单」, 静默降级成「配了实盘但开关是关的」会让运维在
+    排查「为什么没成交」时完全走错方向。不满足条件直接抛异常。
+    """
     global _broker
+    name = getattr(broker, "broker_name", "unknown")
+    if getattr(broker, "is_live", False):
+        enabled = db_ops.get_config_value("global_trade_enable", "0")
+        if enabled != "1":
+            raise OrderRejectException(
+                f"拒绝装配实盘 broker {name}: global_trade_enable={enabled!r}, "
+                f"实盘必须显式置 1"
+            )
+        logger.warning("装配实盘 broker: %s (真实资金)", name)
+    else:
+        logger.info("装配 broker: %s", name)
     _broker = broker

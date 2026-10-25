@@ -67,6 +67,11 @@ const routes = [
     component: () => import('../views/EvolutionReview.vue'),
   },
   {
+    path: '/strategy',
+    name: 'strategy',
+    component: () => import('../views/StrategyDesk.vue'),
+  },
+  {
     path: '/:pathMatch(.*)*',
     redirect: '/',
   },

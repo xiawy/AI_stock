@@ -173,6 +173,12 @@ def save_news_board(
             logger.warning("News board: snapshot creation failed")
             return {"snapshot_id": None, "saved": 0, "skipped": "db_error"}
         saved = db_ops.save_news_items(snapshot_id, [_to_news_row(n) for n in top])
+        # 同事件多源成员: 榜单每簇只占一个榜位, 其余转载在这里留档,
+        # 否则前端只能显示 "×N" 而说不出"是哪几家在转"。
+        try:
+            db_ops.save_cluster_members(snapshot_id, enriched, top)
+        except Exception as exc:
+            logger.debug("cluster members skipped: %s", exc)
         db_ops.update_snapshot(
             snapshot_id, status="completed",
             top20_json=json.dumps(

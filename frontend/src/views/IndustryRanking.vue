@@ -5,6 +5,7 @@
       <div class="page-header">
         <h2>行业榜 · 三榜联动</h2>
         <div class="header-actions">
+          <el-button type="primary" plain @click="scorecardVisible = true">成绩单</el-button>
           <el-button :icon="ArrowLeft" @click="router.push('/')">返回首页</el-button>
           <el-date-picker
             v-model="selectedDate"
@@ -21,15 +22,20 @@
         <el-tag>榜单日期 {{ snapshot.rank_date }}</el-tag>
         <span v-if="snapshot.created_at">生成时间：{{ formatTime(snapshot.created_at) }}</span>
         <span class="funnel-hint">宏观行业榜（量化选股生命周期优选）→ 中观行业（龙头/热股）→ 微观个股（深度诊股）</span>
+        <el-checkbox v-if="diffReady" v-model="sortByChange" size="small" class="sort-toggle">
+          按变化排序
+        </el-checkbox>
       </div>
+
+      <BoardDiffBar title="行业榜" :summary="diffSummary" :previous-date="diffPrev" />
 
       <div v-loading="loading" class="tri-board">
         <!-- 第一栏：行业热度榜 -->
         <div class="board">
-          <h3>行业热度榜 Top {{ rankings.length }}</h3>
-          <div v-if="rankings.length" class="board-scroll">
+          <h3>行业热度榜 Top {{ displayRankings.length }}</h3>
+          <div v-if="displayRankings.length" class="board-scroll">
             <div
-              v-for="row in rankings"
+              v-for="row in displayRankings"
               :key="row.rank"
               class="industry-row"
               :class="{ active: selected?.industry === row.industry }"
@@ -59,11 +65,25 @@
                   >
                     上游传导·{{ row.transmission_from }}
                   </el-tag>
+                  <span
+                    v-if="indChange(row)"
+                    class="chg"
+                    :class="indChange(row).change"
+                    :title="indChangeTitle(row)"
+                  >
+                    {{ indChangeText(row) }}
+                  </span>
                 </div>
                 <div class="industry-meta">
                   <span class="heat">优选级 {{ row.heat_score?.toFixed(1) }}</span>
+                  <span v-if="row.days_on_board > 1" class="chain-days">
+                    连榜 {{ row.days_on_board }} 天
+                  </span>
                   <a class="news-link" title="查看该行业相关新闻" @click.stop="openNews(row)">
                     相关新闻 ↗
+                  </a>
+                  <a class="news-link" title="新闻 → 行业 → 龙头 → 池内标的" @click.stop="openChain(row.industry)">
+                    证据链 ↗
                   </a>
                   <span :class="pctClass(row.change_pct)">{{ pctText(row.change_pct) }}</span>
                   <span :class="flowClass(row.main_net_inflow)">{{ flowText(row.main_net_inflow) }}</span>
@@ -84,12 +104,13 @@
                   <span class="stock-name">
                     {{ s.name }}
                     <el-tag
-                      v-if="s.leader_label"
+                      v-for="lb in s.labels || (s.leader_label ? [s.leader_label] : [])"
+                      :key="lb"
                       size="small"
                       effect="plain"
-                      :type="s.leader_label === '领涨' ? 'danger' : 'warning'"
+                      :type="lb === '领涨' ? 'danger' : 'warning'"
                     >
-                      {{ s.leader_label }}
+                      {{ lb }}
                     </el-tag>
                   </span>
                   <span class="stock-code">{{ s.code }}</span>
@@ -125,7 +146,21 @@
                   <span class="stock-name">{{ stock.name }}</span>
                   <span class="stock-code">{{ stock.symbol }}</span>
                   <el-tag v-if="stock.industry" size="small" effect="plain">{{ stock.industry }}</el-tag>
-                  <span class="score">置信 {{ confidenceText(stock.confidence) }}</span>
+                  <el-tag v-if="stock.is_tail" size="small" type="warning" effect="plain" title="鱼尾阶段：买入链路会拦截">
+                    鱼尾
+                  </el-tag>
+                  <el-tag
+                    v-else-if="stock.dyn_state && stock.dyn_state !== '正常'"
+                    size="small"
+                    effect="plain"
+                    :type="stock.dyn_state === '增强' ? 'danger' : 'info'"
+                  >
+                    动态{{ stock.dyn_state }}
+                  </el-tag>
+                  <span class="score" :title="`动态置信度 ${stock.dyn_confidence?.toFixed(3)}（决定排序与是否被踢出）；入池分 ${stock.confidence?.toFixed(1)}（入池时的静态评估）`">
+                    动态 {{ confidenceText(stock.dyn_confidence) }}
+                    <em class="pool-score">入池 {{ stock.confidence?.toFixed(1) }}</em>
+                  </span>
                 </div>
                 <p class="rec-logic">{{ stock.reason || stock.stage_judgement }}</p>
               </div>
@@ -177,6 +212,10 @@
 
       <!-- 新闻详情弹窗（复用新闻榜的 ImpactDetail） -->
       <ImpactDetail v-model="detailVisible" :news="selectedNews" />
+
+      <BoardScorecard v-model="scorecardVisible" />
+
+      <EvidenceChain v-model="chainVisible" :theme="chainTheme" :date="selectedDate" />
     </div>
   </div>
 </template>
@@ -188,9 +227,13 @@ import { ElMessage } from 'element-plus'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { industryApi } from '../api/industry'
 import { recommendationApi } from '../api/recommendation'
+import { boardApi } from '../api/board'
 import { analysisApi } from '../api/analysis'
 import AppHeader from '../components/AppHeader.vue'
 import ImpactDetail from '../components/ImpactDetail.vue'
+import BoardDiffBar from '../components/BoardDiffBar.vue'
+import BoardScorecard from '../components/BoardScorecard.vue'
+import EvidenceChain from '../components/EvidenceChain.vue'
 
 const router = useRouter()
 const loading = ref(false)
@@ -207,7 +250,77 @@ const newsItems = ref([])
 const detailVisible = ref(false)
 const selectedNews = ref(null)
 
+// 变化视图
+const diffSummary = ref({})
+const diffPrev = ref('')
+const indChangeMap = ref({})
+const sortByChange = ref(false)
+const scorecardVisible = ref(false)
+
+// 证据链
+const chainVisible = ref(false)
+const chainTheme = ref('')
+
 const leaders = computed(() => selected.value?.leader_stocks || [])
+
+const diffReady = computed(() => diffSummary.value?.has_previous === true)
+
+/** 按变化排序：新进优先，其次名次前进最多 */
+const displayRankings = computed(() => {
+  if (!sortByChange.value) return rankings.value
+  const weight = (row) => {
+    const c = indChange(row)
+    if (!c) return 999
+    if (c.change === 'new') return -1000
+    if (c.change === 'up') return c.delta_rank
+    if (c.change === 'down') return 1000 + c.delta_rank
+    return 500
+  }
+  return [...rankings.value].sort((a, b) => weight(a) - weight(b))
+})
+
+function indChange(row) {
+  return indChangeMap.value[row.industry] || null
+}
+
+function indChangeText(row) {
+  const c = indChange(row)
+  if (!c) return ''
+  if (c.change === 'new') return '新进'
+  if (c.change === 'up') return `▲${-c.delta_rank}`
+  if (c.change === 'down') return `▼${c.delta_rank}`
+  return ''
+}
+
+function indChangeTitle(row) {
+  const c = indChange(row)
+  if (!c) return ''
+  if (c.change === 'new') return '本期新进榜'
+  if (c.change === 'up') return `上期第 ${c.prev_rank} 名 → 本期第 ${row.rank} 名`
+  if (c.change === 'down') return `上期第 ${c.prev_rank} 名 → 本期第 ${row.rank} 名`
+  return '名次未变'
+}
+
+function openChain(theme) {
+  chainTheme.value = theme
+  chainVisible.value = true
+}
+
+async function loadDiff() {
+  try {
+    const { data } = await boardApi.industryDiff(selectedDate.value)
+    diffSummary.value = data.summary || {}
+    diffPrev.value = data.previous_date || ''
+    const map = {}
+    for (const row of data.rows || []) {
+      if (row.industry) map[row.industry] = row
+    }
+    indChangeMap.value = map
+  } catch {
+    diffSummary.value = {}
+    indChangeMap.value = {}
+  }
+}
 
 async function loadData() {
   loading.value = true
@@ -229,6 +342,7 @@ async function loadData() {
   } finally {
     loading.value = false
   }
+  await loadDiff()
 }
 
 /** 一键深度诊股：启动 TradingAgents 完整多 Agent 分析并跳转进度页 */
@@ -442,6 +556,43 @@ onMounted(loadData)
 .heat {
   color: var(--brand);
   font-weight: 600;
+}
+/* 变化标记：新进/名次升降。榜单的核心价值是变化，不是绝对排名 */
+.chg {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+.chg.new {
+  color: #f56c6c;
+  border: 1px solid #f56c6c66;
+  background: #f56c6c14;
+  font-weight: 700;
+}
+.chg.up {
+  color: #f56c6c;
+  border: 1px solid #f56c6c33;
+  background: none;
+}
+.chg.down {
+  color: #67c23a;
+  border: 1px solid #67c23a33;
+  background: none;
+}
+.chain-days {
+  color: var(--brand);
+  font-size: 0.76rem;
+}
+.sort-toggle {
+  margin-left: auto;
+}
+.pool-score {
+  font-style: normal;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  margin-left: 4px;
 }
 .news-link {
   color: var(--brand);

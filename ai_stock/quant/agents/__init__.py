@@ -73,6 +73,7 @@ def build_handlers() -> dict[str, dict[str, Callable[[dict], dict]]]:
         ORCHESTRATOR_QUEUE,
         RISK_QUEUE,
         SELECTION_QUEUE,
+        STRATEGY_QUEUE,
     )
     from ..orchestrator import get_orchestrator
 
@@ -121,4 +122,15 @@ def build_handlers() -> dict[str, dict[str, Callable[[dict], dict]]]:
             "risk_scan": RiskScanAgent().handle,
         },
         ORCHESTRATOR_QUEUE: get_orchestrator().get_handlers(),
+        STRATEGY_QUEUE: _strategy_handlers(),
+    }
+
+
+def _strategy_handlers() -> dict[str, Callable[[dict], dict]]:
+    """策略台 handler (懒导入: 避免把所有策略台依赖压到交易链路的启动路径上)."""
+    from ..strategy.service import handle_strategy_coef_update, handle_strategy_run
+
+    return {
+        "strategy_run": handle_strategy_run,
+        "strategy_coef_update": handle_strategy_coef_update,
     }

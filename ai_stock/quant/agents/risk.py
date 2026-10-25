@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from .. import db_ops
+from .. import db_ops, exit_state
 from ..broker import OrderRequest, OrderSide, OrderType, get_broker, round_lot
 from ..risk_control import account_snapshot, async_risk_scan, pre_trade_check
 from .base import BaseAgent
@@ -55,7 +55,7 @@ def handle_force_reduce(task: dict) -> dict:
     broker = get_broker()
     positions = {p.symbol: p for p in broker.get_positions()}
     pos = positions.get(symbol)
-    if pos is None or pos.available <= 0:
+    if pos is None or pos.quantity <= 0:
         db_ops.log_decision(
             agent="risk_force_reduce", decision="skipped", symbol=symbol,
             task_id=task_id, reason="无可卖持仓 (T+1 冻结或已清仓)",
@@ -68,9 +68,13 @@ def handle_force_reduce(task: dict) -> dict:
     if quote_price <= 0 or excess_value <= 0:
         return {"status": "skipped", "reason": "仓位已在目标内"}
     sell_qty = round_lot(int(excess_value / quote_price / 100) * 100)
-    sell_qty = min(sell_qty, pos.available)
+    # Position.quantity 是 T+1 后的**可用量** (total_quantity 才是总持仓)
+    sell_qty = min(sell_qty, pos.quantity)
     if sell_qty <= 0:
         return {"status": "skipped", "reason": "减仓数量不足一手"}
+    # 本次减掉的仓位比例: 退出意图要记录「卖多少」, 重试时必须卖同样的量
+    base_qty = pos.total_quantity or pos.quantity or sell_qty
+    sold_portion = min(1.0, sell_qty / base_qty) if base_qty > 0 else 1.0
 
     order = OrderRequest(
         symbol=symbol, side=OrderSide.SELL, quantity=sell_qty,
@@ -79,11 +83,20 @@ def handle_force_reduce(task: dict) -> dict:
     )
     check = pre_trade_check(order, snapshot)
     if not check.ok:
+        # 卖出被拒不能只记日志: 记下退出意图, 由 hold 扫描按冷却重试。
+        # (broker 层 failed 不记 —— 强制减仓本身每 5 分钟重扫, 有自带重试节奏)
+        pending = None
+        if exit_state.enabled():
+            pending = exit_state.mark_and_notify(
+                symbol, reason=f"风控强制减仓: {reason}",
+                portion=min(1.0, sold_portion), error=check.reason,
+            )
         db_ops.log_decision(
             agent="risk_force_reduce", decision="risk_rejected", symbol=symbol,
             task_id=task_id, reason=f"强制减仓被风控拒绝: {check.reason}",
+            detail={"pending_exit": pending},
         )
-        return {"status": "risk_rejected", "reason": check.reason}
+        return {"status": "risk_rejected", "reason": check.reason, "pending_exit": pending}
 
     result = broker.place_order(order)
     db_ops.log_decision(

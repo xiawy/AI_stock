@@ -373,6 +373,125 @@ class TestVerificationCriteria:
         assert result["passed"] is True
 
 
+# ---------------------------------------------------------------------------
+# FR-04: 收益风险比缺失的处置 (重试一次 → 按 rr_missing_policy)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestRiskRewardMissing:
+    """修复前: 解析失败返回 0, 而 weak_rr 只判 ``0 < rr < 1.5`` → 缺失即放行。
+
+    买入链路其余关卡都是 fail-closed (LLM 不可用直接拒), 唯独这处 fail-open
+    是口径不一致而不是容错。现在: 缺失先重试一次, 仍缺失按策略处置 (默认拒绝)。
+    """
+
+    def _run(self, quant_env, monkeypatch, reports, policy=None):
+        """``reports`` 按调用顺序返回, 用完后重复最后一个."""
+        from ai_stock.quant import db_ops
+        from ai_stock.quant.agents import buy as buy_mod
+        from ai_stock.quant.llm_helper import QuantLLM
+
+        if policy is not None:
+            db_ops.set_config_value("rr_missing_policy", policy)
+        queue = list(reports)
+        calls: list[str] = []
+
+        def _fake(llm, schema, prompt, **kwargs):
+            calls.append(prompt)
+            return queue.pop(0) if len(queue) > 1 else queue[0]
+
+        monkeypatch.setattr(buy_mod, "structured_invoke", _fake)
+        agent = buy_mod.SecondVerificationAgent(data_service=_FakeMarket())
+        agent._llm_holder = QuantLLM(llm_quick=object(), llm_deep=object())
+        result = agent.handle({
+            "task_id": "t", "payload": {
+                "flow_id": "f", "flow_type": "buy", "step": "second_verification",
+                "context": {"symbol": "600000", "pool": {}},
+            },
+        })
+        return result, calls
+
+    def _report(self, **kwargs):
+        from ai_stock.quant.agents.buy import VerificationReport
+
+        base = {"passed": True, "reason": "ok", "bear_risk_level": "low"}
+        base.update(kwargs)
+        return VerificationReport(**base)
+
+    def test_missing_triggers_one_retry(self, quant_env, monkeypatch):
+        """首次缺 risk_reward → 重试; 第二次给数 → 通过 (不应白拒一只好票)。"""
+        result, calls = self._run(quant_env, monkeypatch, [
+            self._report(),                       # risk_reward 默认 0, 文本空
+            self._report(risk_reward=2.4),
+        ])
+
+        assert len(calls) == 2
+        assert "纯数字" in calls[1]               # 重试提示词明确要求数值
+        assert result["passed"] is True
+        assert result["rr_state"] == "ok"
+        assert result["risk_reward"] == pytest.approx(2.4)
+
+    def test_missing_after_retry_rejected_by_default(self, quant_env, monkeypatch):
+        result, calls = self._run(quant_env, monkeypatch, [self._report()])
+
+        assert len(calls) == 2                   # 只重试一次, 不无限重试
+        assert result["passed"] is False
+        assert result["reject_stage"] == "rr_missing"
+        assert result["rr_state"] == "missing"
+
+    def test_missing_passes_under_warn_policy(self, quant_env, monkeypatch):
+        """灰度首周观察缺失率时用 warn: 放行但必须留痕。"""
+        result, _ = self._run(quant_env, monkeypatch, [self._report()], policy="warn")
+
+        assert result["passed"] is True
+        assert result["rr_state"] == "missing"
+        assert result["reject_stage"] == ""
+
+    def test_unparseable_text_is_invalid_not_ok(self, quant_env, monkeypatch):
+        result, _ = self._run(
+            quant_env, monkeypatch,
+            [self._report(risk_reward_ratio="收益风险比较高")],
+        )
+        assert result["rr_state"] == "invalid"
+        assert result["passed"] is False
+        assert result["reject_stage"] == "rr_missing"
+
+    def test_retry_failure_degrades_to_missing(self, quant_env, monkeypatch):
+        """重试抛异常不能把流程打断, 按「仍缺失」处置即可。"""
+        from ai_stock.quant.agents import buy as buy_mod
+        from ai_stock.quant.llm_helper import QuantLLM
+
+        calls = []
+
+        def _fake(llm, schema, prompt, **kwargs):
+            calls.append(prompt)
+            if len(calls) > 1:
+                raise RuntimeError("llm timeout")
+            return self._report()
+
+        monkeypatch.setattr(buy_mod, "structured_invoke", _fake)
+        agent = buy_mod.SecondVerificationAgent(data_service=_FakeMarket())
+        agent._llm_holder = QuantLLM(llm_quick=object(), llm_deep=object())
+
+        result = agent.handle({
+            "task_id": "t", "payload": {"flow_id": "f", "context": {"symbol": "600000", "pool": {}}},
+        })
+
+        assert len(calls) == 2
+        assert result["rr_state"] == "missing"
+        assert result["passed"] is False
+
+    def test_parseable_text_does_not_retry(self, quant_env, monkeypatch):
+        result, calls = self._run(
+            quant_env, monkeypatch,
+            [self._report(risk_reward_ratio="3:1")],
+        )
+        assert len(calls) == 1
+        assert result["risk_reward"] == pytest.approx(3.0)
+        assert result["passed"] is True
+
+
 @pytest.mark.unit
 class TestRiskRewardParser:
     @pytest.mark.parametrize("text,expected", [

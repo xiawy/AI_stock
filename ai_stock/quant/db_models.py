@@ -153,6 +153,49 @@ class StockPoolOptional(QuantBase):
         }
 
 
+class QuantPoolSnapshot(QuantBase):
+    """自选池每日状态快照 (热股榜"变化"与"入池后表现"的唯一依据)。
+
+    为什么必须单独落表: ``quant_stock_pool_optional`` 只存**当前状态**,
+    历史视图靠 ``add_time``/``remove_time`` 倒推存在性, 分数却取当前值 ——
+    于是"查昨天的热股榜"看到的是"昨天的成分 + 今天的分数", 每查一次变一次。
+    有了这张表, 历史才可复现, "入池 5 日胜率"才算得出来。
+
+    每个选股槽位写一次并按 (trade_date, symbol) 覆盖: 同一天 3 个槽位以最后
+    一次为准(18:00 那轮在收盘后, 才是当日定稿)。一年约 4000 行, 可忽略。
+    """
+
+    __tablename__ = "quant_pool_snapshot"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "symbol", name="uq_pool_snapshot"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    name: Mapped[str] = mapped_column(String(64), default="")
+    industry: Mapped[str] = mapped_column(String(64), default="")
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)      # 入池静态分 0-10
+    dyn_confidence: Mapped[float] = mapped_column(Float, default=0.5)  # 动态置信度 0-1
+    stage_batch: Mapped[str] = mapped_column(String(8), default="BODY")
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    radar_theme: Mapped[str] = mapped_column(String(100), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    def to_dict(self) -> dict:
+        return {
+            "trade_date": self.trade_date,
+            "symbol": self.symbol,
+            "name": self.name,
+            "industry": self.industry,
+            "confidence": self.confidence,
+            "dyn_confidence": self.dyn_confidence,
+            "stage_batch": self.stage_batch,
+            "status": self.status,
+            "radar_theme": self.radar_theme,
+        }
+
+
 class StockPoolHolding(QuantBase):
     """当前持仓池 (按用户隔离; user_id='system' 为引擎系统账户)."""
 
@@ -650,3 +693,161 @@ class QuantThemeDaily(QuantBase):
     turnover: Mapped[float] = mapped_column(Float, default=0.0)
     breadth: Mapped[float] = mapped_column(Float, default=0.0)     # 上涨家数占比
     sigma20: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+# ---------------------------------------------------------------------------
+# 策略台 (StrategyDesk) —— 7 张表, 全部新建
+#
+# 为什么不给既有表加列: 量化表没有 Alembic 链路, create_all 只建新表、不给
+# 已存在的表补列, 加字段必须手工 DDL。新建表是唯一"重启即生效"的做法。
+#
+# 记分看板不落表: 分组胜率随时可算, 落表只会制造"看板过期"这种假问题。
+# ---------------------------------------------------------------------------
+
+
+class StrategyEvidence(QuantBase):
+    """取数留痕. 缺失也落一行 (ok=0 + empty_reason), 便于事后区分
+    "当天确实没数据" 与 "代码根本没去取"。
+    """
+
+    __tablename__ = "strategy_evidence"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    kind: Mapped[str] = mapped_column(String(32))
+    source: Mapped[str] = mapped_column(String(64), default="")
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    empty_reason: Mapped[str] = mapped_column(String(200), default="")
+    fetched_at: Mapped[str] = mapped_column(String(32), default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class StrategyStructureBasket(QuantBase):
+    """板块内结构拆解结果 (M1). 每行一个篮子, 含证据分布与评级上限."""
+
+    __tablename__ = "strategy_structure_basket"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "basket_name", name="uq_strategy_basket"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    parent_board: Mapped[str] = mapped_column(String(64), default="")
+    basket_name: Mapped[str] = mapped_column(String(128))
+    members_json: Mapped[str] = mapped_column(Text, default="[]")
+    change_json: Mapped[str] = mapped_column(Text, default="{}")
+    synth_change_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    valid_n: Mapped[int] = mapped_column(Integer, default=0)
+    evidence_dist_json: Mapped[str] = mapped_column(Text, default="{}")
+    driver_consistency: Mapped[float] = mapped_column(Float, default=0.0)
+    rating_cap: Mapped[str] = mapped_column(String(8), default="无")
+    verdict: Mapped[str] = mapped_column(String(16), default="个股事件")
+    reason: Mapped[str] = mapped_column(String(300), default="")
+
+
+class StrategyLeaderTrace(QuantBase):
+    """高标溯源 (M2). exclude_flag=1 表示已从所有篮子剔除."""
+
+    __tablename__ = "strategy_leader_trace"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "symbol", name="uq_strategy_leader"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    symbol: Mapped[str] = mapped_column(String(16))
+    name: Mapped[str] = mapped_column(String(64), default="")
+    boards: Mapped[int] = mapped_column(Integer, default=0)
+    board_type: Mapped[str] = mapped_column(String(16), default="")
+    official_board: Mapped[str] = mapped_column(String(64), default="")
+    real_driver: Mapped[str] = mapped_column(String(16), default="情绪")
+    attribution: Mapped[str] = mapped_column(String(16), default="纯情绪")
+    fund_verdict: Mapped[str] = mapped_column(String(16), default="无法判定")
+    extrapolable: Mapped[bool] = mapped_column(Boolean, default=False)
+    exclude_flag: Mapped[bool] = mapped_column(Boolean, default=False)
+    reason_tags_json: Mapped[str] = mapped_column(Text, default="[]")
+
+
+class StrategyFlowShadow(QuantBase):
+    """影子板块三日资金序列 (M3)."""
+
+    __tablename__ = "strategy_flow_shadow"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "basket_name", name="uq_strategy_shadow"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    basket_name: Mapped[str] = mapped_column(String(128))
+    members_json: Mapped[str] = mapped_column(Text, default="[]")
+    d2: Mapped[float] = mapped_column(Float, default=0.0)
+    d1: Mapped[float] = mapped_column(Float, default=0.0)
+    d0: Mapped[float] = mapped_column(Float, default=0.0)
+    pattern: Mapped[str] = mapped_column(String(16), default="数据缺失")
+    confidence: Mapped[str] = mapped_column(String(8), default="低")
+
+
+class StrategyMacroRegime(QuantBase):
+    """宏观闸门 (M4). growth_cap 为空字符串表示"不约束"."""
+
+    __tablename__ = "strategy_macro_regime"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trade_date: Mapped[str] = mapped_column(String(10), unique=True, index=True)
+    regime: Mapped[str] = mapped_column(String(8), default="未定")
+    growth_cap: Mapped[str] = mapped_column(String(8), default="")
+    note: Mapped[str] = mapped_column(String(300), default="")
+    vars_json: Mapped[str] = mapped_column(Text, default="{}")
+    triggers_json: Mapped[str] = mapped_column(Text, default="[]")
+    missing_json: Mapped[str] = mapped_column(Text, default="[]")
+
+
+class StrategyReport(QuantBase):
+    """一份三段式报告. 可重跑覆盖 (ON CONFLICT DO UPDATE)."""
+
+    __tablename__ = "strategy_report"
+    __table_args__ = (
+        UniqueConstraint("trade_date", "snapshot_type", name="uq_strategy_report"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    snapshot_type: Mapped[str] = mapped_column(String(8), default="close")
+    effective_from: Mapped[str] = mapped_column(String(20), default="")
+    sections_json: Mapped[str] = mapped_column(Text, default="{}")
+    degraded_json: Mapped[str] = mapped_column(Text, default="[]")
+    prompt_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class StrategyPrediction(QuantBase):
+    """断言记账. **不可重跑覆盖** (ON CONFLICT DO NOTHING):
+    重复计数会让胜率静默失真, 且不报任何错。
+    """
+
+    __tablename__ = "strategy_prediction"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    claim_id: Mapped[str] = mapped_column(String(24), unique=True, index=True)
+    period: Mapped[str] = mapped_column(String(24), default="")
+    type: Mapped[str] = mapped_column(String(12), default="MAINLINE")
+    target: Mapped[str] = mapped_column(String(128), default="")
+    driver: Mapped[str] = mapped_column(String(16), default="情绪")
+    claim_text: Mapped[str] = mapped_column(Text, default="")
+    direction: Mapped[str] = mapped_column(String(8), default="震荡")
+    horizon: Mapped[str] = mapped_column(String(8), default="T+1")
+    confidence: Mapped[str] = mapped_column(String(8), default="中")
+    falsify: Mapped[str] = mapped_column(Text, default="")
+    magnitude: Mapped[str] = mapped_column(String(24), default="")
+    regime: Mapped[str] = mapped_column(String(8), default="未定")
+    crowding: Mapped[str] = mapped_column(String(8), default="30-70%")
+    verify_date: Mapped[str] = mapped_column(String(10), index=True)
+    snapshot_type: Mapped[str] = mapped_column(String(8), default="close")
+    verify_state: Mapped[str] = mapped_column(String(10), default="pending")
+    outcome: Mapped[str] = mapped_column(String(8), default="")
+    actual: Mapped[str] = mapped_column(Text, default="")
+    move: Mapped[float] = mapped_column(Float, default=0.0)
+    base_rate: Mapped[str] = mapped_column(String(8), default="")
+    note: Mapped[str] = mapped_column(String(200), default="")
+    unjudged_reason: Mapped[str] = mapped_column(String(120), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

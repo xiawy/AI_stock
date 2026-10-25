@@ -177,11 +177,12 @@ def get_news_by_industry_ranking(board_id: int) -> Optional[dict]:
     """Get the news items related to an industry-board row (行业榜→新闻).
 
     行业榜由 quant 选股流程产出 (quant_industry_board), 行业名为东财细分
-    板块名 (如「半导体材料」「锂电池」); 新闻榜重构后不再写 industries_json,
-    故这里对最新一份完成快照的每条新闻, 用事件-行业知识库 (match_industries)
-    从标题+正文现算行业标签, 再与榜行行业名做跨粒度模糊匹配
-    (industry_matches_any), 并以「行业名直接出现在新闻文本」作为兜底。
-    无快照或无匹配新闻时返回空列表。
+    板块名 (如「半导体材料」「锂电池」)。
+
+    **归因口径统一 (2026-10)**: 优先用新闻榜自己的 ``industry_impacts``
+    (主题级 direction, 与新闻榜"影响行业"列同源), 匹配不上才退回
+    ``event_industry_kb.match_industries`` 从正文现算。此前只有现算一条路径,
+    同一条新闻在新闻榜与行业榜弹窗里可能归到不同行业, 两个榜一起失信。
     """
     from ai_stock.pipeline.db_models import ImpactSnapshot, NewsItem
     from ai_stock.pipeline.news_board import dedup_news
@@ -220,25 +221,15 @@ def get_news_by_industry_ranking(board_id: int) -> Optional[dict]:
         )
         news_items: list[dict] = []
         for r in rows:
-            # 行业标签: 优先用已存 industries_json, 为空则用知识库现算
-            # (新闻榜重构后该字段恒空, 现算保证存量/新数据联动都可用)。
-            tags: list[str] = []
-            if r.industries_json:
-                try:
-                    parsed = json.loads(r.industries_json)
-                    if isinstance(parsed, list):
-                        tags = [str(x) for x in parsed if x]
-                except (ValueError, TypeError):
-                    tags = []
-            # 标题 + 正文前段 (控制成本/聚焦导语, 避免长尾过度打标)
-            text = f"{r.title or ''} {(r.content or '')[:500]}"
-            if not tags:
-                tags = match_industries(text)
-            if not (industry_matches_any(industry, tags) or industry in text):
-                continue
             item = r.to_dict()
+            match = _match_board_industry(r, industry, match_industries,
+                                          industry_matches_any)
+            if match is None:
+                continue
+            tags, matched_by = match
             if not item.get("industries"):
                 item["industries"] = tags
+            item["matched_by"] = matched_by
             news_items.append(item)
         return {
             "industry": industry,
@@ -250,6 +241,58 @@ def get_news_by_industry_ranking(board_id: int) -> Optional[dict]:
         return None
     finally:
         session.close()
+
+
+def _impact_theme_names(industry_impacts_json: str) -> list[str]:
+    """``industry_impacts_json`` → 主题名列表 (与新闻榜"影响行业"列同源)."""
+    try:
+        parsed = json.loads(industry_impacts_json) if industry_impacts_json else []
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    out: list[str] = []
+    for entry in parsed:
+        if isinstance(entry, dict):
+            name = str(entry.get("name") or "").strip()
+            if name:
+                out.append(name)
+    return out
+
+
+def _match_board_industry(row, industry: str, kb_matcher, any_matcher):
+    """判断一条新闻是否属于行业榜某行, 命中则返回 (标签, 命中路径)。
+
+    优先级 = 可信度优先级, 不是性能优先级:
+    1. ``industry_impacts`` —— 榜单自己评估出的主题, 与新闻榜同源;
+    2. ``industries_json`` —— 旧版落库标签;
+    3. 知识库现算 —— 兜底, 同一事实可能归到另一个行业, 所以排在最后;
+    4. 行业名直接出现在正文 —— 最弱的文本兜底。
+    """
+    text = f"{row.title or ''} {(row.content or '')[:500]}"
+
+    impact_tags = _impact_theme_names(row.industry_impacts_json)
+    if impact_tags and any_matcher(industry, impact_tags):
+        return impact_tags, "impact"
+
+    stored: list[str] = []
+    if row.industries_json:
+        try:
+            parsed = json.loads(row.industries_json)
+            if isinstance(parsed, list):
+                stored = [str(x) for x in parsed if x]
+        except (ValueError, TypeError):
+            stored = []
+    if stored and any_matcher(industry, stored):
+        return stored, "stored"
+
+    kb_tags = kb_matcher(text) or []
+    if kb_tags and any_matcher(industry, kb_tags):
+        return kb_tags, "kb"
+
+    if industry in text:
+        return impact_tags or stored or kb_tags or [industry], "text"
+    return None
 
 
 def get_recent_snapshot_titles(hours: float = 2.0) -> Optional[dict]:
@@ -370,5 +413,230 @@ def get_snapshot_by_date(date_str: str) -> Optional[dict]:
     except Exception as exc:
         logger.error("Failed to get snapshot for %s: %s", date_str, exc)
         return None
+    finally:
+        session.close()
+
+
+# ---------------------------------------------------------------------------
+# 同事件多源成员 (news_cluster_member)
+# ---------------------------------------------------------------------------
+
+
+def save_cluster_members(snapshot_id: int, enriched: list[dict],
+                         picked: list[dict]) -> int:
+    """保存同事件多源成员, 一行一条转载。
+
+    *enriched* 是富化后的全量候选(带 cluster_id), *picked* 是上榜条目 ——
+    上榜那条标 ``is_representative=1``。只为"上榜过的簇"写成员: 没上榜的簇
+    写了也没人展开, 纯占库。失败静默(成员明细是锦上添花, 不能拖垮榜单落库)。
+    """
+    from ai_stock.pipeline.db_models import NewsClusterMember
+
+    if not snapshot_id or not enriched:
+        return 0
+    cluster_ids = {str(x.get("cluster_id") or "") for x in picked} - {""}
+    if not cluster_ids:
+        return 0
+    rep_keys = {
+        (str(x.get("cluster_id") or ""), str(x.get("title") or ""))
+        for x in picked
+    }
+
+    session = _get_session()
+    if session is None:
+        return 0
+    try:
+        count = 0
+        for item in enriched:
+            cid = str(item.get("cluster_id") or "")
+            if cid not in cluster_ids:
+                continue
+            title = str(item.get("title") or "")
+            session.add(NewsClusterMember(
+                snapshot_id=snapshot_id,
+                cluster_id=cid,
+                title=title,
+                source=str(item.get("source") or ""),
+                pub_time=str(item.get("pub_time") or ""),
+                is_representative=1 if (cid, title) in rep_keys else 0,
+            ))
+            count += 1
+        session.commit()
+        return count
+    except Exception as exc:
+        logger.warning("save_cluster_members failed: %s", exc)
+        session.rollback()
+        return 0
+    finally:
+        session.close()
+
+
+def get_cluster_members(snapshot_id: int, cluster_id: str) -> list[dict]:
+    """某簇的多源成员。表不存在(未跑过新版落库)时返回空, 不报错。"""
+    from ai_stock.pipeline.db_models import NewsClusterMember
+
+    session = _get_session()
+    if session is None:
+        return []
+    try:
+        rows = (
+            session.query(NewsClusterMember)
+            .filter(NewsClusterMember.snapshot_id == snapshot_id)
+            .filter(NewsClusterMember.cluster_id == cluster_id)
+            .all()
+        )
+        return [r.to_dict() for r in rows]
+    except Exception as exc:
+        logger.debug("get_cluster_members skipped: %s", exc)
+        return []
+    finally:
+        session.close()
+
+
+# ---------------------------------------------------------------------------
+# 跨期对比与成绩单 (只读)
+# ---------------------------------------------------------------------------
+
+
+def get_previous_snapshot() -> Optional[dict]:
+    """上一份 completed 快照(相对于最新一份)的 id 与元信息。
+
+    新闻榜"变化"要靠相邻两份快照对比: 一天有 3 份, 所以"上一份"不是"昨天",
+    而是时间上紧邻的那一份。
+    """
+    from ai_stock.pipeline.db_models import ImpactSnapshot
+
+    session = _get_session()
+    if session is None:
+        return None
+    try:
+        rows = (
+            session.query(ImpactSnapshot)
+            .filter(ImpactSnapshot.status == "completed")
+            .order_by(ImpactSnapshot.snapshot_time.desc())
+            .limit(2)
+            .all()
+        )
+        if len(rows) < 2:
+            return None
+        prev = rows[1]
+        return {
+            "id": prev.id,
+            "snapshot_time": (
+                prev.snapshot_time.isoformat() if prev.snapshot_time else None
+            ),
+            "period": prev.period,
+        }
+    except Exception as exc:
+        logger.warning("get_previous_snapshot failed: %s", exc)
+        return None
+    finally:
+        session.close()
+
+
+def get_ranking_map(snapshot_id: int) -> dict[str, dict]:
+    """快照内的实体 → {rank, title}, 供跨期 diff 使用。
+
+    键优先用 ``cluster_id``: 同一事件换一家媒体转载时标题会变, 但簇不变。
+    带 title 是为了"掉榜"那一栏能显示人话而不是一串哈希。
+    """
+    from ai_stock.pipeline.db_models import NewsItem
+    from ai_stock.pipeline.news_board import normalize_title
+
+    session = _get_session()
+    if session is None:
+        return {}
+    try:
+        rows = (
+            session.query(NewsItem)
+            .filter(NewsItem.snapshot_id == snapshot_id)
+            .order_by(NewsItem.rank.asc())
+            .all()
+        )
+        out: dict[str, dict] = {}
+        for r in rows:
+            key = r.cluster_id or normalize_title(r.title or "")
+            if key and key not in out:
+                out[key] = {"rank": int(r.rank or 0), "title": r.title or ""}
+        return out
+    except Exception as exc:
+        logger.warning("get_ranking_map failed: %s", exc)
+        return {}
+    finally:
+        session.close()
+
+
+def get_news_tracking_stats(days: int = 30) -> dict:
+    """新闻榜成绩单: 近 *days* 天方向/区间命中率, 按 event_type 与主题分组。
+
+    分母只算 ``direction_hit`` 非空的已判定样本 —— 未到验证日的不计入, 否则
+    "还没涨"会被算成"判断错"。
+    """
+    from ai_stock.pipeline.db_models import NewsImpactTracking, NewsItem
+
+    session = _get_session()
+    if session is None:
+        return {"ok": False, "reason": "数据库不可用"}
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        rows = (
+            session.query(NewsImpactTracking)
+            .filter(NewsImpactTracking.base_date >= cutoff)
+            .all()
+        )
+        snap_ids = {r.snapshot_id for r in rows if r.snapshot_id}
+        # 主题 → 榜单条目的事件类型(同快照内按主题名反查)
+        type_of: dict[tuple[int, str], str] = {}
+        if snap_ids:
+            items = (
+                session.query(NewsItem)
+                .filter(NewsItem.snapshot_id.in_(list(snap_ids)))
+                .all()
+            )
+            for it in items:
+                for name in _impact_theme_names(it.industry_impacts_json):
+                    type_of[(it.snapshot_id, name)] = it.event_type or "news"
+
+        judged = [r for r in rows if r.direction_hit is not None]
+        pending = len(rows) - len(judged)
+
+        def _agg(group: list) -> dict:
+            n = len(group)
+            if not n:
+                return {"n": 0, "direction_hit_rate": None, "range_hit_rate": None}
+            d = sum(1 for r in group if r.direction_hit == 1)
+            rng = [r for r in group if r.range_hit is not None]
+            return {
+                "n": n,
+                "direction_hit_rate": round(d / n, 3),
+                "range_hit_rate": (
+                    round(sum(1 for r in rng if r.range_hit == 1) / len(rng), 3)
+                    if rng else None
+                ),
+            }
+
+        by_type: dict[str, list] = {}
+        by_theme: dict[str, list] = {}
+        for r in judged:
+            t = type_of.get((r.snapshot_id, r.theme), "unknown")
+            by_type.setdefault(t, []).append(r)
+            by_theme.setdefault(r.theme or "未标主题", []).append(r)
+
+        return {
+            "ok": True,
+            "window_days": days,
+            "total": len(rows),
+            "judged": len(judged),
+            "pending": pending,
+            "overall": _agg(judged),
+            "by_event_type": {k: _agg(v) for k, v in by_type.items()},
+            "by_theme": {
+                k: _agg(v) for k, v in
+                sorted(by_theme.items(), key=lambda kv: -len(kv[1]))[:12]
+            },
+        }
+    except Exception as exc:
+        logger.error("get_news_tracking_stats failed: %s", exc)
+        return {"ok": False, "reason": str(exc)}
     finally:
         session.close()

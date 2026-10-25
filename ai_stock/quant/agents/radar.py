@@ -192,6 +192,7 @@ class ConfidenceMaintainAgent(BaseAgent):
             "tail_flagged": tail_flagged,
             "kicked": kicked,
         }
+        result["snapshot_rows"] = self._snapshot_pool(task_id, flow_id)
         self.log(
             "conf_maintain_done",
             reason=(
@@ -202,6 +203,27 @@ class ConfidenceMaintainAgent(BaseAgent):
         )
         self.report(flow_type, flow_id, step, result)
         return result
+
+    def _snapshot_pool(self, task_id: str, flow_id: str) -> int:
+        """落当日自选池快照 (热股榜历史可复现 / 入池后表现的唯一依据)。
+
+        用维护后的池子重读一次, 而不是复用上面那份 ``pool`` —— 踢出与衰减
+        都发生在循环里, 复用旧数据会把"今天刚被踢掉的票"记成仍在池中。
+        """
+        from ..calendar_utils import get_trade_date
+
+        try:
+            trade_date = get_trade_date()
+            rows = db_ops.get_optional_pool("active")
+            saved = db_ops.save_pool_snapshot(trade_date, rows)
+            self.log(
+                "pool_snapshot", reason=f"{trade_date} 快照 {saved} 行",
+                task_id=task_id, flow_id=flow_id,
+            )
+            return saved
+        except Exception as exc:
+            logger.warning("pool snapshot write failed: %s", exc)
+            return 0
 
     @staticmethod
     def _theme_hit(theme: str, today_themes: set) -> bool:

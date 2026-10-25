@@ -7,6 +7,149 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.6.0] — 2026-10-21
+
+### quant 交易链路整改：回撤基准、卖出可靠性、退出意图状态机、择时确认、实盘纵深防御（14 项 FR）
+
+依据 `docs/QUANT_REMEDIATION_SPEC.md`（需求）与 `docs/QUANT_REMEDIATION_PLAN.md`（施工图）。
+一句话概括：**原先三处「看起来在工作、实际永远不触发」的风控已修好** —— 回撤熔断
+（盈利态回撤恒为 0）、单日亏损冻结（只看已实现盈亏）、止损重试（卖不掉就没了下文）。
+所有行为变化都带运行时回滚键，**无需回滚代码**（改库即生效）。
+
+无 DDL、无新表：退出意图存放于 `quant_stock_pool_holding.plan_json` 的 `pending_exit`
+子键（量化表没有迁移链路，`create_all` 不会给已有表补列）。
+
+#### Batch 1 — 账户度量（FR-01 / FR-03）
+
+- **回撤基准改为真正的历史高点**（新增 `quant/risk_control.py` 的 `account_hwm` /
+  `account_hwm_initial`）。旧口径 `max(初始资金, 当前总资产)` 在盈利态恒等于当前资产，
+  回撤**永远算出 0**，`max_drawdown_pct` 熔断形同不存在。现在 HWM 单调上移，
+  `initial_cash` 变动超 1% 判定为账户重置并重设基准（避免旧高点污染新账户）。
+  - 观察指标：`account_snapshot()` 的 `drawdown_pct` / `account_hwm` / `drawdown_basis`。
+    部署后首个交易日应看到 `drawdown_basis=hwm` 且 `account_hwm ≥ 总资产`。
+  - 取数失败时**不写 HWM**，`drawdown_basis="unavailable"` 显式标注（0 会污染基准）。
+  - 回滚键：`drawdown_basis=initial`（回到旧口径）。
+- **当日盈亏改为 MTM 口径**（新增 `daily_pnl_total` = 已实现 + 持仓浮盈浮亏）。
+  旧口径只统计已实现盈亏，单日亏损冻结对「浮亏扩大」完全无感。浮亏基准：当日买入
+  用成本价、隔日用昨收；数量用 `total_quantity`（`Position.quantity` 是 T+1 可用量，
+  用它会漏掉当日买入的部分）。冻结判据改用 `daily_pnl_total`，`daily_pnl`（已实现）
+  保留原语义供报表使用。
+  - 观察指标：`daily_pnl`（已实现）与 `daily_pnl_total`（含浮亏）的差额即浮亏贡献；
+    `mtm_incomplete` 非空列出取数失败的标的。
+
+#### Batch 2 — 卖出可靠性（FR-02 / FR-13 / FR-06）
+
+- **退出意图状态机**（新增 `quant/exit_state.py`，卖出链路的唯一读写入口）。
+  旧行为：卖单被风控拒绝或跌停未成交后只写一条日志，下一轮 10 分钟扫描要**重新跑
+  完整决策链**（含 LLM 利空判断）—— 极端行情里连续拒单等于止损完全失效。
+  现在「已决定卖、但还没卖掉」持久化到 `pending_exit`，下一轮跳过决策直接重试；
+  30 分钟冷却 + 单标的单日 6 次上限，避免每轮扫描起 flow 重复打 `pre_trade_check`。
+  - `pending_exit.confirm_needed` 区分两种意图：`>0` = 决策未确认（重大利空首判），
+    照常走完整流程；`==0` = 已决策未成交，强制重试。
+  - 成交即清意图；部分成交也清（否则下一轮会再卖一半）。
+  - 告警分级：失败 1–2 次 WARNING，≥3 次 ERROR；告警类型 `sell_blocked:<symbol>`
+    **必须带标的** —— `emit` 按 `alert_type` 静默，用固定类型会让第一只票的告警
+    把其余票全部静默掉。
+  - 观察指标：`scripts/trade_attribution.py` 第 ④ 段「仍挂着的退出意图」；
+    `pending_exit.attempts / day_attempts / fail_count / first_at`。
+  - 回滚键：`sell_retry_enabled=0`（回到「只记日志」旧行为）。
+- **跌停卖单改为挂单排队**（`risk_control` + `SimulatedBroker` 双重放行）。
+  旧行为：跌停价一律拒卖，跌停当天止损完全无法执行。现在返回 `OrderStatus.PENDING`
+  并按退出意图重试，且**跌停挂单不落 `trade_log`** —— 否则重试会吃光
+  `max_daily_orders=50` 的笔数限额（`count_orders_today` 是无差别计数）。
+  - 回滚键：`allow_limit_down_sell=0`。
+- **止损口径统一为「实时价破位即卖」**（FR-06）。旧行为靠收盘价确认，盘中跌破后
+  收盘拉回就不止损，与回测口径不一致（回测按收盘序列判破位 → 系统性高估收益）。
+  现在 `TrendTrackingAgent` 用实时价判破位，`intraday_breach` 降级为观测字段；
+  回测侧 `backtest_stop_policy(..., lows=)` 改按当日最低价判破位，与实盘同口径，
+  返回新增 `exit_price_source`（`low` / `close`）便于核对。
+  - 观察指标：回测 `exit_price_source` 分布；实盘 result 里的 `intraday_stop`。
+
+#### Batch 3 — 止盈止损策略（FR-05 / FR-07 / FR-04）
+
+- **多档移动止损**：`TRAILING_STOP_TIERS = ((0.06,0.00),(0.12,0.06),(0.20,0.12))`
+  —— 浮盈 6%/12%/20% 分别把止损抬到成本 +0%/6%/12%。旧行为只有单档
+  （`TRAILING_STOP_TRIGGER` / `TRAILING_STOP_FLOOR`），大浮盈仓位的利润回吐无保护。
+  只上移不下移。回滚键：`trailing_tiers_enabled=0`。
+- **止盈改为减半**：触及止盈价卖 1/2，余仓交移动止损管理。旧行为一次性清仓，
+  在主升浪里把最强的仓位卖掉。回滚键：`take_profit_partial_enabled=0`。
+- **重大利空两段式确认**：首次 LLM 判定为真 → 只登记 `confirm_needed=1`，下一轮
+  再判定为真才清仓；当日跌幅 ≥3%（`MAJOR_BEAR_BYPASS_DROP`）直接清仓作旁路。
+  旧行为单次判定即清仓，一条被标题党放大的旧闻就能清掉刚建仓的仓位。
+  回滚键：`major_bear_confirm_rounds=0`（回到单次即清仓）。
+- **收益比缺失不再静默放行**（FR-04，`buy.py::_rr_state`）：拆成 `ok` / `missing` /
+  `invalid` 三态，缺失时用后缀重试一次，仍缺失按 `rr_missing_policy` 处置
+  （默认 `reject`，fail-closed）。旧行为 `_parse_risk_reward` 返回 0 被当成
+  「没写就当不要求」，等于给「收益率字段写错的研报」开了后门。
+  `reject_stage` 新增 `rr_missing`，result 新增 `rr_state`。
+  - 观察指标：`trade_attribution.py --days 30` 第 ① 段 `rr_missing` 占比。
+    **首周建议先设 `rr_missing_policy=warn` 观察实际拦截量**，再切 `reject`。
+  - 回滚键：`rr_missing_policy=warn`。
+
+#### Batch 4 — 择时与实盘防御（FR-08 / FR-09）
+
+- **择时确认加缓冲**（`quant/market_regime.py`）：`risk_on` 需**连续 2 个交易日**
+  收盘高出 MA20 ≥1% 才成立；`risk_off` 立即生效（不对称是刻意的：放松要证据，
+  收紧不需要）。旧行为单日站上即 `risk_on`，MA20 附近震荡会反复开合。
+  旧行为还**没有数据恢复路径**：一次取数失败后 `unknown` 就永久贴住。
+  现在 `unknown` 连续 24h 告警、连续 3 个交易日则建仓系数 ×0.5，数据恢复后清零。
+  状态持久化在 `market_regime_state`（同交易日不重复计数）。
+  - 观察指标：`market_regime_state` 的 `candidate_days` / `unknown_since`；
+    回滚验证用「指数在 MA20 ±0.5% 震荡 5 日 → `risk_on` 一次都不出现」。
+  - 回滚键：`market_confirm_days=1` + `market_buffer=0`。
+- **实盘纵深防御**：`BrokerAdapter.is_live` 标识 + `HuaxingBrokerAdapter` 层
+  `_ensure_live_permission` 末尾复跑 `pre_trade_check`（绕过业务层直接下单也会被拦）；
+  `set_broker()` 装配自检（实盘必须 `global_trade_enable=1`，否则直接抛异常，
+  不允许静默降级）。
+  - 下单侧新增 `extra={"used_ratio"}` 透传（`buy.py` 建仓、`hold.py` 加仓），
+    否则 broker 层用默认 20% 复核会把 24% 的高置信建仓单**二次误拒**。
+  - 顺带修掉一处配置漂移：`max_order_value` 默认值 `200000` → `250000`
+    （与 seed / `pre_trade_check` 对齐，否则实盘层比业务层更严）。
+  - 回滚键：`live_pre_trade_guard=0`。
+
+#### Batch 5 — 打磨项（FR-10 / FR-11 / FR-12 / FR-14）
+
+- **冷却按时间窗查库**（`db_ops.get_decisions(..., since=)`）：旧实现拉固定条数再
+  在内存过滤，早期拒绝记录多时，真正 240 分钟内的冷却票会被挤出窗口 → 冷却失效
+  或误冷却。改为 SQL 时间过滤（`+08:00` 边界先 `astimezone(utc)` 再传入，
+  SQLite 的 DateTime 比较是字符串字典序）。
+- **新闻新鲜度统一东八区**（`_freshness` 用 `calendar_utils.market_now()`）：
+  旧实现用主机本地时间，部署机为 UTC 时新鲜度整体偏移 8 小时。
+- **主题可用性加覆盖比例门槛**（FR-12）：日线覆盖不足 `max(6, ceil(70% × 成分股数))`
+  → 主题降为 `shadow`（仍可见但不参与交易），`metrics` 新增 `coverage` /
+  `coverage_required`。旧实现只要求「最小样本数」，8 只成分股里 3 只有历史也算可用。
+  仅当「覆盖不足是唯一问题」才降级，结构性不合格（成分股太少/相关性过低）仍判
+  `rejected` —— 不给出「换几只成分股就能过闸门」的口子。
+- **新增只读归因报表** `scripts/trade_attribution.py`：决策漏斗、二次验证拒绝原因
+  分布、已实现盈亏/胜率/盈亏比、卖出原因分布、仍挂着的退出意图。不写库、不发 LLM、
+  不抓行情、不改配置，可随时在生产跑、也可进 cron。卖出原因按**语义前缀**归并
+  （去掉数字），`硬性止损: 浮亏 5.1%` 与 `5.4%` 归为同一类 —— 数字是参数，不是分类维度。
+
+#### 测试
+
+新增 `tests/` 7 个文件（`test_risk_account_metrics` / `test_sell_exit_state` /
+`test_hold_decisions` / `test_market_regime_confirm` / `test_broker_live_guard` /
+`test_theme_coverage_gate` / `test_news_freshness_tz` / `test_trade_attribution`），
+`conftest.py` 补齐 `FakeBroker` / `FakeMarket` 夹具；每个 FR 都有「修复前失败、
+修复后通过」的反例用例，且每个回滚键都有对应用例验证旧行为可复现。
+
+整改过程中由新测试暴露的**真实 Bug**（非本次 FR 范围内，但必须修）：
+
+- 🔴 `agents/risk.py::handle_force_reduce` 用了 `pos.available` —— `Position` 对象
+  **没有这个属性**，强制减仓路径一直抛 `AttributeError`。改为 `pos.quantity`。
+- `broker.py` 实盘层 `max_order_value` 默认值与业务层不一致（见 Batch 4）。
+
+#### 部署注意（本次未执行，属部署期动作）
+
+以下运行时键**不要**塞进 `SYSTEM_CONFIG_SEED` 后指望生产生效 —— 种子只插不覆盖。
+需在生产用 `db_ops.set_config_value` 逐条写入：`drawdown_basis=hwm`、
+`rr_missing_policy=warn`（首周观察后切 `reject`）、`sell_retry_enabled=1`、
+`allow_limit_down_sell=1`。写入后首个交易日看 `account_hwm` 是否已建立。
+
+`max_drawdown_pct` 保持生产现值 `0.10`（人工保留的更严口径），本次未改动。
+
+---
+
 ## [0.5.15] — 2026-08-30
 
 ### quant 子系统全量审计：时区/盈亏口径/交易日历共 8 处修复 + 1 处修复自身的返工

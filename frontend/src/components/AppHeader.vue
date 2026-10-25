@@ -10,6 +10,7 @@
         <router-link to="/">首页</router-link>
         <router-link to="/impact">新闻榜</router-link>
         <router-link to="/industry">行业榜</router-link>
+        <router-link to="/strategy">策略台</router-link>
         <router-link to="/recommendation">热股榜</router-link>
         <router-link to="/quant">量化</router-link>
         <router-link to="/diagnosis">诊股</router-link>
